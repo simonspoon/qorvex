@@ -1,9 +1,11 @@
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::axe::Axe;
+use qorvex_core::ipc::IpcServer;
 use qorvex_core::session::Session;
 use qorvex_core::simctl::Simctl;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::task::JoinHandle;
 
 /// Validates a simulator UDID format.
 /// Accepts standard UUID format (8-4-4-4-12 hex digits) or iOS Simulator UDIDs.
@@ -47,6 +49,7 @@ fn validate_coordinate(value: i32, name: &str) -> Result<(), String> {
 struct ReplState {
     session: Option<Arc<Session>>,
     simulator_udid: Option<String>,
+    ipc_server_handle: Option<JoinHandle<()>>,
 }
 
 impl ReplState {
@@ -54,6 +57,23 @@ impl ReplState {
         Self {
             session: None,
             simulator_udid: None,
+            ipc_server_handle: None,
+        }
+    }
+
+    fn capture_screenshot(&self) -> Option<String> {
+        self.simulator_udid.as_ref().and_then(|udid| {
+            Simctl::screenshot(udid).ok().map(|bytes| {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            })
+        })
+    }
+
+    async fn log_action(&self, action: ActionType, result: ActionResult) {
+        if let Some(session) = &self.session {
+            let screenshot = self.capture_screenshot();
+            session.log_action(action, result, screenshot).await;
         }
     }
 }
@@ -94,14 +114,32 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
 
     match cmd.as_str() {
         "start_session" => {
-            state.session = Some(Session::new(state.simulator_udid.clone()));
+            let session = Session::new(state.simulator_udid.clone());
+            state.session = Some(session.clone());
+
+            // Start IPC server for watcher connections
+            let server = IpcServer::new(session, "default");
+            let handle = tokio::spawn(async move {
+                if let Err(e) = server.run().await {
+                    eprintln!("[repl] IPC server error: {}", e);
+                }
+            });
+            state.ipc_server_handle = Some(handle);
+
             "success".to_string()
         }
         "end_session" => {
+            // Stop IPC server
+            if let Some(handle) = state.ipc_server_handle.take() {
+                handle.abort();
+            }
             state.session = None;
             "success".to_string()
         }
         "quit" => {
+            if let Some(handle) = state.ipc_server_handle.take() {
+                handle.abort();
+            }
             state.session = None;
             std::process::exit(0);
         }
@@ -112,8 +150,20 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
             }
             match &state.simulator_udid {
                 Some(udid) => match Axe::tap_element(udid, id) {
-                    Ok(_) => "success".to_string(),
-                    Err(e) => format!("fail: {}", e),
+                    Ok(_) => {
+                        state.log_action(
+                            ActionType::TapElement { id: id.to_string() },
+                            ActionResult::Success,
+                        ).await;
+                        "success".to_string()
+                    }
+                    Err(e) => {
+                        state.log_action(
+                            ActionType::TapElement { id: id.to_string() },
+                            ActionResult::Failure(e.to_string()),
+                        ).await;
+                        format!("fail: {}", e)
+                    }
                 },
                 None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
             }
@@ -148,8 +198,20 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
             }
             match &state.simulator_udid {
                 Some(udid) => match Axe::tap(udid, x, y) {
-                    Ok(_) => "success".to_string(),
-                    Err(e) => format!("fail: {}", e),
+                    Ok(_) => {
+                        state.log_action(
+                            ActionType::TapLocation { x, y },
+                            ActionResult::Success,
+                        ).await;
+                        "success".to_string()
+                    }
+                    Err(e) => {
+                        state.log_action(
+                            ActionType::TapLocation { x, y },
+                            ActionResult::Failure(e.to_string()),
+                        ).await;
+                        format!("fail: {}", e)
+                    }
                 },
                 None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
             }
@@ -160,35 +222,31 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
                 return "fail: log_comment requires a message: log_comment(your message here)"
                     .to_string();
             }
-            if let Some(session) = &state.session {
-                let screenshot = state
-                    .simulator_udid
-                    .as_ref()
-                    .and_then(|udid| Simctl::screenshot(udid).ok())
-                    .map(|bytes| {
-                        use base64::Engine;
-                        base64::engine::general_purpose::STANDARD.encode(&bytes)
-                    });
-
-                session
-                    .log_action(
-                        ActionType::LogComment {
-                            message: message.clone(),
-                        },
-                        ActionResult::Success,
-                        screenshot,
-                    )
-                    .await;
-            }
+            state.log_action(
+                ActionType::LogComment { message },
+                ActionResult::Success,
+            ).await;
             "success".to_string()
         }
         "get_screenshot" => match &state.simulator_udid {
             Some(udid) => match Simctl::screenshot(udid) {
                 Ok(bytes) => {
                     use base64::Engine;
-                    base64::engine::general_purpose::STANDARD.encode(&bytes)
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    // Log with the captured screenshot
+                    if let Some(session) = &state.session {
+                        session.log_action(
+                            ActionType::GetScreenshot,
+                            ActionResult::Success,
+                            Some(b64.clone()),
+                        ).await;
+                    }
+                    b64
                 }
-                Err(e) => format!("fail: {}", e),
+                Err(e) => {
+                    state.log_action(ActionType::GetScreenshot, ActionResult::Failure(e.to_string())).await;
+                    format!("fail: {}", e)
+                }
             },
             None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
         },
@@ -196,9 +254,13 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
             Some(udid) => match Axe::dump_hierarchy(udid) {
                 Ok(hierarchy) => {
                     let elements = Axe::list_elements(&hierarchy);
+                    state.log_action(ActionType::GetScreenInfo, ActionResult::Success).await;
                     serde_json::to_string(&elements).unwrap_or_else(|e| format!("fail: {}", e))
                 }
-                Err(e) => format!("fail: {}", e),
+                Err(e) => {
+                    state.log_action(ActionType::GetScreenInfo, ActionResult::Failure(e.to_string())).await;
+                    format!("fail: {}", e)
+                }
             },
             None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
         },
@@ -210,9 +272,27 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
             }
             match &state.simulator_udid {
                 Some(udid) => match Axe::get_element_value(udid, id) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => "null".to_string(),
-                    Err(e) => format!("fail: {}", e),
+                    Ok(Some(value)) => {
+                        state.log_action(
+                            ActionType::GetElementValue { id: id.to_string() },
+                            ActionResult::Success,
+                        ).await;
+                        value
+                    }
+                    Ok(None) => {
+                        state.log_action(
+                            ActionType::GetElementValue { id: id.to_string() },
+                            ActionResult::Success,
+                        ).await;
+                        "null".to_string()
+                    }
+                    Err(e) => {
+                        state.log_action(
+                            ActionType::GetElementValue { id: id.to_string() },
+                            ActionResult::Failure(e.to_string()),
+                        ).await;
+                        format!("fail: {}", e)
+                    }
                 },
                 None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
             }
@@ -224,8 +304,20 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
             }
             match &state.simulator_udid {
                 Some(udid) => match Simctl::send_keys(udid, &text) {
-                    Ok(_) => "success".to_string(),
-                    Err(e) => format!("fail: {}", e),
+                    Ok(_) => {
+                        state.log_action(
+                            ActionType::SendKeys { text: text.clone() },
+                            ActionResult::Success,
+                        ).await;
+                        "success".to_string()
+                    }
+                    Err(e) => {
+                        state.log_action(
+                            ActionType::SendKeys { text: text.clone() },
+                            ActionResult::Failure(e.to_string()),
+                        ).await;
+                        format!("fail: {}", e)
+                    }
                 },
                 None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
             }
