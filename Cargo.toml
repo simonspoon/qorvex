@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qorvex-core",
+    "crates/qorvex-repl",
+    "crates/qorvex-watcher",
+]
