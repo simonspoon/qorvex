@@ -199,9 +199,11 @@ impl IpcServer {
         }
 
         let listener = UnixListener::bind(&self.socket_path)?;
+        eprintln!("[ipc] Server listening on {:?}", self.socket_path);
 
         loop {
             let (stream, _) = listener.accept().await?;
+            eprintln!("[ipc] Client connected");
             let session = self.session.clone();
 
             tokio::spawn(async move {
@@ -242,17 +244,26 @@ impl IpcServer {
                     };
                     let json = serde_json::to_string(&response)? + "\n";
                     writer.write_all(json.as_bytes()).await?;
+                    writer.flush().await?;
                 }
                 IpcRequest::Subscribe => {
+                    eprintln!("[ipc] Client subscribed to session events");
                     // Send events as they occur
                     let mut rx = session.subscribe();
                     while let Ok(event) = rx.recv().await {
+                        eprintln!("[ipc] Broadcasting event to client: {:?}", std::mem::discriminant(&event));
                         let response = IpcResponse::Event { event };
                         let json = serde_json::to_string(&response)? + "\n";
                         if writer.write_all(json.as_bytes()).await.is_err() {
+                            eprintln!("[ipc] Failed to write event to client");
+                            break;
+                        }
+                        if writer.flush().await.is_err() {
+                            eprintln!("[ipc] Failed to flush event to client");
                             break;
                         }
                     }
+                    eprintln!("[ipc] Client subscription ended");
                 }
                 IpcRequest::GetState => {
                     let response = IpcResponse::State {
@@ -261,6 +272,7 @@ impl IpcServer {
                     };
                     let json = serde_json::to_string(&response)? + "\n";
                     writer.write_all(json.as_bytes()).await?;
+                    writer.flush().await?;
                 }
                 IpcRequest::GetLog => {
                     let response = IpcResponse::Log {
@@ -268,6 +280,7 @@ impl IpcServer {
                     };
                     let json = serde_json::to_string(&response)? + "\n";
                     writer.write_all(json.as_bytes()).await?;
+                    writer.flush().await?;
                 }
             }
         }
@@ -335,6 +348,7 @@ impl IpcClient {
     pub async fn send(&mut self, request: &IpcRequest) -> Result<IpcResponse, IpcError> {
         let json = serde_json::to_string(request)? + "\n";
         self.writer.write_all(json.as_bytes()).await?;
+        self.writer.flush().await?;
 
         let mut line = String::new();
         self.stream.read_line(&mut line).await?;
@@ -356,6 +370,7 @@ impl IpcClient {
         let request = IpcRequest::Subscribe;
         let json = serde_json::to_string(&request)? + "\n";
         self.writer.write_all(json.as_bytes()).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 

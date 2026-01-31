@@ -21,9 +21,12 @@ cargo run -p qorvex-watcher
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-watcher
 
-# Run tests (when added)
+# Run tests
 cargo test
 cargo test -p qorvex-core
+
+# Run integration tests
+cargo test -p qorvex-core --test ipc_integration
 ```
 
 ## Architecture
@@ -46,6 +49,9 @@ qorvex-watcher - TUI client that connects via IPC to monitor sessions
 - **axe.rs** - Wrapper around `axe` CLI for UI hierarchy dumps, element finding, and tap actions
 - **session.rs** - Async session state with broadcast channels for events (uses `tokio::sync`)
 - **ipc.rs** - Unix socket server/client for REPL↔Watcher communication (JSON-over-newlines protocol)
+  - Socket path convention: `/tmp/qorvex_<session_name>.sock`
+  - Request types: `Subscribe`, `Unsubscribe`, `GetState`, `Ping`
+  - Response types: `Subscribed`, `Unsubscribed`, `State`, `Pong`, `Event`, `Error`
 - **action.rs** - Action types (`TapElement`, `SendKeys`, `GetScreenshot`, etc.) and logging
 
 ### Data flow

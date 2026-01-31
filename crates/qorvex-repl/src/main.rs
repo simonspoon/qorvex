@@ -1,3 +1,4 @@
+use clap::Parser;
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::axe::Axe;
 use qorvex_core::ipc::IpcServer;
@@ -6,6 +7,15 @@ use qorvex_core::simctl::Simctl;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::task::JoinHandle;
+
+#[derive(Parser, Debug)]
+#[command(name = "qorvex-repl")]
+#[command(about = "Interactive REPL for iOS Simulator automation")]
+struct Args {
+    /// Session name for IPC socket
+    #[arg(short, long, default_value = "default")]
+    session: String,
+}
 
 /// Validates a simulator UDID format.
 /// Accepts standard UUID format (8-4-4-4-12 hex digits) or iOS Simulator UDIDs.
@@ -50,14 +60,16 @@ struct ReplState {
     session: Option<Arc<Session>>,
     simulator_udid: Option<String>,
     ipc_server_handle: Option<JoinHandle<()>>,
+    session_name: String,
 }
 
 impl ReplState {
-    fn new() -> Self {
+    fn new(session_name: String) -> Self {
         Self {
             session: None,
             simulator_udid: None,
             ipc_server_handle: None,
+            session_name,
         }
     }
 
@@ -73,20 +85,29 @@ impl ReplState {
     async fn log_action(&self, action: ActionType, result: ActionResult) {
         if let Some(session) = &self.session {
             let screenshot = self.capture_screenshot();
+            eprintln!("[repl] Logging action: {:?}", action);
             session.log_action(action, result, screenshot).await;
+        } else {
+            eprintln!("[repl] Warning: No session active, action not logged");
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let mut reader = BufReader::new(stdin);
     let mut writer = stdout;
 
-    let mut state = ReplState::new();
+    let mut state = ReplState::new(args.session);
     let mut line = String::new();
+
+    // Print session name for visibility
+    eprintln!("[repl] Session name: {}", state.session_name);
+    eprintln!("[repl] IPC socket: /tmp/qorvex_{}.sock", state.session_name);
 
     // Try to get booted simulator
     state.simulator_udid = Simctl::get_booted_udid().ok();
@@ -118,7 +139,7 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
             state.session = Some(session.clone());
 
             // Start IPC server for watcher connections
-            let server = IpcServer::new(session, "default");
+            let server = IpcServer::new(session, &state.session_name);
             let handle = tokio::spawn(async move {
                 if let Err(e) = server.run().await {
                     eprintln!("[repl] IPC server error: {}", e);

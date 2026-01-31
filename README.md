@@ -13,7 +13,8 @@ Qorvex provides programmatic control over iOS Simulators through a Rust workspac
 ## Requirements
 
 - macOS with Xcode and iOS Simulators installed
-- [axe](https://github.com/nicklockwood/axe) CLI tool for accessibility tree inspection
+- [axe](https://github.com/cameroncooke/axe) CLI tool for accessibility tree inspection
+  - Install via: `brew install cameroncooke/axe/axe`
 - Rust 1.70+
 
 ## Installation
@@ -34,14 +35,20 @@ qorvex-repl
 ```
 
 Available commands:
+- `list_devices` — List all available simulators
+- `use_device(udid)` — Select a simulator to use
+- `boot_device(udid)` — Boot and select a simulator
 - `start_session` — Begin a new automation session
 - `end_session` — End the current session
-- `tap_element <query>` — Tap a UI element by accessibility query
-- `tap_location <x> <y>` — Tap at screen coordinates
-- `send_keys <text>` — Type text into the focused field
+- `get_session_info` — Get session status info
+- `tap_element(id)` — Tap a UI element by accessibility ID
+- `tap_location(x, y)` — Tap at screen coordinates
+- `send_keys(text)` — Type text into the focused field
 - `get_screenshot` — Capture current screen
 - `get_screen_info` — Get UI hierarchy information
-- `log_comment <text>` — Add a comment to the action log
+- `list_elements` — List actionable UI elements
+- `get_element_value(id)` — Get element's current value
+- `log_comment(text)` — Add a comment to the action log
 - `help` — Show available commands
 - `quit` — Exit
 

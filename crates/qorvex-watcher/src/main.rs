@@ -1,5 +1,6 @@
 use std::io;
 use std::time::Duration;
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -21,6 +22,15 @@ use qorvex_core::action::ActionLog;
 use qorvex_core::ipc::{IpcClient, IpcResponse};
 use qorvex_core::session::SessionEvent;
 use qorvex_core::simctl::Simctl;
+
+#[derive(Parser, Debug)]
+#[command(name = "qorvex-watcher")]
+#[command(about = "TUI client for monitoring iOS Simulator automation sessions")]
+struct Args {
+    /// Session name to connect to
+    #[arg(short, long, default_value = "default")]
+    session: String,
+}
 
 /// Maximum number of consecutive IPC connection failures before giving up
 const MAX_IPC_RETRIES: u32 = 10;
@@ -47,7 +57,7 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(session_name: String) -> Self {
         let picker = Picker::from_query_stdio()
             .unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
 
@@ -55,7 +65,7 @@ impl App {
             action_log: Vec::new(),
             list_state: ListState::default(),
             current_screenshot: None,
-            session_name: "default".to_string(),
+            session_name,
             simulator_udid: Simctl::get_booted_udid().ok(),
             should_quit: false,
             image_picker: picker,
@@ -103,6 +113,8 @@ fn spawn_screenshot_task(udid: String, tx: mpsc::Sender<AppEvent>) {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let args = Args::parse();
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -110,7 +122,7 @@ async fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = App::new(args.session);
 
     // Channel for all app events (IPC events and screenshot results)
     let (event_tx, mut event_rx) = mpsc::channel::<AppEvent>(100);

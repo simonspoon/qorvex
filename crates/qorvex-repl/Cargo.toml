@@ -13,3 +13,4 @@ qorvex-core = { path = "../qorvex-core" }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
 base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
