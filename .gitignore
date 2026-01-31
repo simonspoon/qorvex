@@ -3,8 +3,7 @@
 debug/
 *.pdb
 
-# Cargo
-Cargo.lock
+# Cargo (Cargo.lock committed for reproducible builds)
 
 # IDE
 .idea/

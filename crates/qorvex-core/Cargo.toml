@@ -1,7 +1,12 @@
 [package]
 name = "qorvex-core"
-version = "0.1.0"
-edition = "2021"
+description = "Core library for iOS Simulator automation and testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -97,21 +97,10 @@ impl Simctl {
         Ok(())
     }
 
-    /// Send keyboard input via AppleScript (Simulator must be frontmost)
-    pub fn send_keys(_udid: &str, text: &str) -> Result<(), SimctlError> {
-        // Escape text for AppleScript
-        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!(
-            r#"tell application "Simulator" to activate
-            delay 0.1
-            tell application "System Events"
-                keystroke "{}"
-            end tell"#,
-            escaped
-        );
-
-        let output = Command::new("osascript")
-            .args(["-e", &script])
+    /// Send keyboard input via axe CLI
+    pub fn send_keys(udid: &str, text: &str) -> Result<(), SimctlError> {
+        let output = Command::new("axe")
+            .args(["type", text, "--udid", udid])
             .output()?;
 
         if !output.status.success() {

@@ -1,7 +1,12 @@
 [package]
 name = "qorvex-watcher"
-version = "0.1.0"
-edition = "2021"
+description = "TUI client for monitoring iOS Simulator automation sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 qorvex-core = { path = "../qorvex-core" }

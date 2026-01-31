@@ -5,3 +5,11 @@ members = [
     "crates/qorvex-repl",
     "crates/qorvex-watcher",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/simonspoon/qorvex"
+keywords = ["ios", "simulator", "automation", "testing", "macos"]
+categories = ["development-tools::testing"]
