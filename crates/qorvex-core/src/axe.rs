@@ -1,50 +1,128 @@
+//! Interface to the `axe` accessibility tool for UI automation.
+//!
+//! This module provides a Rust wrapper around the `axe` CLI tool, which enables
+//! accessibility-based UI inspection and interaction with iOS Simulator apps.
+//!
+//! # Requirements
+//!
+//! The `axe` tool must be installed:
+//! ```bash
+//! brew install cameroncooke/axe/axe
+//! ```
+//!
+//! # Example
+//!
+//! ```no_run
+//! use qorvex_core::axe::Axe;
+//!
+//! // Check if axe is available
+//! if Axe::is_installed() {
+//!     let udid = "SIMULATOR-UDID";
+//!
+//!     // Dump the UI hierarchy
+//!     let hierarchy = Axe::dump_hierarchy(udid).unwrap();
+//!
+//!     // Find an element by accessibility ID
+//!     if let Some(button) = Axe::find_element(&hierarchy, "login-button") {
+//!         println!("Found button: {:?}", button.label);
+//!     }
+//!
+//!     // Tap an element
+//!     Axe::tap_element(udid, "login-button").unwrap();
+//! }
+//! ```
+
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Errors that can occur when interacting with the axe tool.
 #[derive(Error, Debug)]
 pub enum AxeError {
+    /// An axe command failed to execute successfully.
     #[error("Command execution failed: {0}")]
     CommandFailed(String),
+
+    /// The axe tool is not installed on the system.
     #[error("axe tool not found - install with: brew install cameroncooke/axe/axe")]
     NotInstalled,
+
+    /// Failed to parse JSON output from axe.
     #[error("JSON parse error: {0}")]
     JsonParse(#[from] serde_json::Error),
+
+    /// An I/O error occurred while executing the command.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// UI element from axe hierarchy dump
+/// Represents a UI element from the accessibility hierarchy.
+///
+/// This struct contains accessibility information about a UI element as
+/// reported by the `axe describe-ui` command. Elements form a tree structure
+/// via the `children` field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UIElement {
+    /// The unique accessibility identifier for this element (AXUniqueId).
     #[serde(rename = "AXUniqueId", default)]
     pub identifier: Option<String>,
+
+    /// The accessibility label (AXLabel), typically the user-visible text.
     #[serde(rename = "AXLabel", default)]
     pub label: Option<String>,
+
+    /// The current value of the element (AXValue), e.g., text field contents.
     #[serde(rename = "AXValue", default)]
     pub value: Option<String>,
+
+    /// The type of UI element (e.g., "Button", "TextField", "View").
     #[serde(rename = "type", default)]
     pub element_type: Option<String>,
+
+    /// The element's frame (position and size) in screen coordinates.
     #[serde(default)]
     pub frame: Option<ElementFrame>,
+
+    /// Child elements nested within this element.
     #[serde(default)]
     pub children: Vec<UIElement>,
+
+    /// The accessibility role of this element.
     #[serde(default)]
     pub role: Option<String>,
 }
 
+/// The frame (position and dimensions) of a UI element.
+///
+/// Coordinates are in screen points, with the origin at the top-left
+/// corner of the screen.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementFrame {
+    /// The x-coordinate of the element's top-left corner.
     pub x: f64,
+    /// The y-coordinate of the element's top-left corner.
     pub y: f64,
+    /// The width of the element in points.
     pub width: f64,
+    /// The height of the element in points.
     pub height: f64,
 }
 
+/// Wrapper for `axe` CLI commands.
+///
+/// Provides static methods for interacting with the iOS Simulator UI
+/// through accessibility APIs. All methods are synchronous and execute
+/// shell commands.
 pub struct Axe;
 
 impl Axe {
-    /// Check if axe is installed
+    /// Checks if the axe tool is installed and available.
+    ///
+    /// Uses `which axe` to determine if the tool exists in the PATH.
+    ///
+    /// # Returns
+    ///
+    /// `true` if axe is installed and available, `false` otherwise.
     pub fn is_installed() -> bool {
         Command::new("which")
             .arg("axe")
@@ -53,7 +131,26 @@ impl Axe {
             .unwrap_or(false)
     }
 
-    /// Dump UI hierarchy as JSON
+    /// Dumps the complete UI accessibility hierarchy.
+    ///
+    /// Executes `axe describe-ui` to retrieve the full accessibility tree
+    /// of the current screen in the specified simulator.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<UIElement>` representing the root elements of the UI tree.
+    /// Each element may contain nested children.
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::NotInstalled`] if axe is not available
+    /// - [`AxeError::Io`] if the command fails to execute
+    /// - [`AxeError::CommandFailed`] if axe returns an error
+    /// - [`AxeError::JsonParse`] if the output cannot be parsed
     pub fn dump_hierarchy(udid: &str) -> Result<Vec<UIElement>, AxeError> {
         if !Self::is_installed() {
             return Err(AxeError::NotInstalled);
@@ -73,7 +170,20 @@ impl Axe {
         Ok(hierarchy)
     }
 
-    /// Find element by identifier in hierarchy (recursive search)
+    /// Finds an element by its accessibility identifier.
+    ///
+    /// Performs a recursive depth-first search through the element hierarchy
+    /// to find an element with a matching `AXUniqueId`.
+    ///
+    /// # Arguments
+    ///
+    /// * `elements` - The root elements to search through
+    /// * `identifier` - The accessibility identifier to find
+    ///
+    /// # Returns
+    ///
+    /// `Some(UIElement)` containing a clone of the found element,
+    /// or `None` if no matching element exists.
     pub fn find_element(elements: &[UIElement], identifier: &str) -> Option<UIElement> {
         for element in elements {
             if element.identifier.as_deref() == Some(identifier) {
@@ -86,7 +196,21 @@ impl Axe {
         None
     }
 
-    /// Tap at x,y coordinates
+    /// Taps at specific screen coordinates.
+    ///
+    /// Simulates a tap gesture at the given x,y position on the simulator screen.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `x` - The x-coordinate in screen points
+    /// * `y` - The y-coordinate in screen points
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::NotInstalled`] if axe is not available
+    /// - [`AxeError::Io`] if the command fails to execute
+    /// - [`AxeError::CommandFailed`] if the tap command fails
     pub fn tap(udid: &str, x: i32, y: i32) -> Result<(), AxeError> {
         if !Self::is_installed() {
             return Err(AxeError::NotInstalled);
@@ -104,7 +228,22 @@ impl Axe {
         Ok(())
     }
 
-    /// Tap element by identifier (uses axe --id flag)
+    /// Taps an element by its accessibility identifier.
+    ///
+    /// Uses axe's `--id` flag to locate and tap the element with the
+    /// specified accessibility identifier. This is more reliable than
+    /// coordinate-based tapping as it accounts for element position changes.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `identifier` - The accessibility identifier of the element to tap
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::NotInstalled`] if axe is not available
+    /// - [`AxeError::Io`] if the command fails to execute
+    /// - [`AxeError::CommandFailed`] if the element is not found or tap fails
     pub fn tap_element(udid: &str, identifier: &str) -> Result<(), AxeError> {
         if !Self::is_installed() {
             return Err(AxeError::NotInstalled);
@@ -122,7 +261,26 @@ impl Axe {
         Ok(())
     }
 
-    /// Get value of element by identifier
+    /// Gets the current value of an element by its accessibility identifier.
+    ///
+    /// Dumps the UI hierarchy and searches for the specified element,
+    /// returning its `AXValue` property. This is useful for reading the
+    /// contents of text fields or other value-bearing elements.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `identifier` - The accessibility identifier of the element
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(String))` if the element has a value, `Ok(None)` if the
+    /// element exists but has no value.
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::CommandFailed`] if the element is not found
+    /// - Any errors from [`Self::dump_hierarchy`]
     pub fn get_element_value(udid: &str, identifier: &str) -> Result<Option<String>, AxeError> {
         let hierarchy = Self::dump_hierarchy(udid)?;
         let element = Self::find_element(&hierarchy, identifier)
@@ -130,7 +288,20 @@ impl Axe {
         Ok(element.value)
     }
 
-    /// Flatten hierarchy to list of elements with identifiers
+    /// Flattens the element hierarchy into a list.
+    ///
+    /// Recursively traverses the element tree and collects all elements
+    /// that have either an identifier or a label. This is useful for
+    /// getting a flat list of actionable elements on the screen.
+    ///
+    /// # Arguments
+    ///
+    /// * `elements` - The root elements of the hierarchy
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<UIElement>` containing all elements with identifiers or labels.
+    /// Elements without both identifier and label are excluded.
     pub fn list_elements(elements: &[UIElement]) -> Vec<UIElement> {
         let mut result = Vec::new();
         Self::collect_elements(elements, &mut result);
@@ -144,5 +315,346 @@ impl Axe {
             }
             Self::collect_elements(&element.children, result);
         }
+    }
+
+    /// Parses UI hierarchy JSON into element structures.
+    ///
+    /// This method is exposed primarily for testing purposes. It takes
+    /// raw JSON bytes (as returned by `axe describe-ui`) and parses them
+    /// into a vector of UI elements.
+    ///
+    /// # Arguments
+    ///
+    /// * `json` - Raw JSON bytes from axe output
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<UIElement>` representing the parsed hierarchy.
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::JsonParse`] if the JSON is invalid
+    pub fn parse_hierarchy(json: &[u8]) -> Result<Vec<UIElement>, AxeError> {
+        let hierarchy: Vec<UIElement> = serde_json::from_slice(json)?;
+        Ok(hierarchy)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Sample hierarchy matching axe output format
+    const SAMPLE_HIERARCHY: &str = r#"[
+        {
+            "AXUniqueId": "main-view",
+            "AXLabel": "Main View",
+            "type": "View",
+            "frame": {"x": 0, "y": 0, "width": 390, "height": 844},
+            "children": [
+                {
+                    "AXUniqueId": "login-button",
+                    "AXLabel": "Log In",
+                    "type": "Button",
+                    "frame": {"x": 100, "y": 400, "width": 190, "height": 44},
+                    "children": []
+                },
+                {
+                    "AXUniqueId": "email-field",
+                    "AXLabel": "Email",
+                    "AXValue": "user@example.com",
+                    "type": "TextField",
+                    "frame": {"x": 20, "y": 200, "width": 350, "height": 44},
+                    "children": []
+                }
+            ]
+        }
+    ]"#;
+
+    const NESTED_HIERARCHY: &str = r#"[
+        {
+            "AXUniqueId": "root",
+            "type": "View",
+            "children": [
+                {
+                    "AXUniqueId": "level1",
+                    "type": "View",
+                    "children": [
+                        {
+                            "AXUniqueId": "level2",
+                            "type": "View",
+                            "children": [
+                                {
+                                    "AXUniqueId": "deeply-nested-button",
+                                    "AXLabel": "Deep Button",
+                                    "type": "Button",
+                                    "children": []
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]"#;
+
+    const EMPTY_HIERARCHY: &str = r#"[]"#;
+
+    const MINIMAL_ELEMENT: &str = r#"[{"children": []}]"#;
+
+    #[test]
+    fn test_parse_hierarchy_success() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes())
+            .expect("Should parse valid hierarchy");
+
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].identifier.as_deref(), Some("main-view"));
+        assert_eq!(elements[0].children.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_hierarchy_empty() {
+        let elements = Axe::parse_hierarchy(EMPTY_HIERARCHY.as_bytes())
+            .expect("Should parse empty hierarchy");
+
+        assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn test_parse_hierarchy_invalid_json() {
+        let result = Axe::parse_hierarchy(b"not valid json");
+
+        assert!(result.is_err());
+        match result {
+            Err(AxeError::JsonParse(_)) => {} // Expected
+            Err(e) => panic!("Expected JsonParse error, got: {:?}", e),
+            Ok(_) => panic!("Expected error, got Ok"),
+        }
+    }
+
+    #[test]
+    fn test_parse_hierarchy_minimal_element() {
+        let elements = Axe::parse_hierarchy(MINIMAL_ELEMENT.as_bytes())
+            .expect("Should parse minimal element");
+
+        assert_eq!(elements.len(), 1);
+        assert!(elements[0].identifier.is_none());
+        assert!(elements[0].label.is_none());
+        assert!(elements[0].value.is_none());
+        assert!(elements[0].frame.is_none());
+    }
+
+    #[test]
+    fn test_ui_element_all_fields() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let email_field = &elements[0].children[1];
+
+        assert_eq!(email_field.identifier.as_deref(), Some("email-field"));
+        assert_eq!(email_field.label.as_deref(), Some("Email"));
+        assert_eq!(email_field.value.as_deref(), Some("user@example.com"));
+        assert_eq!(email_field.element_type.as_deref(), Some("TextField"));
+
+        let frame = email_field.frame.as_ref().unwrap();
+        assert_eq!(frame.x, 20.0);
+        assert_eq!(frame.y, 200.0);
+        assert_eq!(frame.width, 350.0);
+        assert_eq!(frame.height, 44.0);
+    }
+
+    #[test]
+    fn test_find_element_direct_match() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_element(&elements, "main-view");
+
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("main-view"));
+    }
+
+    #[test]
+    fn test_find_element_nested() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_element(&elements, "login-button");
+
+        assert!(found.is_some());
+        let button = found.unwrap();
+        assert_eq!(button.identifier.as_deref(), Some("login-button"));
+        assert_eq!(button.label.as_deref(), Some("Log In"));
+    }
+
+    #[test]
+    fn test_find_element_deeply_nested() {
+        let elements = Axe::parse_hierarchy(NESTED_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_element(&elements, "deeply-nested-button");
+
+        assert!(found.is_some());
+        let button = found.unwrap();
+        assert_eq!(button.label.as_deref(), Some("Deep Button"));
+    }
+
+    #[test]
+    fn test_find_element_not_found() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_element(&elements, "nonexistent-element");
+
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_element_empty_hierarchy() {
+        let elements: Vec<UIElement> = vec![];
+        let found = Axe::find_element(&elements, "any-id");
+
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_list_elements_flattens_hierarchy() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let flat = Axe::list_elements(&elements);
+
+        // Should have: main-view, login-button, email-field (all have identifier or label)
+        assert_eq!(flat.len(), 3);
+
+        let identifiers: Vec<Option<&str>> = flat.iter()
+            .map(|e| e.identifier.as_deref())
+            .collect();
+
+        assert!(identifiers.contains(&Some("main-view")));
+        assert!(identifiers.contains(&Some("login-button")));
+        assert!(identifiers.contains(&Some("email-field")));
+    }
+
+    #[test]
+    fn test_list_elements_includes_label_only() {
+        // Element with label but no identifier should still be included
+        let json = r#"[{
+            "AXLabel": "Label Only Element",
+            "type": "StaticText",
+            "children": []
+        }]"#;
+
+        let elements = Axe::parse_hierarchy(json.as_bytes()).unwrap();
+        let flat = Axe::list_elements(&elements);
+
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].label.as_deref(), Some("Label Only Element"));
+    }
+
+    #[test]
+    fn test_list_elements_excludes_unlabeled() {
+        // Elements without identifier or label should be excluded
+        let json = r#"[{
+            "type": "View",
+            "children": [
+                {
+                    "AXUniqueId": "included",
+                    "type": "Button",
+                    "children": []
+                }
+            ]
+        }]"#;
+
+        let elements = Axe::parse_hierarchy(json.as_bytes()).unwrap();
+        let flat = Axe::list_elements(&elements);
+
+        // Only the child with identifier should be included
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].identifier.as_deref(), Some("included"));
+    }
+
+    #[test]
+    fn test_list_elements_empty_hierarchy() {
+        let elements: Vec<UIElement> = vec![];
+        let flat = Axe::list_elements(&elements);
+
+        assert!(flat.is_empty());
+    }
+
+    #[test]
+    fn test_axe_error_display() {
+        let cmd_err = AxeError::CommandFailed("test error".to_string());
+        assert!(cmd_err.to_string().contains("test error"));
+
+        let not_installed = AxeError::NotInstalled;
+        assert!(not_installed.to_string().contains("axe tool not found"));
+        assert!(not_installed.to_string().contains("brew install"));
+    }
+
+    #[test]
+    fn test_element_frame_parsing() {
+        let json = r#"[{
+            "frame": {"x": 10.5, "y": 20.75, "width": 100.0, "height": 50.25},
+            "children": []
+        }]"#;
+
+        let elements = Axe::parse_hierarchy(json.as_bytes()).unwrap();
+        let frame = elements[0].frame.as_ref().unwrap();
+
+        assert!((frame.x - 10.5).abs() < f64::EPSILON);
+        assert!((frame.y - 20.75).abs() < f64::EPSILON);
+        assert!((frame.width - 100.0).abs() < f64::EPSILON);
+        assert!((frame.height - 50.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_tap_with_invalid_udid() {
+        // Skip if axe is not installed
+        if !Axe::is_installed() {
+            return;
+        }
+
+        let result = Axe::tap("invalid-udid-that-does-not-exist", 100, 100);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tap_element_with_invalid_udid() {
+        if !Axe::is_installed() {
+            return;
+        }
+
+        let result = Axe::tap_element("invalid-udid-that-does-not-exist", "some-button");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ui_element_serialization() {
+        let element = UIElement {
+            identifier: Some("test-id".to_string()),
+            label: Some("Test Label".to_string()),
+            value: Some("Test Value".to_string()),
+            element_type: Some("Button".to_string()),
+            frame: Some(ElementFrame {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 50.0,
+            }),
+            children: vec![],
+            role: Some("button".to_string()),
+        };
+
+        let json = serde_json::to_string(&element).unwrap();
+        assert!(json.contains("test-id"));
+        assert!(json.contains("Test Label"));
+    }
+
+    #[test]
+    fn test_ui_element_clone() {
+        let original = UIElement {
+            identifier: Some("test".to_string()),
+            label: Some("Label".to_string()),
+            value: None,
+            element_type: Some("Button".to_string()),
+            frame: Some(ElementFrame {
+                x: 0.0, y: 0.0, width: 100.0, height: 50.0
+            }),
+            children: vec![],
+            role: None,
+        };
+
+        let cloned = original.clone();
+        assert_eq!(original.identifier, cloned.identifier);
+        assert_eq!(original.label, cloned.label);
     }
 }

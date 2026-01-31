@@ -1,53 +1,141 @@
+//! Action types and logging for automation operations.
+//!
+//! This module defines the various actions that can be performed on an iOS
+//! Simulator, along with the [`ActionLog`] type for recording executed actions.
+//!
+//! # Action Types
+//!
+//! Actions fall into several categories:
+//!
+//! - **UI Interaction**: [`ActionType::TapElement`], [`ActionType::TapLocation`], [`ActionType::SendKeys`]
+//! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetElementValue`]
+//! - **Session Management**: [`ActionType::StartSession`], [`ActionType::EndSession`], [`ActionType::Quit`]
+//! - **Logging**: [`ActionType::LogComment`]
+//!
+//! # Example
+//!
+//! ```
+//! use qorvex_core::action::{ActionType, ActionResult, ActionLog};
+//!
+//! // Create an action
+//! let action = ActionType::TapElement { id: "login-button".to_string() };
+//!
+//! // Create a log entry
+//! let log = ActionLog::new(action, ActionResult::Success, None);
+//! println!("Action {} at {}", log.id, log.timestamp);
+//! ```
+
+use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Result of an action execution
+/// The result of executing an action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionResult {
+    /// The action completed successfully.
     Success,
+
+    /// The action failed with the given error message.
     Failure(String),
 }
 
-/// Types of actions that can be performed
+/// Types of actions that can be performed on a simulator.
+///
+/// Actions are serialized as JSON with a `type` tag discriminator for
+/// IPC transmission.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ActionType {
-    /// Tap an element by its accessibility ID
-    TapElement { id: String },
-    /// Tap at specific x,y coordinates
-    TapLocation { x: i32, y: i32 },
-    /// Log a comment with optional screenshot
-    LogComment { message: String },
-    /// Get current screenshot (returns base64 PNG)
+    /// Tap an element by its accessibility identifier.
+    TapElement {
+        /// The accessibility identifier of the element to tap.
+        id: String,
+    },
+
+    /// Tap at specific screen coordinates.
+    TapLocation {
+        /// The x-coordinate in screen points.
+        x: i32,
+        /// The y-coordinate in screen points.
+        y: i32,
+    },
+
+    /// Log a comment (for documentation purposes).
+    LogComment {
+        /// The comment text to log.
+        message: String,
+    },
+
+    /// Capture a screenshot of the current screen.
+    ///
+    /// Returns base64-encoded PNG data.
     GetScreenshot,
-    /// Get all element information for current screen
+
+    /// Get accessibility information for all elements on screen.
     GetScreenInfo,
-    /// Get the value of a specific element
-    GetElementValue { id: String },
-    /// Send keystrokes
-    SendKeys { text: String },
-    /// Start a new session
+
+    /// Get the current value of an element.
+    GetElementValue {
+        /// The accessibility identifier of the element.
+        id: String,
+    },
+
+    /// Send keyboard input.
+    SendKeys {
+        /// The text to type.
+        text: String,
+    },
+
+    /// Start a new automation session.
     StartSession,
-    /// End session but keep REPL open
+
+    /// End the current session but keep the REPL running.
     EndSession,
-    /// Quit the REPL entirely
+
+    /// Quit the REPL entirely.
     Quit,
 }
 
-/// A logged action with timestamp, result, and optional screenshot
+/// A logged action with metadata.
+///
+/// Each action executed through the REPL is logged with a unique identifier,
+/// timestamp, the action details, result, and an optional screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionLog {
+    /// Unique identifier for this log entry.
     pub id: Uuid,
+
+    /// When the action was executed.
     pub timestamp: DateTime<Utc>,
+
+    /// The action that was performed.
     pub action: ActionType,
+
+    /// The result of the action.
     pub result: ActionResult,
-    /// Base64-encoded PNG screenshot taken after action
-    pub screenshot: Option<String>,
+
+    /// Screenshot captured after the action (base64-encoded PNG).
+    ///
+    /// Wrapped in `Arc` for efficient cloning when broadcasting to multiple watchers.
+    pub screenshot: Option<Arc<String>>,
 }
 
 impl ActionLog {
-    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<String>) -> Self {
+    /// Creates a new action log entry.
+    ///
+    /// The entry is assigned a new UUID and timestamped with the current time.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - The action that was performed
+    /// * `result` - The result of the action
+    /// * `screenshot` - Optional base64-encoded PNG screenshot
+    ///
+    /// # Returns
+    ///
+    /// A new `ActionLog` instance with a unique ID and current timestamp.
+    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<Arc<String>>) -> Self {
         Self {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),

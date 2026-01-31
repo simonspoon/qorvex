@@ -15,11 +15,25 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use qorvex_core::action::ActionLog;
 use qorvex_core::ipc::{IpcClient, IpcResponse};
 use qorvex_core::session::SessionEvent;
 use qorvex_core::simctl::Simctl;
+
+/// Maximum number of consecutive IPC connection failures before giving up
+const MAX_IPC_RETRIES: u32 = 10;
+/// Base delay between retry attempts (will use exponential backoff)
+const IPC_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+/// Maximum delay between retry attempts
+const IPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+
+/// Message type for internal app events
+enum AppEvent {
+    SessionEvent(SessionEvent),
+    ScreenshotReady(Vec<u8>),
+}
 
 struct App {
     action_log: Vec<ActionLog>,
@@ -66,16 +80,25 @@ impl App {
         }
     }
 
-    fn refresh_screenshot(&mut self) {
-        if let Some(udid) = &self.simulator_udid {
-            if let Ok(bytes) = Simctl::screenshot(udid) {
-                self.current_screenshot = Some(bytes.clone());
-                if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                    self.image_state = Some(self.image_picker.new_resize_protocol(dyn_img));
-                }
-            }
+    fn set_screenshot(&mut self, bytes: Vec<u8>) {
+        self.current_screenshot = Some(bytes.clone());
+        if let Ok(dyn_img) = image::load_from_memory(&bytes) {
+            self.image_state = Some(self.image_picker.new_resize_protocol(dyn_img));
         }
     }
+}
+
+/// Spawn a blocking task to capture a screenshot
+fn spawn_screenshot_task(udid: String, tx: mpsc::Sender<AppEvent>) {
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            Simctl::screenshot(&udid)
+        }).await;
+
+        if let Ok(Ok(bytes)) = result {
+            let _ = tx.send(AppEvent::ScreenshotReady(bytes)).await;
+        }
+    });
 }
 
 #[tokio::main]
@@ -89,50 +112,106 @@ async fn main() -> io::Result<()> {
 
     let mut app = App::new();
 
-    // Initial screenshot
-    app.refresh_screenshot();
+    // Channel for all app events (IPC events and screenshot results)
+    let (event_tx, mut event_rx) = mpsc::channel::<AppEvent>(100);
+
+    // Initial screenshot (non-blocking)
+    if let Some(udid) = app.simulator_udid.clone() {
+        spawn_screenshot_task(udid, event_tx.clone());
+    }
+
+    // Create cancellation token for graceful shutdown
+    let cancel_token = CancellationToken::new();
+    let ipc_cancel = cancel_token.clone();
 
     // Try to connect to IPC
-    let (event_tx, mut event_rx) = mpsc::channel::<SessionEvent>(100);
     let session_name = app.session_name.clone();
+    let ipc_tx = event_tx.clone();
 
     tokio::spawn(async move {
-        // Keep trying to connect
+        let mut retry_count: u32 = 0;
+
         loop {
-            if let Ok(mut client) = IpcClient::connect(&session_name).await {
-                if client.subscribe().await.is_ok() {
-                    loop {
-                        match client.read_event().await {
-                            Ok(IpcResponse::Event { event }) => {
-                                if event_tx.send(event).await.is_err() {
+            // Check for cancellation before attempting connection
+            if ipc_cancel.is_cancelled() {
+                break;
+            }
+
+            match IpcClient::connect(&session_name).await {
+                Ok(mut client) => {
+                    // Reset retry count on successful connection
+                    retry_count = 0;
+
+                    if client.subscribe().await.is_ok() {
+                        loop {
+                            tokio::select! {
+                                _ = ipc_cancel.cancelled() => {
                                     break;
                                 }
+                                result = client.read_event() => {
+                                    match result {
+                                        Ok(IpcResponse::Event { event }) => {
+                                            if ipc_tx.send(AppEvent::SessionEvent(event)).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        Err(_) => break,
+                                        _ => {}
+                                    }
+                                }
                             }
-                            Err(_) => break,
-                            _ => {}
                         }
                     }
                 }
+                Err(_) => {
+                    retry_count += 1;
+                    if retry_count >= MAX_IPC_RETRIES {
+                        // Stop retrying after max attempts
+                        break;
+                    }
+                }
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Check for cancellation before sleeping
+            if ipc_cancel.is_cancelled() {
+                break;
+            }
+
+            // Exponential backoff: delay = base * 2^(retry_count - 1), capped at max
+            let backoff_multiplier = 2u64.saturating_pow(retry_count.saturating_sub(1));
+            let delay = IPC_RETRY_BASE_DELAY
+                .saturating_mul(backoff_multiplier as u32)
+                .min(IPC_RETRY_MAX_DELAY);
+
+            tokio::select! {
+                _ = ipc_cancel.cancelled() => {
+                    break;
+                }
+                _ = tokio::time::sleep(delay) => {}
+            }
         }
     });
 
     // Main loop
     loop {
-        // Check for IPC events
-        while let Ok(event) = event_rx.try_recv() {
-            match event {
-                SessionEvent::ActionLogged(log) => {
-                    if let Some(ref ss) = log.screenshot {
-                        app.update_screenshot(ss);
+        // Check for app events (IPC events and screenshot results)
+        while let Ok(app_event) = event_rx.try_recv() {
+            match app_event {
+                AppEvent::SessionEvent(event) => match event {
+                    SessionEvent::ActionLogged(log) => {
+                        if let Some(ref ss) = log.screenshot {
+                            app.update_screenshot(ss);
+                        }
+                        app.add_action(log);
                     }
-                    app.add_action(log);
+                    SessionEvent::ScreenshotUpdated(ss) => {
+                        app.update_screenshot(&ss);
+                    }
+                    _ => {}
+                },
+                AppEvent::ScreenshotReady(bytes) => {
+                    app.set_screenshot(bytes);
                 }
-                SessionEvent::ScreenshotUpdated(ss) => {
-                    app.update_screenshot(&ss);
-                }
-                _ => {}
             }
         }
 
@@ -143,8 +222,17 @@ async fn main() -> io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Char('q') => app.should_quit = true,
-                        KeyCode::Char('r') => app.refresh_screenshot(),
+                        KeyCode::Char('q') => {
+                            // Cancel the IPC task before quitting
+                            cancel_token.cancel();
+                            app.should_quit = true;
+                        }
+                        KeyCode::Char('r') => {
+                            // Trigger non-blocking screenshot refresh
+                            if let Some(udid) = app.simulator_udid.clone() {
+                                spawn_screenshot_task(udid, event_tx.clone());
+                            }
+                        }
                         KeyCode::Up => {
                             let i = app.list_state.selected().unwrap_or(0);
                             app.list_state.select(Some(i.saturating_sub(1)));

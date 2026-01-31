@@ -1,3 +1,37 @@
+//! Inter-process communication for REPL and watcher coordination.
+//!
+//! This module provides Unix socket-based IPC using a JSON-over-newlines protocol.
+//! The REPL runs an [`IpcServer`] that accepts connections from watchers (TUI clients),
+//! which connect using [`IpcClient`].
+//!
+//! # Protocol
+//!
+//! Communication uses a simple line-based JSON protocol:
+//! - Each message is a single line of JSON followed by a newline
+//! - Requests are sent from client to server using [`IpcRequest`]
+//! - Responses are sent from server to client using [`IpcResponse`]
+//!
+//! # Socket Location
+//!
+//! Sockets are created in the system temp directory with the naming pattern
+//! `qorvex_{session_name}.sock`. Use [`socket_path`] to get the path for a session.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use qorvex_core::ipc::{IpcClient, IpcRequest};
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     // Connect to a session
+//!     let mut client = IpcClient::connect("my-session").await.unwrap();
+//!
+//!     // Request current state
+//!     let response = client.send(&IpcRequest::GetState).await.unwrap();
+//!     println!("Response: {:?}", response);
+//! }
+//! ```
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -8,60 +42,132 @@ use thiserror::Error;
 use crate::action::ActionType;
 use crate::session::{Session, SessionEvent};
 
+/// Errors that can occur during IPC operations.
 #[derive(Error, Debug)]
 pub enum IpcError {
+    /// An I/O error occurred (connection, read, write).
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Failed to serialize or deserialize JSON.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// The requested session was not found.
     #[error("Session not found")]
     SessionNotFound,
 }
 
-/// Request from REPL client to server
+/// A request sent from client to server over the IPC connection.
+///
+/// Requests are serialized as JSON with a `type` tag discriminator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum IpcRequest {
-    /// Execute an action
-    Execute { action: ActionType },
-    /// Subscribe to session events (for watcher)
+    /// Execute an action on the simulator.
+    Execute {
+        /// The action to perform.
+        action: ActionType,
+    },
+
+    /// Subscribe to session events.
+    ///
+    /// After sending this request, the server will stream [`IpcResponse::Event`]
+    /// messages whenever the session state changes.
     Subscribe,
-    /// Get current session state
+
+    /// Request the current session state.
     GetState,
-    /// Get action log
+
+    /// Request the action log history.
     GetLog,
 }
 
-/// Response from server to client
+/// A response sent from server to client over the IPC connection.
+///
+/// Responses are serialized as JSON with a `type` tag discriminator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum IpcResponse {
-    /// Action execution result
-    ActionResult { success: bool, message: String, screenshot: Option<String> },
-    /// Session state
-    State { session_id: String, screenshot: Option<String> },
-    /// Action log
-    Log { entries: Vec<crate::action::ActionLog> },
-    /// Session event (for subscribers)
-    Event { event: SessionEvent },
-    /// Error
-    Error { message: String },
+    /// Result of an action execution.
+    ActionResult {
+        /// Whether the action succeeded.
+        success: bool,
+        /// Human-readable description of the result.
+        message: String,
+        /// Screenshot taken after the action (base64-encoded PNG), wrapped in Arc for efficiency.
+        screenshot: Option<Arc<String>>,
+    },
+
+    /// Current session state.
+    State {
+        /// The session's unique identifier.
+        session_id: String,
+        /// The current screenshot (base64-encoded PNG), wrapped in Arc for efficiency.
+        screenshot: Option<Arc<String>>,
+    },
+
+    /// Action log history.
+    Log {
+        /// All logged actions in chronological order.
+        entries: Vec<crate::action::ActionLog>,
+    },
+
+    /// A session event (sent to subscribers).
+    Event {
+        /// The event that occurred.
+        event: SessionEvent,
+    },
+
+    /// An error occurred processing the request.
+    Error {
+        /// Human-readable error message.
+        message: String,
+    },
 }
 
-/// Get the socket path for a session
+/// Returns the Unix socket path for a session.
+///
+/// The socket is created in the system temp directory with the pattern
+/// `qorvex_{session_name}.sock`.
+///
+/// # Arguments
+///
+/// * `session_name` - The name of the session
+///
+/// # Returns
+///
+/// A `PathBuf` pointing to the socket location (e.g., `/tmp/qorvex_my-session.sock`).
 pub fn socket_path(session_name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!("qorvex_{}.sock", session_name));
     path
 }
 
-/// IPC Server that manages a session
+/// Unix socket server for IPC communication.
+///
+/// The server accepts connections from clients (typically the watcher TUI)
+/// and handles requests by interacting with the associated [`Session`].
+///
+/// The server automatically cleans up the socket file when dropped.
 pub struct IpcServer {
+    /// The session managed by this server.
     session: Arc<Session>,
+    /// Path to the Unix socket file.
     socket_path: PathBuf,
 }
 
 impl IpcServer {
+    /// Creates a new IPC server for the given session.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session to manage
+    /// * `session_name` - The name used to determine the socket path
+    ///
+    /// # Returns
+    ///
+    /// A new `IpcServer` instance (not yet running).
     pub fn new(session: Arc<Session>, session_name: &str) -> Self {
         Self {
             session,
@@ -69,10 +175,28 @@ impl IpcServer {
         }
     }
 
-    /// Start the IPC server
+    /// Starts the IPC server and begins accepting connections.
+    ///
+    /// This method runs indefinitely, accepting client connections and spawning
+    /// a handler task for each. Each client is handled independently.
+    ///
+    /// Any existing socket file at the path is removed before binding.
+    ///
+    /// # Errors
+    ///
+    /// - [`IpcError::Io`] if the socket cannot be bound or an accept fails
+    ///
+    /// # Note
+    ///
+    /// This method never returns under normal operation. Use it with
+    /// `tokio::spawn` or `tokio::select!` for concurrent operation.
     pub async fn run(&self) -> Result<(), IpcError> {
-        // Remove existing socket
-        let _ = std::fs::remove_file(&self.socket_path);
+        // Remove existing socket (ignore NotFound errors as socket may not exist)
+        if let Err(e) = std::fs::remove_file(&self.socket_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[ipc] Failed to remove existing socket: {}", e);
+            }
+        }
 
         let listener = UnixListener::bind(&self.socket_path)?;
 
@@ -150,18 +274,37 @@ impl IpcServer {
         Ok(())
     }
 
+    /// Returns a reference to the socket path.
     pub fn socket_path(&self) -> &PathBuf {
         &self.socket_path
     }
 }
 
-/// IPC Client for REPL/Watcher
+/// Unix socket client for IPC communication.
+///
+/// Used by watchers (TUI clients) to connect to a running REPL session
+/// and receive updates or send commands.
 pub struct IpcClient {
+    /// Buffered reader for the socket's read half.
     stream: BufReader<tokio::net::unix::OwnedReadHalf>,
+    /// Writer for the socket's write half.
     writer: tokio::net::unix::OwnedWriteHalf,
 }
 
 impl IpcClient {
+    /// Connects to an IPC server for the specified session.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_name` - The name of the session to connect to
+    ///
+    /// # Returns
+    ///
+    /// A connected `IpcClient` instance.
+    ///
+    /// # Errors
+    ///
+    /// - [`IpcError::Io`] if the connection fails (e.g., server not running)
     pub async fn connect(session_name: &str) -> Result<Self, IpcError> {
         let path = socket_path(session_name);
         let stream = UnixStream::connect(&path).await?;
@@ -172,6 +315,23 @@ impl IpcClient {
         })
     }
 
+    /// Sends a request and waits for the response.
+    ///
+    /// This method serializes the request, sends it to the server,
+    /// and waits for a single response line.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The request to send
+    ///
+    /// # Returns
+    ///
+    /// The server's response.
+    ///
+    /// # Errors
+    ///
+    /// - [`IpcError::Io`] if the send or receive fails
+    /// - [`IpcError::Json`] if serialization or deserialization fails
     pub async fn send(&mut self, request: &IpcRequest) -> Result<IpcResponse, IpcError> {
         let json = serde_json::to_string(request)? + "\n";
         self.writer.write_all(json.as_bytes()).await?;
@@ -182,7 +342,16 @@ impl IpcClient {
         Ok(response)
     }
 
-    /// Subscribe and return receiver for events
+    /// Sends a subscribe request to the server.
+    ///
+    /// After calling this method, use [`Self::read_event`] to receive
+    /// session events as they occur. The server will stream events until
+    /// the connection is closed.
+    ///
+    /// # Errors
+    ///
+    /// - [`IpcError::Io`] if the send fails
+    /// - [`IpcError::Json`] if serialization fails
     pub async fn subscribe(&mut self) -> Result<(), IpcError> {
         let request = IpcRequest::Subscribe;
         let json = serde_json::to_string(&request)? + "\n";
@@ -190,6 +359,19 @@ impl IpcClient {
         Ok(())
     }
 
+    /// Reads the next event from the server.
+    ///
+    /// This method blocks until an event is received. It should be called
+    /// in a loop after [`Self::subscribe`] to process incoming events.
+    ///
+    /// # Returns
+    ///
+    /// The next [`IpcResponse`] from the server (typically an `Event` variant).
+    ///
+    /// # Errors
+    ///
+    /// - [`IpcError::Io`] if the read fails (e.g., server disconnected)
+    /// - [`IpcError::Json`] if deserialization fails
     pub async fn read_event(&mut self) -> Result<IpcResponse, IpcError> {
         let mut line = String::new();
         self.stream.read_line(&mut line).await?;
@@ -200,6 +382,10 @@ impl IpcClient {
 
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.socket_path);
+        if let Err(e) = std::fs::remove_file(&self.socket_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[ipc] Failed to cleanup socket on drop: {}", e);
+            }
+        }
     }
 }
