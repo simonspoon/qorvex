@@ -4,6 +4,7 @@ members = [
     "crates/qorvex-core",
     "crates/qorvex-repl",
     "crates/qorvex-watcher",
+    "crates/qorvex-cli",
 ]
 
 [workspace.package]

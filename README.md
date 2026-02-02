@@ -4,11 +4,12 @@ iOS Simulator automation and testing toolkit for macOS.
 
 ## Overview
 
-Qorvex provides programmatic control over iOS Simulators through a Rust workspace containing three crates:
+Qorvex provides programmatic control over iOS Simulators through a Rust workspace containing four crates:
 
 - **qorvex-core** — Core library with simulator control, UI automation, and IPC
 - **qorvex-repl** — Interactive command-line interface for manual testing
 - **qorvex-watcher** — TUI client for live screenshot and action log monitoring
+- **qorvex-cli** — Scriptable CLI client for automation pipelines
 
 ## Requirements
 
@@ -22,6 +23,7 @@ Qorvex provides programmatic control over iOS Simulators through a Rust workspac
 ```bash
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-watcher
+cargo install --path crates/qorvex-cli
 ```
 
 ## Usage
@@ -65,13 +67,53 @@ Controls:
 - `r` — Refresh screenshot
 - Arrow keys — Scroll action log
 
+### CLI
+
+Scriptable client for automation pipelines (requires a running REPL session):
+
+```bash
+# Tap an element by accessibility ID
+qorvex tap-element login-button
+
+# Tap at coordinates
+qorvex tap-location 100 200
+
+# Send keyboard input
+qorvex send-keys "hello world"
+
+# Get screenshot (base64)
+qorvex screenshot > screen.b64
+
+# Get screen info (JSON)
+qorvex screen-info | jq '.elements'
+
+# Connect to a specific session
+qorvex -s my-session tap-element button
+
+# Get session status
+qorvex status
+
+# Get action log
+qorvex log
+```
+
+Options:
+- `-s, --session <name>` — Session to connect to (default: "default", or `$QORVEX_SESSION`)
+- `-f, --format <text|json>` — Output format
+- `-q, --quiet` — Suppress non-essential output
+
 ## Architecture
 
 ```
-┌─────────────┐     IPC      ┌─────────────┐
+┌─────────────┐     IPC      ┌──────────────┐
 │ qorvex-repl │◄────────────►│qorvex-watcher│
-└──────┬──────┘              └─────────────┘
-       │
+└──────┬──────┘              └──────────────┘
+       │                            ▲
+       │ IPC                   IPC  │
+       │◄───────────────────────────┤
+       │                     ┌──────┴─────┐
+       │                     │ qorvex-cli │
+       │                     └────────────┘
        ▼
 ┌─────────────┐
 │ qorvex-core │
@@ -80,6 +122,7 @@ Controls:
 │  • axe      │ ──► Accessibility tree
 │  • session  │ ──► State management
 │  • ipc      │ ──► Unix sockets
+│  • executor │ ──► Action execution
 └─────────────┘
 ```
 

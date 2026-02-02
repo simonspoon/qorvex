@@ -1,0 +1,19 @@
+[package]
+name = "qorvex-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "CLI client for iOS Simulator automation via qorvex IPC"
+
+[[bin]]
+name = "qorvex"
+path = "src/main.rs"
+
+[dependencies]
+qorvex-core = { path = "../qorvex-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = "1"

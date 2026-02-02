@@ -537,6 +537,7 @@ async fn test_ipc_get_log_request() {
 #[tokio::test]
 async fn test_ipc_execute_action_request() {
     let session_name = unique_session_name();
+    // Use LogComment action which doesn't require a simulator UDID
     let session = Session::new(None);
 
     let _server_handle = start_server(session.clone(), &session_name).await;
@@ -544,10 +545,11 @@ async fn test_ipc_execute_action_request() {
 
     let mut client = IpcClient::connect(&session_name).await.unwrap();
 
+    // LogComment doesn't require a simulator, so it should succeed even without one
     let response = client
         .send(&IpcRequest::Execute {
-            action: ActionType::TapElement {
-                id: "my_button".to_string(),
+            action: ActionType::LogComment {
+                message: "test comment".to_string(),
             },
         })
         .await
@@ -560,7 +562,7 @@ async fn test_ipc_execute_action_request() {
             screenshot: _,
         } => {
             assert!(success);
-            assert!(message.contains("TapElement"));
+            assert!(message.contains("test comment"));
         }
         _ => panic!("Expected ActionResult response, got {:?}", response),
     }
@@ -569,8 +571,36 @@ async fn test_ipc_execute_action_request() {
     let logs = session.get_action_log().await;
     assert_eq!(logs.len(), 1);
     match &logs[0].action {
-        ActionType::TapElement { id } => assert_eq!(id, "my_button"),
-        _ => panic!("Expected TapElement action"),
+        ActionType::LogComment { message } => assert_eq!(message, "test comment"),
+        _ => panic!("Expected LogComment action"),
+    }
+}
+
+#[tokio::test]
+async fn test_ipc_execute_action_without_simulator_returns_error() {
+    let session_name = unique_session_name();
+    let session = Session::new(None);
+
+    let _server_handle = start_server(session.clone(), &session_name).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = IpcClient::connect(&session_name).await.unwrap();
+
+    // TapElement requires a simulator UDID, so it should return an error when none is set
+    let response = client
+        .send(&IpcRequest::Execute {
+            action: ActionType::TapElement {
+                id: "my_button".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    match response {
+        IpcResponse::Error { message } => {
+            assert!(message.contains("No simulator"));
+        }
+        _ => panic!("Expected Error response, got {:?}", response),
     }
 }
 
@@ -587,9 +617,12 @@ async fn test_ipc_multiple_requests_same_client() {
     // Send multiple requests on same connection
     let _ = client.send(&IpcRequest::GetState).await.unwrap();
     let _ = client.send(&IpcRequest::GetLog).await.unwrap();
+    // Use LogComment instead of GetScreenshot since it doesn't require a simulator
     let _ = client
         .send(&IpcRequest::Execute {
-            action: ActionType::GetScreenshot,
+            action: ActionType::LogComment {
+                message: "test".to_string(),
+            },
         })
         .await
         .unwrap();

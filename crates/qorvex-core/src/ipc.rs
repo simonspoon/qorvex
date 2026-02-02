@@ -39,7 +39,8 @@ use tokio::net::{UnixListener, UnixStream};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::action::ActionType;
+use crate::action::{ActionResult, ActionType};
+use crate::executor::ActionExecutor;
 use crate::session::{Session, SessionEvent};
 
 /// Errors that can occur during IPC operations.
@@ -230,18 +231,48 @@ impl IpcServer {
 
             match request {
                 IpcRequest::Execute { action } => {
-                    // For now, just log the action - actual execution will be added
-                    let log = session.log_action(
-                        action,
-                        crate::action::ActionResult::Success,
-                        None
-                    ).await;
+                    // Execute the action using the ActionExecutor
+                    // LogComment doesn't require a simulator, handle it specially
+                    let response = if matches!(action, ActionType::LogComment { .. }) {
+                        // LogComment can run without a simulator
+                        let executor = ActionExecutor::new(String::new());
+                        let result = executor.execute(action.clone()).await;
 
-                    let response = IpcResponse::ActionResult {
-                        success: true,
-                        message: format!("Executed: {:?}", log.action),
-                        screenshot: log.screenshot,
+                        session.log_action(action, ActionResult::Success, None).await;
+
+                        IpcResponse::ActionResult {
+                            success: result.success,
+                            message: result.message,
+                            screenshot: None,
+                        }
+                    } else {
+                        match &session.simulator_udid {
+                            Some(udid) => {
+                                let executor = ActionExecutor::new(udid.clone());
+                                let result = executor.execute(action.clone()).await;
+
+                                // Log to session
+                                let action_result = if result.success {
+                                    ActionResult::Success
+                                } else {
+                                    ActionResult::Failure(result.message.clone())
+                                };
+                                session.log_action(action, action_result, result.screenshot.clone()).await;
+
+                                IpcResponse::ActionResult {
+                                    success: result.success,
+                                    message: result.message,
+                                    screenshot: result.screenshot.map(Arc::new),
+                                }
+                            }
+                            None => {
+                                IpcResponse::Error {
+                                    message: "No simulator selected for this session".to_string(),
+                                }
+                            }
+                        }
                     };
+
                     let json = serde_json::to_string(&response)? + "\n";
                     writer.write_all(json.as_bytes()).await?;
                     writer.flush().await?;
