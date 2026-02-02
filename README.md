@@ -46,6 +46,8 @@ Available commands:
 - `tap_element(id)` — Tap a UI element by accessibility ID
 - `tap_location(x, y)` — Tap at screen coordinates
 - `send_keys(text)` — Type text into the focused field
+- `wait_for(id)` — Wait for element to appear (5s default timeout)
+- `wait_for(id, ms)` — Wait for element with custom timeout
 - `get_screenshot` — Capture current screen
 - `get_screen_info` — Get UI hierarchy information
 - `list_elements` — List actionable UI elements
@@ -86,6 +88,15 @@ qorvex screenshot > screen.b64
 
 # Get screen info (JSON)
 qorvex screen-info | jq '.elements'
+
+# Get element value
+qorvex get-value text-field-id
+
+# Wait for element to appear
+qorvex wait-for loading-spinner --timeout 10000
+
+# Log a comment to the session
+qorvex comment "Starting login flow"
 
 # Connect to a specific session
 qorvex -s my-session tap-element button

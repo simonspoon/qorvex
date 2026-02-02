@@ -343,6 +343,40 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
                 None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
             }
         }
+        "wait_for" => {
+            let id = args.first().map(|s| s.as_str()).unwrap_or("");
+            if id.is_empty() {
+                return "fail: wait_for requires at least 1 argument: wait_for(element_id) or wait_for(element_id, timeout_ms)".to_string();
+            }
+            let timeout_ms: u64 = args.get(1)
+                .map(|s| s.parse().unwrap_or(5000))
+                .unwrap_or(5000);
+            match &state.simulator_udid {
+                Some(udid) => {
+                    use qorvex_core::executor::ActionExecutor;
+                    let executor = ActionExecutor::new(udid.clone());
+                    let result = executor.execute(ActionType::WaitFor {
+                        id: id.to_string(),
+                        timeout_ms,
+                    }).await;
+                    let action_result = if result.success {
+                        ActionResult::Success
+                    } else {
+                        ActionResult::Failure(result.message.clone())
+                    };
+                    state.log_action(
+                        ActionType::WaitFor { id: id.to_string(), timeout_ms },
+                        action_result,
+                    ).await;
+                    if result.success {
+                        format!("success: {} ({})", result.message, result.data.unwrap_or_default())
+                    } else {
+                        format!("fail: {}", result.message)
+                    }
+                }
+                None => "fail: no simulator selected - use list_devices and use_device first".to_string(),
+            }
+        }
         "list_devices" => match Simctl::list_devices() {
             Ok(devices) => {
                 serde_json::to_string(&devices).unwrap_or_else(|e| format!("fail: {}", e))
@@ -434,6 +468,8 @@ UI:
   get_element_value(id)  Get an element's value by ID
   tap_element(id)        Tap an element by ID
   tap_location(x, y)     Tap at screen coordinates
+  wait_for(id)           Wait for element to appear (default 5s timeout)
+  wait_for(id, ms)       Wait for element with custom timeout
 
 Input:
   send_keys(text)        Send keyboard input

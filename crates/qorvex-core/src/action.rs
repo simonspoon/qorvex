@@ -87,6 +87,14 @@ pub enum ActionType {
         text: String,
     },
 
+    /// Wait for an element to appear on screen.
+    WaitFor {
+        /// The accessibility identifier of the element to wait for.
+        id: String,
+        /// Maximum time to wait in milliseconds.
+        timeout_ms: u64,
+    },
+
     /// Start a new automation session.
     StartSession,
 

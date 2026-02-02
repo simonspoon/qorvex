@@ -97,6 +97,15 @@ enum Command {
         message: String,
     },
 
+    /// Wait for an element to appear
+    WaitFor {
+        /// Element accessibility identifier
+        id: String,
+        /// Timeout in milliseconds
+        #[arg(short, long, default_value = "5000")]
+        timeout: u64,
+    },
+
     /// Get current session state
     Status,
 
@@ -172,6 +181,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Comment { ref message } => {
             execute_action(&mut client, ActionType::LogComment { message: message.clone() }, &cli).await
         }
+        Command::WaitFor { ref id, timeout } => {
+            execute_action(&mut client, ActionType::WaitFor { id: id.clone(), timeout_ms: timeout }, &cli).await
+        }
         Command::Status => {
             get_status(&mut client, &cli).await
         }
@@ -182,6 +194,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 }
 
 async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -> Result<(), CliError> {
+    let is_screenshot_action = matches!(action, ActionType::GetScreenshot);
     let request = IpcRequest::Execute { action };
     let response = client
         .send(&request)
@@ -189,27 +202,39 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -
         .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
 
     match response {
-        IpcResponse::ActionResult { success, message, screenshot } => {
+        IpcResponse::ActionResult { success, message, screenshot, data } => {
             if cli.format == OutputFormat::Json {
                 let output = serde_json::json!({
                     "success": success,
                     "message": message,
-                    "screenshot": screenshot.as_ref().map(|s| s.as_ref()),
+                    "screenshot": if is_screenshot_action { screenshot.as_ref().map(|s| s.as_ref()) } else { None },
+                    "data": data.as_ref().and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok()),
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
                 // Text format - output depends on the action
                 if success {
-                    // For screenshot, output the base64 data directly
-                    if let Some(ref ss) = screenshot {
-                        if !cli.quiet {
-                            // If we got a screenshot and it looks like the primary output,
-                            // print it (for GetScreenshot command)
+                    // Only output screenshot for GetScreenshot command
+                    if is_screenshot_action {
+                        if let Some(ref ss) = screenshot {
                             println!("{}", ss);
                         }
                     }
                     if !cli.quiet {
-                        eprintln!("{}", message);
+                        // Include duration from data if present
+                        if let Some(ref d) = data {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(d) {
+                                if let Some(elapsed) = parsed.get("elapsed_ms").and_then(|v| v.as_u64()) {
+                                    eprintln!("{} ({}ms)", message, elapsed);
+                                } else {
+                                    eprintln!("{}", message);
+                                }
+                            } else {
+                                eprintln!("{}", message);
+                            }
+                        } else {
+                            eprintln!("{}", message);
+                        }
                     }
                 } else {
                     return Err(CliError::ActionFailed(message));

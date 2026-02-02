@@ -55,8 +55,8 @@ qorvex-cli     - Scriptable CLI client for automation pipelines
 - **session.rs** - Async session state with broadcast channels for events (uses `tokio::sync`)
 - **ipc.rs** - Unix socket server/client for REPL↔Watcher/CLI communication (JSON-over-newlines protocol)
   - Socket path convention: `/tmp/qorvex_<session_name>.sock`
-  - Request types: `Execute`, `Subscribe`, `Unsubscribe`, `GetState`, `GetLog`, `Ping`
-  - Response types: `ActionResult`, `Subscribed`, `Unsubscribed`, `State`, `Log`, `Pong`, `Event`, `Error`
+  - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
+  - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
 - **action.rs** - Action types (`TapElement`, `SendKeys`, `GetScreenshot`, etc.) and logging
 - **executor.rs** - Action execution engine that wraps simctl/axe operations with result handling
 

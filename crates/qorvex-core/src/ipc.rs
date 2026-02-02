@@ -98,6 +98,8 @@ pub enum IpcResponse {
         message: String,
         /// Screenshot taken after the action (base64-encoded PNG), wrapped in Arc for efficiency.
         screenshot: Option<Arc<String>>,
+        /// Additional data returned by the action (JSON).
+        data: Option<String>,
     },
 
     /// Current session state.
@@ -244,6 +246,7 @@ impl IpcServer {
                             success: result.success,
                             message: result.message,
                             screenshot: None,
+                            data: result.data,
                         }
                     } else {
                         match &session.simulator_udid {
@@ -263,6 +266,7 @@ impl IpcServer {
                                     success: result.success,
                                     message: result.message,
                                     screenshot: result.screenshot.map(Arc::new),
+                                    data: result.data,
                                 }
                             }
                             None => {

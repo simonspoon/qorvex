@@ -27,6 +27,7 @@
 use crate::action::ActionType;
 use crate::axe::Axe;
 use crate::simctl::Simctl;
+use std::time::{Duration, Instant};
 
 /// Result of executing an action.
 ///
@@ -231,6 +232,34 @@ impl ActionExecutor {
 
             ActionType::LogComment { ref message } => {
                 ExecutionResult::success(format!("Logged: {}", message))
+            }
+
+            ActionType::WaitFor { ref id, timeout_ms } => {
+                let start = Instant::now();
+                let timeout = Duration::from_millis(timeout_ms);
+                let poll_interval = Duration::from_millis(100);
+
+                loop {
+                    if let Ok(elements) = Axe::dump_hierarchy(&self.simulator_udid) {
+                        if Axe::find_element(&elements, id).is_some() {
+                            let elapsed_ms = start.elapsed().as_millis() as u64;
+                            let mut result = ExecutionResult::success(
+                                format!("Element '{}' found", id)
+                            ).with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                            if let Some(screenshot) = self.capture_screenshot() {
+                                result = result.with_screenshot(screenshot);
+                            }
+                            return result;
+                        }
+                    }
+                    if start.elapsed() >= timeout {
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                        return ExecutionResult::failure(format!(
+                            "Timeout after {}ms waiting for element '{}'", elapsed_ms, id
+                        )).with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                    }
+                    tokio::time::sleep(poll_interval).await;
+                }
             }
 
             // Session management actions should be handled by the caller

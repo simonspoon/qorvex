@@ -133,6 +133,7 @@ fn test_ipc_response_action_result_serialization() {
         success: true,
         message: "Tapped element".to_string(),
         screenshot: Some(Arc::new("base64data".to_string())),
+        data: None,
     };
 
     let json = serde_json::to_string(&response).unwrap();
@@ -143,6 +144,7 @@ fn test_ipc_response_action_result_serialization() {
             success,
             message,
             screenshot,
+            ..
         } => {
             assert!(success);
             assert_eq!(message, "Tapped element");
@@ -559,7 +561,7 @@ async fn test_ipc_execute_action_request() {
         IpcResponse::ActionResult {
             success,
             message,
-            screenshot: _,
+            ..
         } => {
             assert!(success);
             assert!(message.contains("test comment"));
