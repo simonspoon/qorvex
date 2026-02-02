@@ -63,6 +63,12 @@ enum Command {
     TapElement {
         /// The accessibility identifier of the element to tap
         id: String,
+        /// Wait for the element to appear before tapping
+        #[arg(short, long)]
+        wait: bool,
+        /// Timeout in milliseconds when waiting
+        #[arg(short, long, default_value = "5000")]
+        timeout: u64,
     },
 
     /// Tap at screen coordinates
@@ -89,6 +95,12 @@ enum Command {
     GetValue {
         /// The accessibility identifier of the element
         id: String,
+        /// Wait for the element to appear before getting value
+        #[arg(short, long)]
+        wait: bool,
+        /// Timeout in milliseconds when waiting
+        #[arg(short, long, default_value = "5000")]
+        timeout: u64,
     },
 
     /// Log a comment to the session
@@ -160,7 +172,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         .map_err(|e| CliError::Connection(format!("Failed to connect to session '{}': {}", cli.session, e)))?;
 
     match cli.command {
-        Command::TapElement { ref id } => {
+        Command::TapElement { ref id, wait, timeout } => {
+            if wait {
+                execute_action(&mut client, ActionType::WaitFor { id: id.clone(), timeout_ms: timeout }, &cli).await?;
+            }
             execute_action(&mut client, ActionType::TapElement { id: id.clone() }, &cli).await
         }
         Command::TapLocation { x, y } => {
@@ -175,7 +190,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::ScreenInfo => {
             execute_action(&mut client, ActionType::GetScreenInfo, &cli).await
         }
-        Command::GetValue { ref id } => {
+        Command::GetValue { ref id, wait, timeout } => {
+            if wait {
+                execute_action(&mut client, ActionType::WaitFor { id: id.clone(), timeout_ms: timeout }, &cli).await?;
+            }
             execute_action(&mut client, ActionType::GetElementValue { id: id.clone() }, &cli).await
         }
         Command::Comment { ref message } => {

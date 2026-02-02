@@ -77,6 +77,9 @@ Scriptable client for automation pipelines (requires a running REPL session):
 # Tap an element by accessibility ID
 qorvex tap-element login-button
 
+# Tap with wait (waits for element to appear first)
+qorvex tap-element login-button --wait --timeout 10000
+
 # Tap at coordinates
 qorvex tap-location 100 200
 
@@ -91,6 +94,9 @@ qorvex screen-info | jq '.elements'
 
 # Get element value
 qorvex get-value text-field-id
+
+# Get element value with wait
+qorvex get-value text-field-id --wait --timeout 5000
 
 # Wait for element to appear
 qorvex wait-for loading-spinner --timeout 10000
@@ -112,6 +118,10 @@ Options:
 - `-s, --session <name>` — Session to connect to (default: "default", or `$QORVEX_SESSION`)
 - `-f, --format <text|json>` — Output format
 - `-q, --quiet` — Suppress non-essential output
+
+Command-specific options:
+- `tap-element`, `get-value`: `-w, --wait` — Wait for element before acting; `-t, --timeout <ms>` — Wait timeout (default: 5000)
+- `wait-for`: `-t, --timeout <ms>` — Wait timeout (default: 5000)
 
 ## Architecture
 
