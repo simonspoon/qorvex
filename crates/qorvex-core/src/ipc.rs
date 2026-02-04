@@ -13,7 +13,7 @@
 //!
 //! # Socket Location
 //!
-//! Sockets are created in the system temp directory with the naming pattern
+//! Sockets are created in `~/.qorvex/` with the naming pattern
 //! `qorvex_{session_name}.sock`. Use [`socket_path`] to get the path for a session.
 //!
 //! # Example
@@ -129,9 +129,24 @@ pub enum IpcResponse {
     },
 }
 
+/// Returns the qorvex directory path (`~/.qorvex/`).
+///
+/// Creates the directory if it doesn't exist.
+///
+/// # Panics
+///
+/// Panics if the home directory cannot be determined.
+pub fn qorvex_dir() -> PathBuf {
+    let dir = dirs::home_dir()
+        .expect("Could not determine home directory")
+        .join(".qorvex");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
 /// Returns the Unix socket path for a session.
 ///
-/// The socket is created in the system temp directory with the pattern
+/// The socket is created in `~/.qorvex/` with the pattern
 /// `qorvex_{session_name}.sock`.
 ///
 /// # Arguments
@@ -140,11 +155,9 @@ pub enum IpcResponse {
 ///
 /// # Returns
 ///
-/// A `PathBuf` pointing to the socket location (e.g., `/tmp/qorvex_my-session.sock`).
+/// A `PathBuf` pointing to the socket location (e.g., `~/.qorvex/qorvex_my-session.sock`).
 pub fn socket_path(session_name: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("qorvex_{}.sock", session_name));
-    path
+    qorvex_dir().join(format!("qorvex_{}.sock", session_name))
 }
 
 /// Unix socket server for IPC communication.

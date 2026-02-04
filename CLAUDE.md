@@ -54,7 +54,7 @@ qorvex-cli     - Scriptable CLI client for automation pipelines
 - **axe.rs** - Wrapper around `axe` CLI for UI hierarchy dumps, element finding, and tap actions
 - **session.rs** - Async session state with broadcast channels for events (uses `tokio::sync`)
 - **ipc.rs** - Unix socket server/client for REPL↔Watcher/CLI communication (JSON-over-newlines protocol)
-  - Socket path convention: `/tmp/qorvex_<session_name>.sock`
+  - Socket path convention: `~/.qorvex/qorvex_<session_name>.sock`
   - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
 - **action.rs** - Action types (`TapElement`, `SendKeys`, `GetScreenshot`, etc.) and logging

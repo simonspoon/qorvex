@@ -107,6 +107,9 @@ qorvex comment "Starting login flow"
 # Connect to a specific session
 qorvex -s my-session tap-element button
 
+# List all running sessions
+qorvex list-sessions
+
 # Get session status
 qorvex status
 
@@ -146,6 +149,24 @@ Command-specific options:
 │  • executor │ ──► Action execution
 └─────────────┘
 ```
+
+### Directory Structure
+
+Qorvex stores runtime files in `~/.qorvex/`:
+
+```
+~/.qorvex/
+├── default.sock          # Unix socket for "default" session
+├── my-session.sock       # Unix socket for "my-session"
+└── logs/
+    ├── default.jsonl     # Action log for "default" session
+    └── my-session.jsonl  # Action log for "my-session"
+```
+
+- **Sockets** (`~/.qorvex/<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Watcher connect to these to communicate with running sessions.
+- **Logs** (`~/.qorvex/logs/<session>.jsonl`) — Persistent action logs in JSON Lines format. Each line is a timestamped action record, enabling replay, debugging, and audit trails.
+
+Use `qorvex list-sessions` to discover running sessions by scanning for active socket files.
 
 ## License
 

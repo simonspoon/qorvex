@@ -12,6 +12,7 @@
 //! - Screenshots are stored and broadcasted when updated
 //! - Watchers subscribe to session events via broadcast channels
 //! - The action log is maintained as a ring buffer to limit memory usage
+//! - Actions are persisted to JSON Lines files in `~/.qorvex/logs/`
 //!
 //! # Example
 //!
@@ -22,7 +23,7 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     // Create a new session
-//!     let session = Session::new(Some("SIMULATOR-UDID".to_string()));
+//!     let session = Session::new(Some("SIMULATOR-UDID".to_string()), "default");
 //!
 //!     // Subscribe to events (for a watcher)
 //!     let mut rx = session.subscribe();
@@ -37,16 +38,28 @@
 //! ```
 
 use std::collections::VecDeque;
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::action::{ActionLog, ActionType, ActionResult};
+use crate::ipc::qorvex_dir;
 
 /// Maximum number of action log entries to retain in the ring buffer.
 const MAX_ACTION_LOG_SIZE: usize = 1000;
+
+/// Returns the logs directory path (`~/.qorvex/logs/`).
+///
+/// Creates the directory if it doesn't exist.
+fn logs_dir() -> PathBuf {
+    let dir = qorvex_dir().join("logs");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
 
 /// Events broadcast to watchers when session state changes.
 ///
@@ -81,10 +94,10 @@ pub enum SessionEvent {
 /// - A ring buffer of recent actions (up to 1000 entries)
 /// - The current screenshot (if any)
 /// - A broadcast channel for notifying watchers of state changes
+/// - A persistent log file in `~/.qorvex/logs/`
 ///
 /// Sessions are created via [`Session::new`], which returns an `Arc<Session>`
 /// for safe sharing across async tasks.
-#[derive(Debug)]
 pub struct Session {
     /// The unique identifier for this session.
     pub id: Uuid,
@@ -103,6 +116,9 @@ pub struct Session {
 
     /// Broadcast channel for session events.
     event_tx: broadcast::Sender<SessionEvent>,
+
+    /// Buffered writer for persistent JSON Lines log file.
+    log_writer: Mutex<Option<BufWriter<std::fs::File>>>,
 }
 
 impl Session {
@@ -111,21 +127,41 @@ impl Session {
     /// # Arguments
     ///
     /// * `simulator_udid` - Optional UDID of the simulator to associate with this session
+    /// * `session_name` - Name used for the persistent log file
     ///
     /// # Returns
     ///
     /// An `Arc<Session>` for safe sharing across async tasks. The session is
     /// initialized with a new UUID, the current timestamp, an empty action log,
-    /// and no screenshot.
-    pub fn new(simulator_udid: Option<String>) -> Arc<Self> {
+    /// no screenshot, and a persistent log file at `~/.qorvex/logs/{session_name}_{timestamp}.jsonl`.
+    pub fn new(simulator_udid: Option<String>, session_name: &str) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(100);
+        let created_at = Utc::now();
+
+        // Create persistent log file
+        let log_writer = {
+            let timestamp = created_at.format("%Y%m%d_%H%M%S");
+            let log_path = logs_dir().join(format!("{}_{}.jsonl", session_name, timestamp));
+            match std::fs::File::create(&log_path) {
+                Ok(file) => {
+                    eprintln!("[session] Log file: {:?}", log_path);
+                    Some(BufWriter::new(file))
+                }
+                Err(e) => {
+                    eprintln!("[session] Failed to create log file {:?}: {}", log_path, e);
+                    None
+                }
+            }
+        };
+
         Arc::new(Self {
             id: Uuid::new_v4(),
-            created_at: Utc::now(),
+            created_at,
             simulator_udid,
             action_log: RwLock::new(VecDeque::with_capacity(MAX_ACTION_LOG_SIZE)),
             current_screenshot: RwLock::new(None),
             event_tx,
+            log_writer: Mutex::new(log_writer),
         })
     }
 
@@ -146,8 +182,8 @@ impl Session {
     /// Logs an action and broadcasts it to watchers.
     ///
     /// Creates an [`ActionLog`] entry with the given action, result, and optional
-    /// screenshot, then adds it to the session's action log and broadcasts it to
-    /// all subscribers.
+    /// screenshot, then adds it to the session's action log, writes it to the
+    /// persistent log file, and broadcasts it to all subscribers.
     ///
     /// If a screenshot is provided, the current screenshot is also updated and
     /// a [`SessionEvent::ScreenshotUpdated`] event is broadcast.
@@ -165,7 +201,8 @@ impl Session {
     /// # Note
     ///
     /// The action log is maintained as a ring buffer. When the maximum size
-    /// is reached, the oldest entry is removed.
+    /// is reached, the oldest entry is removed. Actions are also persisted to
+    /// the JSON Lines log file at `~/.qorvex/logs/`.
     pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>) -> ActionLog {
         // Wrap screenshot in Arc for cheap clones in hot path
         let screenshot_arc = screenshot.map(Arc::new);
@@ -178,6 +215,25 @@ impl Session {
                 action_log.pop_front(); // Remove oldest entry
             }
             action_log.push_back(log.clone());
+        }
+
+        // Write to persistent log file (without screenshot to keep file size manageable)
+        {
+            let mut writer_guard = self.log_writer.lock().await;
+            if let Some(ref mut writer) = *writer_guard {
+                // Create a copy without screenshot for file logging
+                let file_log = ActionLog {
+                    id: log.id,
+                    timestamp: log.timestamp,
+                    action: log.action.clone(),
+                    result: log.result.clone(),
+                    screenshot: None,
+                };
+                if let Ok(json) = serde_json::to_string(&file_log) {
+                    let _ = writeln!(writer, "{}", json);
+                    let _ = writer.flush();
+                }
+            }
         }
 
         // Update screenshot if provided
@@ -216,6 +272,23 @@ impl Session {
         self.current_screenshot.read().await.clone()
     }
 
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("id", &self.id)
+            .field("created_at", &self.created_at)
+            .field("simulator_udid", &self.simulator_udid)
+            .field("action_log", &"<RwLock<VecDeque<ActionLog>>>")
+            .field("current_screenshot", &"<RwLock<Option<Arc<String>>>>")
+            .field("event_tx", &"<broadcast::Sender>")
+            .field("log_writer", &"<Mutex<Option<BufWriter<File>>>>")
+            .finish()
+    }
+}
+
+impl Session {
     /// Updates the current screenshot without logging an action.
     ///
     /// This is useful for updating the screenshot independently of action

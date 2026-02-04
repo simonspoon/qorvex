@@ -35,7 +35,7 @@ async fn start_server(session: Arc<Session>, session_name: &str) -> tokio::task:
 #[tokio::test]
 async fn test_ipc_client_connects_to_server() {
     let session_name = unique_session_name();
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let _server_handle = start_server(session, &session_name).await;
 
@@ -59,7 +59,7 @@ async fn test_ipc_client_fails_with_no_server() {
 #[tokio::test]
 async fn test_multiple_clients_can_connect() {
     let session_name = unique_session_name();
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let _server_handle = start_server(session, &session_name).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -273,7 +273,7 @@ fn test_all_action_types_serialization() {
 
 #[tokio::test]
 async fn test_session_broadcasts_action_logged_event() {
-    let session = Session::new(Some("test-udid".to_string()));
+    let session = Session::new(Some("test-udid".to_string()), "test");
     let mut receiver = session.subscribe();
 
     // Log an action
@@ -298,7 +298,7 @@ async fn test_session_broadcasts_action_logged_event() {
 
 #[tokio::test]
 async fn test_session_broadcasts_screenshot_updated_event() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
     let mut receiver = session.subscribe();
 
     // Update screenshot
@@ -320,7 +320,7 @@ async fn test_session_broadcasts_screenshot_updated_event() {
 
 #[tokio::test]
 async fn test_session_broadcasts_to_multiple_subscribers() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
     let mut receiver1 = session.subscribe();
     let mut receiver2 = session.subscribe();
 
@@ -352,7 +352,7 @@ async fn test_session_broadcasts_to_multiple_subscribers() {
 
 #[tokio::test]
 async fn test_action_with_screenshot_broadcasts_two_events() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
     let mut receiver = session.subscribe();
 
     // Log an action with screenshot (should broadcast ScreenshotUpdated AND ActionLogged)
@@ -385,7 +385,7 @@ async fn test_action_with_screenshot_broadcasts_two_events() {
 
 #[tokio::test]
 async fn test_session_logs_actions() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     // Log multiple actions
     session
@@ -425,7 +425,7 @@ async fn test_session_logs_actions() {
 
 #[tokio::test]
 async fn test_session_stores_and_retrieves_screenshot() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     // Initially no screenshot
     assert!(session.get_screenshot().await.is_none());
@@ -451,7 +451,7 @@ async fn test_session_stores_and_retrieves_screenshot() {
 
 #[tokio::test]
 async fn test_action_log_has_unique_ids() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let log1 = session
         .log_action(ActionType::GetScreenshot, ActionResult::Success, None)
@@ -465,7 +465,7 @@ async fn test_action_log_has_unique_ids() {
 
 #[tokio::test]
 async fn test_action_log_has_timestamp() {
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let before = chrono::Utc::now();
     let log = session
@@ -484,7 +484,7 @@ async fn test_action_log_has_timestamp() {
 #[tokio::test]
 async fn test_ipc_get_state_request() {
     let session_name = unique_session_name();
-    let session = Session::new(Some("simulator-udid-123".to_string()));
+    let session = Session::new(Some("simulator-udid-123".to_string()), "test");
     let session_id = session.id.to_string();
 
     let _server_handle = start_server(session, &session_name).await;
@@ -509,7 +509,7 @@ async fn test_ipc_get_state_request() {
 #[tokio::test]
 async fn test_ipc_get_log_request() {
     let session_name = unique_session_name();
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     // Pre-log some actions
     session
@@ -540,7 +540,7 @@ async fn test_ipc_get_log_request() {
 async fn test_ipc_execute_action_request() {
     let session_name = unique_session_name();
     // Use LogComment action which doesn't require a simulator UDID
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let _server_handle = start_server(session.clone(), &session_name).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -581,7 +581,7 @@ async fn test_ipc_execute_action_request() {
 #[tokio::test]
 async fn test_ipc_execute_action_without_simulator_returns_error() {
     let session_name = unique_session_name();
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let _server_handle = start_server(session.clone(), &session_name).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -609,7 +609,7 @@ async fn test_ipc_execute_action_without_simulator_returns_error() {
 #[tokio::test]
 async fn test_ipc_multiple_requests_same_client() {
     let session_name = unique_session_name();
-    let session = Session::new(None);
+    let session = Session::new(None, "test");
 
     let _server_handle = start_server(session, &session_name).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -637,4 +637,114 @@ async fn test_ipc_multiple_requests_same_client() {
         }
         _ => panic!("Expected Log response"),
     }
+}
+
+// =============================================================================
+// Persistent Log File Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_session_creates_persistent_log_file() {
+    use std::fs;
+    use std::io::{BufRead, BufReader};
+    use std::path::PathBuf;
+
+    // Create a unique session name to avoid conflicts
+    let session_name = format!("persistent_log_test_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string());
+    let session = Session::new(None, &session_name);
+
+    // Log some actions
+    session
+        .log_action(ActionType::StartSession, ActionResult::Success, None)
+        .await;
+    session
+        .log_action(
+            ActionType::TapElement {
+                id: "test_button".to_string(),
+            },
+            ActionResult::Success,
+            None,
+        )
+        .await;
+    session
+        .log_action(
+            ActionType::SendKeys {
+                text: "hello world".to_string(),
+            },
+            ActionResult::Failure("Keyboard not available".to_string()),
+            None,
+        )
+        .await;
+
+    // Find the log file in ~/.qorvex/logs/
+    let logs_dir = dirs::home_dir()
+        .expect("Should have home directory")
+        .join(".qorvex")
+        .join("logs");
+
+    // Find file matching session name pattern
+    let log_file: PathBuf = fs::read_dir(&logs_dir)
+        .expect("Logs directory should exist")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(&session_name) && n.ends_with(".jsonl"))
+                .unwrap_or(false)
+        })
+        .expect("Should find log file matching session name");
+
+    // Read and verify file contents
+    let file = fs::File::open(&log_file).expect("Should open log file");
+    let reader = BufReader::new(file);
+    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+
+    assert_eq!(lines.len(), 3, "Should have 3 log entries");
+
+    // Parse and verify each line is valid JSON with expected fields
+    for (i, line) in lines.iter().enumerate() {
+        let parsed: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|_| panic!("Line {} should be valid JSON", i));
+
+        // Verify required fields exist
+        assert!(parsed.get("id").is_some(), "Line {} should have 'id' field", i);
+        assert!(parsed.get("timestamp").is_some(), "Line {} should have 'timestamp' field", i);
+        assert!(parsed.get("action").is_some(), "Line {} should have 'action' field", i);
+        assert!(parsed.get("result").is_some(), "Line {} should have 'result' field", i);
+
+        // Verify id is a valid UUID string
+        let id = parsed["id"].as_str().expect("id should be a string");
+        uuid::Uuid::parse_str(id).expect("id should be a valid UUID");
+
+        // Verify timestamp is a valid ISO 8601 string
+        let timestamp = parsed["timestamp"].as_str().expect("timestamp should be a string");
+        chrono::DateTime::parse_from_rfc3339(timestamp).expect("timestamp should be valid RFC 3339");
+
+        // Verify screenshot is null (file logging excludes screenshots)
+        assert!(
+            parsed["screenshot"].is_null(),
+            "Line {} screenshot should be null in file log",
+            i
+        );
+    }
+
+    // Verify specific action types were logged correctly
+    // ActionType uses serde(tag = "type") so it serializes as {"type": "StartSession"} or {"type": "TapElement", "id": "..."}
+    let first: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(first["action"]["type"].as_str(), Some("StartSession"));
+    assert_eq!(first["result"], "Success");
+
+    let second: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+    assert_eq!(second["action"]["type"].as_str(), Some("TapElement"));
+    assert_eq!(second["action"]["id"].as_str(), Some("test_button"));
+    assert_eq!(second["result"], "Success");
+
+    let third: serde_json::Value = serde_json::from_str(&lines[2]).unwrap();
+    assert_eq!(third["action"]["type"].as_str(), Some("SendKeys"));
+    assert_eq!(third["action"]["text"].as_str(), Some("hello world"));
+    assert_eq!(third["result"]["Failure"].as_str(), Some("Keyboard not available"));
+
+    // Clean up: remove test log file
+    fs::remove_file(&log_file).expect("Should clean up test log file");
 }

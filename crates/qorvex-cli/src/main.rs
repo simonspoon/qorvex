@@ -26,7 +26,7 @@
 
 use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
-use qorvex_core::ipc::{IpcClient, IpcRequest, IpcResponse};
+use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse};
 use std::process::ExitCode;
 
 /// CLI client for iOS Simulator automation via qorvex IPC.
@@ -123,6 +123,9 @@ enum Command {
 
     /// Get action log history
     Log,
+
+    /// List all running qorvex sessions
+    ListSessions,
 }
 
 #[tokio::main]
@@ -165,7 +168,40 @@ impl std::fmt::Display for CliError {
     }
 }
 
+fn discover_sessions() -> Vec<String> {
+    let pattern = qorvex_dir().join("qorvex_*.sock");
+    glob::glob(pattern.to_str().unwrap_or_default())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry.ok().and_then(|path| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.strip_prefix("qorvex_"))
+                    .map(String::from)
+            })
+        })
+        .collect()
+}
+
 async fn run(cli: Cli) -> Result<(), CliError> {
+    // Handle ListSessions separately since it doesn't need IPC connection
+    if let Command::ListSessions = cli.command {
+        let sessions = discover_sessions();
+        if cli.format == OutputFormat::Json {
+            println!("{}", serde_json::json!({ "sessions": sessions }));
+        } else {
+            if sessions.is_empty() {
+                eprintln!("No running sessions found");
+            } else {
+                for session in sessions {
+                    println!("{}", session);
+                }
+            }
+        }
+        return Ok(());
+    }
+
     // Connect to the IPC server
     let mut client = IpcClient::connect(&cli.session)
         .await
@@ -208,6 +244,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Log => {
             get_log(&mut client, &cli).await
         }
+        // ListSessions is handled before IPC connection above
+        Command::ListSessions => unreachable!(),
     }
 }
 
@@ -328,6 +366,48 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
         }
         _ => {
             Err(CliError::Protocol("Unexpected response type".to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+
+    #[test]
+    fn test_discover_sessions() {
+        let qorvex_dir = qorvex_dir();
+
+        // Ensure the qorvex directory exists
+        fs::create_dir_all(&qorvex_dir).expect("Failed to create qorvex directory");
+
+        // Create temporary socket files with unique names to avoid test collisions
+        let test_sessions = ["test_session_a", "test_session_b", "test_session_c"];
+        let mut created_files = Vec::new();
+
+        for session_name in &test_sessions {
+            let sock_path = qorvex_dir.join(format!("qorvex_{}.sock", session_name));
+            File::create(&sock_path).expect("Failed to create test socket file");
+            created_files.push(sock_path);
+        }
+
+        // Run discover_sessions and verify it finds our test sessions
+        let discovered = discover_sessions();
+
+        // Verify all test sessions are found
+        for session_name in &test_sessions {
+            assert!(
+                discovered.contains(&session_name.to_string()),
+                "discover_sessions() should find session '{}', but got: {:?}",
+                session_name,
+                discovered
+            );
+        }
+
+        // Clean up the temporary socket files
+        for path in created_files {
+            let _ = fs::remove_file(path);
         }
     }
 }

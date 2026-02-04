@@ -1,7 +1,7 @@
 use clap::Parser;
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::axe::Axe;
-use qorvex_core::ipc::IpcServer;
+use qorvex_core::ipc::{socket_path, IpcServer};
 use qorvex_core::session::Session;
 use qorvex_core::simctl::Simctl;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ async fn main() {
 
     // Print session name for visibility
     eprintln!("[repl] Session name: {}", state.session_name);
-    eprintln!("[repl] IPC socket: /tmp/qorvex_{}.sock", state.session_name);
+    eprintln!("[repl] IPC socket: {:?}", socket_path(&state.session_name));
 
     // Try to get booted simulator
     state.simulator_udid = Simctl::get_booted_udid().ok();
@@ -135,7 +135,7 @@ async fn process_command(input: &str, state: &mut ReplState) -> String {
 
     match cmd.as_str() {
         "start_session" => {
-            let session = Session::new(state.simulator_udid.clone());
+            let session = Session::new(state.simulator_udid.clone(), &state.session_name);
             state.session = Some(session.clone());
 
             // Start IPC server for watcher connections

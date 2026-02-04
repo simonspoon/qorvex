@@ -17,3 +17,4 @@ qorvex-core = { path = "../qorvex-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
+glob = "0.3"
