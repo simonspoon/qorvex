@@ -30,11 +30,23 @@ cargo install --path crates/qorvex-cli
 
 ### REPL
 
-Start an interactive session:
+Start an interactive TUI session:
 
 ```bash
 qorvex-repl
 ```
+
+The REPL provides a terminal UI with:
+- Tab completion for commands, element IDs, and device UDIDs
+- Output history with scrolling (arrow keys)
+- Session and device status in the title bar
+
+Controls:
+- `Tab` — Trigger/navigate completion popup
+- `Enter` — Execute command or accept completion
+- `Esc` — Hide completion popup
+- `q` — Quit (when input is empty)
+- `↑/↓` — Navigate completion or scroll output
 
 Available commands:
 - `list_devices` — List all available simulators
@@ -156,14 +168,14 @@ Qorvex stores runtime files in `~/.qorvex/`:
 
 ```
 ~/.qorvex/
-├── default.sock          # Unix socket for "default" session
-├── my-session.sock       # Unix socket for "my-session"
+├── qorvex_default.sock      # Unix socket for "default" session
+├── qorvex_my-session.sock   # Unix socket for "my-session"
 └── logs/
-    ├── default.jsonl     # Action log for "default" session
-    └── my-session.jsonl  # Action log for "my-session"
+    ├── default.jsonl        # Action log for "default" session
+    └── my-session.jsonl     # Action log for "my-session"
 ```
 
-- **Sockets** (`~/.qorvex/<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Watcher connect to these to communicate with running sessions.
+- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Watcher connect to these to communicate with running sessions.
 - **Logs** (`~/.qorvex/logs/<session>.jsonl`) — Persistent action logs in JSON Lines format. Each line is a timestamped action record, enabling replay, debugging, and audit trails.
 
 Use `qorvex list-sessions` to discover running sessions by scanning for active socket files.

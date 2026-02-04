@@ -39,7 +39,7 @@ Rust workspace with four crates for iOS Simulator automation on macOS:
 
 ```
 qorvex-core    - Core library (simctl, axe, session, ipc, action, executor)
-qorvex-repl    - Interactive CLI that uses core directly
+qorvex-repl    - TUI REPL with tab completion, uses core directly
 qorvex-watcher - TUI client that connects via IPC to monitor sessions
 qorvex-cli     - Scriptable CLI client for automation pipelines
 ```
@@ -54,11 +54,19 @@ qorvex-cli     - Scriptable CLI client for automation pipelines
 - **axe.rs** - Wrapper around `axe` CLI for UI hierarchy dumps, element finding, and tap actions
 - **session.rs** - Async session state with broadcast channels for events (uses `tokio::sync`)
 - **ipc.rs** - Unix socket server/client for REPL↔Watcher/CLI communication (JSON-over-newlines protocol)
-  - Socket path convention: `~/.qorvex/qorvex_<session_name>.sock`
+  - Socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
   - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
 - **action.rs** - Action types (`TapElement`, `SendKeys`, `GetScreenshot`, etc.) and logging
 - **executor.rs** - Action execution engine that wraps simctl/axe operations with result handling
+
+### qorvex-repl modules
+
+- **main.rs** - Entry point, event loop, and command dispatch
+- **app.rs** - Application state (input, completion, output history, session references)
+- **completion/** - Tab completion engine with command definitions and context-aware suggestions
+- **format.rs** - Output formatting for commands, results, and elements
+- **ui/** - TUI rendering with ratatui (theme, completion popup, layout)
 
 ### Data flow
 

@@ -169,9 +169,7 @@ impl Simctl {
         }
 
         let bytes = std::fs::read(&temp_path)?;
-        if let Err(e) = std::fs::remove_file(&temp_path) {
-            eprintln!("[simctl] Failed to cleanup temporary screenshot file: {}", e);
-        }
+        let _ = std::fs::remove_file(&temp_path);
         Ok(bytes)
     }
 

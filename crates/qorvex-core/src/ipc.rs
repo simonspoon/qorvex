@@ -207,25 +207,17 @@ impl IpcServer {
     /// This method never returns under normal operation. Use it with
     /// `tokio::spawn` or `tokio::select!` for concurrent operation.
     pub async fn run(&self) -> Result<(), IpcError> {
-        // Remove existing socket (ignore NotFound errors as socket may not exist)
-        if let Err(e) = std::fs::remove_file(&self.socket_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("[ipc] Failed to remove existing socket: {}", e);
-            }
-        }
+        // Remove existing socket (ignore errors)
+        let _ = std::fs::remove_file(&self.socket_path);
 
         let listener = UnixListener::bind(&self.socket_path)?;
-        eprintln!("[ipc] Server listening on {:?}", self.socket_path);
 
         loop {
             let (stream, _) = listener.accept().await?;
-            eprintln!("[ipc] Client connected");
             let session = self.session.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_client(stream, session).await {
-                    eprintln!("Client error: {}", e);
-                }
+                let _ = Self::handle_client(stream, session).await;
             });
         }
     }
@@ -295,23 +287,18 @@ impl IpcServer {
                     writer.flush().await?;
                 }
                 IpcRequest::Subscribe => {
-                    eprintln!("[ipc] Client subscribed to session events");
                     // Send events as they occur
                     let mut rx = session.subscribe();
                     while let Ok(event) = rx.recv().await {
-                        eprintln!("[ipc] Broadcasting event to client: {:?}", std::mem::discriminant(&event));
                         let response = IpcResponse::Event { event };
                         let json = serde_json::to_string(&response)? + "\n";
                         if writer.write_all(json.as_bytes()).await.is_err() {
-                            eprintln!("[ipc] Failed to write event to client");
                             break;
                         }
                         if writer.flush().await.is_err() {
-                            eprintln!("[ipc] Failed to flush event to client");
                             break;
                         }
                     }
-                    eprintln!("[ipc] Client subscription ended");
                 }
                 IpcRequest::GetState => {
                     let response = IpcResponse::State {
@@ -445,10 +432,6 @@ impl IpcClient {
 
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        if let Err(e) = std::fs::remove_file(&self.socket_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("[ipc] Failed to cleanup socket on drop: {}", e);
-            }
-        }
+        let _ = std::fs::remove_file(&self.socket_path);
     }
 }

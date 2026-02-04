@@ -142,16 +142,9 @@ impl Session {
         let log_writer = {
             let timestamp = created_at.format("%Y%m%d_%H%M%S");
             let log_path = logs_dir().join(format!("{}_{}.jsonl", session_name, timestamp));
-            match std::fs::File::create(&log_path) {
-                Ok(file) => {
-                    eprintln!("[session] Log file: {:?}", log_path);
-                    Some(BufWriter::new(file))
-                }
-                Err(e) => {
-                    eprintln!("[session] Failed to create log file {:?}: {}", log_path, e);
-                    None
-                }
-            }
+            std::fs::File::create(&log_path)
+                .ok()
+                .map(BufWriter::new)
         };
 
         Arc::new(Self {
@@ -239,15 +232,12 @@ impl Session {
         // Update screenshot if provided
         if let Some(ref ss) = screenshot_arc {
             *self.current_screenshot.write().await = Some(ss.clone());
-            if let Err(e) = self.event_tx.send(SessionEvent::ScreenshotUpdated(ss.clone())) {
-                eprintln!("[session] Failed to broadcast screenshot update: {}", e);
-            }
+            // Ignore send errors - no subscribers is expected
+            let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(ss.clone()));
         }
 
-        // Broadcast action
-        if let Err(e) = self.event_tx.send(SessionEvent::ActionLogged(log.clone())) {
-            eprintln!("[session] Failed to broadcast action logged event: {}", e);
-        }
+        // Broadcast action (ignore if no subscribers)
+        let _ = self.event_tx.send(SessionEvent::ActionLogged(log.clone()));
 
         log
     }
@@ -304,8 +294,7 @@ impl Session {
     pub async fn update_screenshot(&self, screenshot: String) {
         let screenshot_arc = Arc::new(screenshot);
         *self.current_screenshot.write().await = Some(screenshot_arc.clone());
-        if let Err(e) = self.event_tx.send(SessionEvent::ScreenshotUpdated(screenshot_arc)) {
-            eprintln!("[session] Failed to broadcast screenshot update: {}", e);
-        }
+        // Ignore send errors - no subscribers is expected
+        let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(screenshot_arc));
     }
 }
