@@ -374,7 +374,7 @@ impl App {
                 }
             }
             "tap" => {
-                let selector = args.first().map(|s| s.as_str()).unwrap_or("");
+                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
                 if selector.is_empty() {
                     self.add_output(format_result(false, "tap requires at least 1 argument: tap(selector) or tap(selector, label) or tap(selector, label, type)"));
                 } else {
@@ -462,7 +462,7 @@ impl App {
                 }
             }
             "wait_for" => {
-                let selector = args.first().map(|s| s.as_str()).unwrap_or("");
+                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
                 if selector.is_empty() {
                     self.add_output(format_result(false, "wait_for requires at least 1 argument: wait_for(selector) or wait_for(selector, timeout_ms) or wait_for(selector, timeout_ms, label) or wait_for(selector, timeout_ms, label, type)"));
                 } else {
@@ -542,7 +542,7 @@ impl App {
                 }
             }
             "get_value" => {
-                let selector = args.first().map(|s| s.as_str()).unwrap_or("");
+                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
                 if selector.is_empty() {
                     self.add_output(format_result(false, "get_value requires at least 1 argument: get_value(selector) or get_value(selector, label) or get_value(selector, label, type)"));
                 } else {
@@ -826,4 +826,14 @@ fn split_args(s: &str) -> Vec<String> {
     }
 
     args
+}
+
+/// Strip surrounding quotes from a string if present.
+fn strip_quotes(s: &str) -> &str {
+    let s = s.trim();
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }

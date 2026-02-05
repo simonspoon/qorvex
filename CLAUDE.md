@@ -18,7 +18,7 @@ cargo run -p qorvex-repl
 cargo run -p qorvex-live
 
 # Run CLI (requires running REPL session)
-cargo run -p qorvex-cli -- tap-element button-id
+cargo run -p qorvex-cli -- tap button-id
 
 # Install binaries locally
 cargo install --path crates/qorvex-repl
@@ -38,7 +38,7 @@ cargo test -p qorvex-core --test ipc_integration
 Rust workspace with four crates for iOS Simulator automation on macOS:
 
 ```
-qorvex-core    - Core library (simctl, axe, session, ipc, action, executor)
+qorvex-core    - Core library (simctl, axe, session, ipc, action, executor, watcher)
 qorvex-repl    - TUI REPL with tab completion, uses core directly
 qorvex-live    - TUI client that connects via IPC to monitor sessions
 qorvex-cli     - Scriptable CLI client for automation pipelines
@@ -73,6 +73,6 @@ qorvex-cli     - Scriptable CLI client for automation pipelines
 
 1. REPL receives commands via stdin, executes actions via `ActionExecutor`, logs to `Session`
 2. Session broadcasts `SessionEvent`s to subscribers
-3. Watcher connects via `IpcClient`, subscribes to events, renders TUI with ratatui
+3. Live TUI connects via `IpcClient`, subscribes to events, renders TUI with ratatui
 4. CLI connects via `IpcClient`, sends `Execute` requests for scripted automation
 5. Screenshots are base64-encoded PNGs passed through the event system

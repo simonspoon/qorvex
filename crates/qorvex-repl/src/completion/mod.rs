@@ -308,13 +308,25 @@ fn device_candidates(prefix: &str, devices: &[SimulatorDevice]) -> Vec<Candidate
     candidates
 }
 
+/// Quote a string if it contains characters that need escaping in command arguments.
+fn quote_if_needed(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\'') || s.contains('(') || s.contains(')') {
+        // Escape any existing double quotes and wrap in double quotes
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
 /// Generate smart element selector candidates that auto-compose command arguments.
 ///
 /// Shows ALL elements (with identifier OR label) and composes appropriate arguments:
 /// - Unique identifier → `"the-id"`
+/// - Non-unique id + unique label → `"The Label", label`
+/// - Non-unique id + non-unique label → `"The Label", label, Type`
+/// - Non-unique id + no label → `"the-id", , Type`
 /// - Unique label (no id) → `"The Label", label`
-/// - Non-unique id → `"the-id", , Type`
-/// - Non-unique label → `"The Label", label, Type`
+/// - Non-unique label (no id) → `"The Label", label, Type`
 ///
 /// For `wait_for` command, label-based selectors include default timeout:
 /// - By label → `"The Label", 5000, label`
@@ -361,33 +373,51 @@ fn element_selector_candidates(
             let label_is_unique = label.map(|l| label_counts.get(l) == Some(&1)).unwrap_or(false);
 
             // Determine best selector strategy
-            // Priority: unique ID > unique label > ID + type > label + type
+            // Priority: unique ID > non-unique ID with label > unique label > ID + type > label + type
             let (text, kind) = if let Some(id) = id {
                 if id_is_unique {
                     // Unique ID: just the selector
                     (id.to_string(), CandidateKind::ElementSelectorById)
+                } else if let Some(label) = label {
+                    // Non-unique ID but has label: use label-based selection
+                    let quoted_label = quote_if_needed(label);
+                    if label_is_unique {
+                        let composed = if is_wait_for {
+                            format!("{}, 5000, label", quoted_label)
+                        } else {
+                            format!("{}, label", quoted_label)
+                        };
+                        (composed, CandidateKind::ElementSelectorByLabel)
+                    } else {
+                        let composed = if is_wait_for {
+                            format!("{}, 5000, label, {}", quoted_label, elem_type)
+                        } else {
+                            format!("{}, label, {}", quoted_label, elem_type)
+                        };
+                        (composed, CandidateKind::ElementSelectorByLabel)
+                    }
                 } else {
-                    // Non-unique ID: add type for disambiguation
-                    // Format: selector, , Type (empty label flag position)
+                    // Non-unique ID, no label: use type for disambiguation (best effort)
                     let composed = format!("{}, , {}", id, elem_type);
                     (composed, CandidateKind::ElementSelectorById)
                 }
             } else if let Some(label) = label {
+                let quoted_label = quote_if_needed(label);
                 if label_is_unique {
                     // Unique label: selector, label flag
                     let composed = if is_wait_for {
                         // wait_for has timeout as arg 2, label as arg 3
-                        format!("{}, 5000, label", label)
+                        format!("{}, 5000, label", quoted_label)
                     } else {
-                        format!("{}, label", label)
+                        format!("{}, label", quoted_label)
                     };
                     (composed, CandidateKind::ElementSelectorByLabel)
                 } else {
                     // Non-unique label: add type for disambiguation
                     let composed = if is_wait_for {
-                        format!("{}, 5000, label, {}", label, elem_type)
+                        format!("{}, 5000, label, {}", quoted_label, elem_type)
                     } else {
-                        format!("{}, label, {}", label, elem_type)
+                        format!("{}, label, {}", quoted_label, elem_type)
                     };
                     (composed, CandidateKind::ElementSelectorByLabel)
                 }
