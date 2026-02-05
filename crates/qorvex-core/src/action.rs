@@ -7,8 +7,9 @@
 //!
 //! Actions fall into several categories:
 //!
-//! - **UI Interaction**: [`ActionType::TapElement`], [`ActionType::TapLocation`], [`ActionType::SendKeys`]
-//! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetElementValue`]
+//! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::SendKeys`]
+//! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetValue`]
+//! - **Waiting**: [`ActionType::WaitFor`]
 //! - **Session Management**: [`ActionType::StartSession`], [`ActionType::EndSession`], [`ActionType::Quit`]
 //! - **Logging**: [`ActionType::LogComment`]
 //!
@@ -17,8 +18,12 @@
 //! ```
 //! use qorvex_core::action::{ActionType, ActionResult, ActionLog};
 //!
-//! // Create an action
-//! let action = ActionType::TapElement { id: "login-button".to_string() };
+//! // Create an action - tap by ID
+//! let action = ActionType::Tap {
+//!     selector: "login-button".to_string(),
+//!     by_label: false,
+//!     element_type: None,
+//! };
 //!
 //! // Create a log entry
 //! let log = ActionLog::new(action, ActionResult::Success, None);
@@ -47,10 +52,14 @@ pub enum ActionResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ActionType {
-    /// Tap an element by its accessibility identifier.
-    TapElement {
-        /// The accessibility identifier of the element to tap.
-        id: String,
+    /// Tap an element by ID or label.
+    Tap {
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
     },
 
     /// Tap at specific screen coordinates.
@@ -75,10 +84,14 @@ pub enum ActionType {
     /// Get accessibility information for all elements on screen.
     GetScreenInfo,
 
-    /// Get the current value of an element.
-    GetElementValue {
-        /// The accessibility identifier of the element.
-        id: String,
+    /// Get the current value of an element by ID or label.
+    GetValue {
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
     },
 
     /// Send keyboard input.
@@ -87,10 +100,14 @@ pub enum ActionType {
         text: String,
     },
 
-    /// Wait for an element to appear on screen.
+    /// Wait for an element to appear on screen by ID or label.
     WaitFor {
-        /// The accessibility identifier of the element to wait for.
-        id: String,
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
         /// Maximum time to wait in milliseconds.
         timeout_ms: u64,
     },

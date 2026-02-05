@@ -14,8 +14,10 @@
 //! async fn main() {
 //!     let executor = ActionExecutor::new("SIMULATOR-UDID".to_string());
 //!
-//!     let result = executor.execute(ActionType::TapElement {
-//!         id: "login-button".to_string()
+//!     let result = executor.execute(ActionType::Tap {
+//!         selector: "login-button".to_string(),
+//!         by_label: false,
+//!         element_type: None,
 //!     }).await;
 //!
 //!     if result.success {
@@ -128,10 +130,21 @@ impl ActionExecutor {
     /// and optionally a screenshot or additional data.
     pub async fn execute(&self, action: ActionType) -> ExecutionResult {
         match action {
-            ActionType::TapElement { ref id } => {
-                match Axe::tap_element(&self.simulator_udid, id) {
+            ActionType::Tap { ref selector, by_label, ref element_type } => {
+                let tap_result = match element_type {
+                    Some(typ) => Axe::tap_with_type(&self.simulator_udid, selector, by_label, typ),
+                    None if by_label => Axe::tap_by_label(&self.simulator_udid, selector),
+                    None => Axe::tap_element(&self.simulator_udid, selector),
+                };
+
+                match tap_result {
                     Ok(_) => {
-                        let mut result = ExecutionResult::success(format!("Tapped element '{}'", id));
+                        let msg = if by_label {
+                            format!("Tapped element with label '{}'", selector)
+                        } else {
+                            format!("Tapped element '{}'", selector)
+                        };
+                        let mut result = ExecutionResult::success(msg);
                         if let Some(screenshot) = self.capture_screenshot() {
                             result = result.with_screenshot(screenshot);
                         }
@@ -208,19 +221,33 @@ impl ActionExecutor {
                 }
             }
 
-            ActionType::GetElementValue { ref id } => {
-                match Axe::get_element_value(&self.simulator_udid, id) {
+            ActionType::GetValue { ref selector, by_label, ref element_type } => {
+                let value_result = match element_type {
+                    Some(typ) => Axe::get_value_with_type(&self.simulator_udid, selector, by_label, typ),
+                    None if by_label => Axe::get_element_value_by_label(&self.simulator_udid, selector),
+                    None => Axe::get_element_value(&self.simulator_udid, selector),
+                };
+
+                match value_result {
                     Ok(Some(value)) => {
-                        let mut result = ExecutionResult::success(format!("Got value for '{}'", id))
-                            .with_data(value);
+                        let msg = if by_label {
+                            format!("Got value for label '{}'", selector)
+                        } else {
+                            format!("Got value for '{}'", selector)
+                        };
+                        let mut result = ExecutionResult::success(msg).with_data(value);
                         if let Some(screenshot) = self.capture_screenshot() {
                             result = result.with_screenshot(screenshot);
                         }
                         result
                     }
                     Ok(None) => {
-                        let mut result = ExecutionResult::success(format!("Element '{}' has no value", id))
-                            .with_data("null".to_string());
+                        let msg = if by_label {
+                            format!("Element with label '{}' has no value", selector)
+                        } else {
+                            format!("Element '{}' has no value", selector)
+                        };
+                        let mut result = ExecutionResult::success(msg).with_data("null".to_string());
                         if let Some(screenshot) = self.capture_screenshot() {
                             result = result.with_screenshot(screenshot);
                         }
@@ -234,18 +261,28 @@ impl ActionExecutor {
                 ExecutionResult::success(format!("Logged: {}", message))
             }
 
-            ActionType::WaitFor { ref id, timeout_ms } => {
+            ActionType::WaitFor { ref selector, by_label, ref element_type, timeout_ms } => {
                 let start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
 
                 loop {
                     if let Ok(elements) = Axe::dump_hierarchy(&self.simulator_udid) {
-                        if Axe::find_element(&elements, id).is_some() {
+                        let found = match element_type {
+                            Some(typ) => Axe::find_element_with_type(&elements, selector, by_label, Some(typ)).is_some(),
+                            None if by_label => Axe::find_elements_by_label(&elements, selector).is_some(),
+                            None => Axe::find_element(&elements, selector).is_some(),
+                        };
+
+                        if found {
                             let elapsed_ms = start.elapsed().as_millis() as u64;
-                            let mut result = ExecutionResult::success(
-                                format!("Element '{}' found", id)
-                            ).with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                            let msg = if by_label {
+                                format!("Element with label '{}' found", selector)
+                            } else {
+                                format!("Element '{}' found", selector)
+                            };
+                            let mut result = ExecutionResult::success(msg)
+                                .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
                             if let Some(screenshot) = self.capture_screenshot() {
                                 result = result.with_screenshot(screenshot);
                             }
@@ -254,9 +291,13 @@ impl ActionExecutor {
                     }
                     if start.elapsed() >= timeout {
                         let elapsed_ms = start.elapsed().as_millis() as u64;
-                        return ExecutionResult::failure(format!(
-                            "Timeout after {}ms waiting for element '{}'", elapsed_ms, id
-                        )).with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                        let msg = if by_label {
+                            format!("Timeout after {}ms waiting for element with label '{}'", elapsed_ms, selector)
+                        } else {
+                            format!("Timeout after {}ms waiting for element '{}'", elapsed_ms, selector)
+                        };
+                        return ExecutionResult::failure(msg)
+                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
                     }
                     tokio::time::sleep(poll_interval).await;
                 }

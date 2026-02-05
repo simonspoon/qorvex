@@ -60,6 +60,10 @@ Available commands:
 - `send_keys(text)` — Type text into the focused field
 - `wait_for(id)` — Wait for element to appear (5s default timeout)
 - `wait_for(id, ms)` — Wait for element with custom timeout
+- `tap_by_label(label)` — Tap a UI element by accessibility label
+- `get_value_by_label(label)` — Get element's value by accessibility label
+- `wait_for_by_label(label)` — Wait for element by label (5s default)
+- `wait_for_by_label(label, ms)` — Wait for element by label with custom timeout
 - `get_screenshot` — Capture current screen
 - `get_screen_info` — Get UI hierarchy information
 - `list_elements` — List actionable UI elements
@@ -113,6 +117,15 @@ qorvex get-value text-field-id --wait --timeout 5000
 # Wait for element to appear
 qorvex wait-for loading-spinner --timeout 10000
 
+# Tap element by accessibility label
+qorvex tap-by-label "Sign In"
+
+# Get value by accessibility label
+qorvex get-value-by-label "Username Field"
+
+# Wait for element by label
+qorvex wait-for-by-label "Loading..." --timeout 10000
+
 # Log a comment to the session
 qorvex comment "Starting login flow"
 
@@ -136,7 +149,8 @@ Options:
 
 Command-specific options:
 - `tap-element`, `get-value`: `-w, --wait` — Wait for element before acting; `-t, --timeout <ms>` — Wait timeout (default: 5000)
-- `wait-for`: `-t, --timeout <ms>` — Wait timeout (default: 5000)
+- `get-value-by-label`: `-w, --wait` — Wait for element before getting value; `-t, --timeout <ms>` — Wait timeout (default: 5000)
+- `wait-for`, `wait-for-by-label`: `-t, --timeout <ms>` — Wait timeout (default: 5000)
 
 ## Architecture
 

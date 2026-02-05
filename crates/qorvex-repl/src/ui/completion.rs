@@ -92,6 +92,7 @@ fn format_candidate(candidate: &Candidate, selected: bool, max_width: usize) -> 
     let kind_indicator = match candidate.kind {
         CandidateKind::Command => "Cmd",
         CandidateKind::ElementId => "ID",
+        CandidateKind::ElementLabel => "Lbl",
         CandidateKind::DeviceUdid => "Dev",
     };
 

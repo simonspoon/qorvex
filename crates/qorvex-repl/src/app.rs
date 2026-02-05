@@ -287,28 +287,51 @@ impl App {
                     }
                 }
             }
-            "tap_element" => {
-                let id = args.first().map(|s| s.as_str()).unwrap_or("");
-                if id.is_empty() {
-                    self.add_output(format_result(false, "tap_element requires 1 argument: tap_element(id)"));
+            "tap" => {
+                let selector = args.first().map(|s| s.as_str()).unwrap_or("");
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "tap requires at least 1 argument: tap(selector) or tap(selector, label) or tap(selector, label, type)"));
                 } else {
+                    // Check for 'label' flag in second argument
+                    let by_label = args.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                    // Third argument is element type (if present and not empty)
+                    let element_type = args.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
                     match &self.simulator_udid {
-                        Some(udid) => match Axe::tap_element(udid, id) {
-                            Ok(_) => {
-                                self.log_action(
-                                    ActionType::TapElement { id: id.to_string() },
-                                    ActionResult::Success,
-                                ).await;
-                                self.add_output(format_result(true, &format!("Tapped {}", id)));
+                        Some(udid) => {
+                            let executor = ActionExecutor::new(udid.clone());
+                            let result = executor.execute(ActionType::Tap {
+                                selector: selector.to_string(),
+                                by_label,
+                                element_type: element_type.clone(),
+                            }).await;
+
+                            let action_result = if result.success {
+                                ActionResult::Success
+                            } else {
+                                ActionResult::Failure(result.message.clone())
+                            };
+
+                            self.log_action(
+                                ActionType::Tap {
+                                    selector: selector.to_string(),
+                                    by_label,
+                                    element_type,
+                                },
+                                action_result,
+                            ).await;
+
+                            if result.success {
+                                let msg = if by_label {
+                                    format!("Tapped element with label \"{}\"", selector)
+                                } else {
+                                    format!("Tapped {}", selector)
+                                };
+                                self.add_output(format_result(true, &msg));
+                            } else {
+                                self.add_output(format_result(false, &result.message));
                             }
-                            Err(e) => {
-                                self.log_action(
-                                    ActionType::TapElement { id: id.to_string() },
-                                    ActionResult::Failure(e.to_string()),
-                                ).await;
-                                self.add_output(format_result(false, &e.to_string()));
-                            }
-                        },
+                        }
                         None => {
                             self.add_output(format_result(false, "No simulator selected"));
                         }
@@ -353,19 +376,26 @@ impl App {
                 }
             }
             "wait_for" => {
-                let id = args.first().map(|s| s.as_str()).unwrap_or("");
-                if id.is_empty() {
-                    self.add_output(format_result(false, "wait_for requires at least 1 argument: wait_for(id) or wait_for(id, timeout_ms)"));
+                let selector = args.first().map(|s| s.as_str()).unwrap_or("");
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "wait_for requires at least 1 argument: wait_for(selector) or wait_for(selector, timeout_ms) or wait_for(selector, timeout_ms, label) or wait_for(selector, timeout_ms, label, type)"));
                 } else {
+                    // Second arg is timeout (default 5000)
                     let timeout_ms: u64 = args.get(1)
                         .map(|s| s.parse().unwrap_or(5000))
                         .unwrap_or(5000);
+                    // Third arg is 'label' flag
+                    let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                    // Fourth arg is element type
+                    let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
                     match &self.simulator_udid {
                         Some(udid) => {
                             let executor = ActionExecutor::new(udid.clone());
                             let result = executor.execute(ActionType::WaitFor {
-                                id: id.to_string(),
+                                selector: selector.to_string(),
+                                by_label,
+                                element_type: element_type.clone(),
                                 timeout_ms,
                             }).await;
 
@@ -376,7 +406,12 @@ impl App {
                             };
 
                             self.log_action(
-                                ActionType::WaitFor { id: id.to_string(), timeout_ms },
+                                ActionType::WaitFor {
+                                    selector: selector.to_string(),
+                                    by_label,
+                                    element_type,
+                                    timeout_ms,
+                                },
                                 action_result,
                             ).await;
 
@@ -420,35 +455,47 @@ impl App {
                     }
                 }
             }
-            "get_element_value" => {
-                let id = args.first().map(|s| s.as_str()).unwrap_or("");
-                if id.is_empty() {
-                    self.add_output(format_result(false, "get_element_value requires 1 argument: get_element_value(id)"));
+            "get_value" => {
+                let selector = args.first().map(|s| s.as_str()).unwrap_or("");
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "get_value requires at least 1 argument: get_value(selector) or get_value(selector, label) or get_value(selector, label, type)"));
                 } else {
+                    // Check for 'label' flag in second argument
+                    let by_label = args.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                    // Third argument is element type (if present and not empty)
+                    let element_type = args.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
                     match &self.simulator_udid {
-                        Some(udid) => match Axe::get_element_value(udid, id) {
-                            Ok(Some(value)) => {
-                                self.log_action(
-                                    ActionType::GetElementValue { id: id.to_string() },
-                                    ActionResult::Success,
-                                ).await;
+                        Some(udid) => {
+                            let executor = ActionExecutor::new(udid.clone());
+                            let result = executor.execute(ActionType::GetValue {
+                                selector: selector.to_string(),
+                                by_label,
+                                element_type: element_type.clone(),
+                            }).await;
+
+                            let action_result = if result.success {
+                                ActionResult::Success
+                            } else {
+                                ActionResult::Failure(result.message.clone())
+                            };
+
+                            self.log_action(
+                                ActionType::GetValue {
+                                    selector: selector.to_string(),
+                                    by_label,
+                                    element_type,
+                                },
+                                action_result,
+                            ).await;
+
+                            if result.success {
+                                let value = result.data.unwrap_or_else(|| "(null)".to_string());
                                 self.add_output(format_result(true, &format!("Value: {}", value)));
+                            } else {
+                                self.add_output(format_result(false, &result.message));
                             }
-                            Ok(None) => {
-                                self.log_action(
-                                    ActionType::GetElementValue { id: id.to_string() },
-                                    ActionResult::Success,
-                                ).await;
-                                self.add_output(format_result(true, "Value: (null)"));
-                            }
-                            Err(e) => {
-                                self.log_action(
-                                    ActionType::GetElementValue { id: id.to_string() },
-                                    ActionResult::Failure(e.to_string()),
-                                ).await;
-                                self.add_output(format_result(false, &e.to_string()));
-                            }
-                        },
+                        }
                         None => {
                             self.add_output(format_result(false, "No simulator selected"));
                         }
@@ -531,11 +578,15 @@ impl App {
             "",
             "UI:",
             "  list_elements          List all UI elements",
-            "  get_element_value(id)  Get an element's value by ID",
-            "  tap_element(id)        Tap an element by ID",
+            "  tap(selector)          Tap an element by ID",
+            "  tap(sel, label)        Tap an element by label",
+            "  tap(sel, label, type)  Tap an element by label + type",
             "  tap_location(x, y)     Tap at screen coordinates",
-            "  wait_for(id)           Wait for element to appear (5s timeout)",
-            "  wait_for(id, ms)       Wait with custom timeout",
+            "  get_value(selector)    Get element value by ID",
+            "  get_value(sel, label)  Get element value by label",
+            "  wait_for(selector)     Wait for element (5s timeout)",
+            "  wait_for(sel, ms)      Wait with custom timeout",
+            "  wait_for(sel,ms,label) Wait by label with timeout",
             "",
             "Input:",
             "  send_keys(text)        Send keyboard input",

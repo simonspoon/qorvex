@@ -79,8 +79,10 @@ async fn test_multiple_clients_can_connect() {
 #[test]
 fn test_ipc_request_execute_serialization() {
     let request = IpcRequest::Execute {
-        action: ActionType::TapElement {
-            id: "button_submit".to_string(),
+        action: ActionType::Tap {
+            selector: "button_submit".to_string(),
+            by_label: false,
+            element_type: None,
         },
     };
 
@@ -89,8 +91,12 @@ fn test_ipc_request_execute_serialization() {
 
     match deserialized {
         IpcRequest::Execute { action } => match action {
-            ActionType::TapElement { id } => assert_eq!(id, "button_submit"),
-            _ => panic!("Expected TapElement action"),
+            ActionType::Tap { selector, by_label, element_type } => {
+                assert_eq!(selector, "button_submit");
+                assert!(!by_label);
+                assert!(element_type.is_none());
+            }
+            _ => panic!("Expected Tap action"),
         },
         _ => panic!("Expected Execute request"),
     }
@@ -237,8 +243,15 @@ fn test_session_event_serialization() {
 #[test]
 fn test_all_action_types_serialization() {
     let actions = vec![
-        ActionType::TapElement {
-            id: "elem".to_string(),
+        ActionType::Tap {
+            selector: "elem".to_string(),
+            by_label: false,
+            element_type: None,
+        },
+        ActionType::Tap {
+            selector: "Sign In".to_string(),
+            by_label: true,
+            element_type: Some("Button".to_string()),
         },
         ActionType::TapLocation { x: 100, y: 200 },
         ActionType::LogComment {
@@ -246,11 +259,19 @@ fn test_all_action_types_serialization() {
         },
         ActionType::GetScreenshot,
         ActionType::GetScreenInfo,
-        ActionType::GetElementValue {
-            id: "field".to_string(),
+        ActionType::GetValue {
+            selector: "field".to_string(),
+            by_label: false,
+            element_type: None,
         },
         ActionType::SendKeys {
             text: "hello".to_string(),
+        },
+        ActionType::WaitFor {
+            selector: "spinner".to_string(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: 5000,
         },
         ActionType::StartSession,
         ActionType::EndSession,
@@ -393,8 +414,10 @@ async fn test_session_logs_actions() {
         .await;
     session
         .log_action(
-            ActionType::TapElement {
-                id: "button".to_string(),
+            ActionType::Tap {
+                selector: "button".to_string(),
+                by_label: false,
+                element_type: None,
             },
             ActionResult::Success,
             None,
@@ -416,7 +439,7 @@ async fn test_session_logs_actions() {
 
     // Verify order (oldest first)
     assert!(matches!(logs[0].action, ActionType::StartSession));
-    assert!(matches!(logs[1].action, ActionType::TapElement { .. }));
+    assert!(matches!(logs[1].action, ActionType::Tap { .. }));
     assert!(matches!(logs[2].action, ActionType::SendKeys { .. }));
 
     // Verify failure is recorded
@@ -588,11 +611,13 @@ async fn test_ipc_execute_action_without_simulator_returns_error() {
 
     let mut client = IpcClient::connect(&session_name).await.unwrap();
 
-    // TapElement requires a simulator UDID, so it should return an error when none is set
+    // Tap requires a simulator UDID, so it should return an error when none is set
     let response = client
         .send(&IpcRequest::Execute {
-            action: ActionType::TapElement {
-                id: "my_button".to_string(),
+            action: ActionType::Tap {
+                selector: "my_button".to_string(),
+                by_label: false,
+                element_type: None,
             },
         })
         .await
@@ -659,8 +684,10 @@ async fn test_session_creates_persistent_log_file() {
         .await;
     session
         .log_action(
-            ActionType::TapElement {
-                id: "test_button".to_string(),
+            ActionType::Tap {
+                selector: "test_button".to_string(),
+                by_label: false,
+                element_type: None,
             },
             ActionResult::Success,
             None,
@@ -730,14 +757,14 @@ async fn test_session_creates_persistent_log_file() {
     }
 
     // Verify specific action types were logged correctly
-    // ActionType uses serde(tag = "type") so it serializes as {"type": "StartSession"} or {"type": "TapElement", "id": "..."}
+    // ActionType uses serde(tag = "type") so it serializes as {"type": "StartSession"} or {"type": "Tap", "selector": "..."}
     let first: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
     assert_eq!(first["action"]["type"].as_str(), Some("StartSession"));
     assert_eq!(first["result"], "Success");
 
     let second: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
-    assert_eq!(second["action"]["type"].as_str(), Some("TapElement"));
-    assert_eq!(second["action"]["id"].as_str(), Some("test_button"));
+    assert_eq!(second["action"]["type"].as_str(), Some("Tap"));
+    assert_eq!(second["action"]["selector"].as_str(), Some("test_button"));
     assert_eq!(second["result"], "Success");
 
     let third: serde_json::Value = serde_json::from_str(&lines[2]).unwrap();

@@ -288,6 +288,251 @@ impl Axe {
         Ok(element.value)
     }
 
+    /// Taps an element by its accessibility label.
+    ///
+    /// Uses axe's `--label` flag to locate and tap the element with the
+    /// specified accessibility label (AXLabel). This is useful when elements
+    /// don't have a unique accessibility identifier but have a visible label.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `label` - The accessibility label of the element to tap
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::NotInstalled`] if axe is not available
+    /// - [`AxeError::Io`] if the command fails to execute
+    /// - [`AxeError::CommandFailed`] if the element is not found or tap fails
+    pub fn tap_by_label(udid: &str, label: &str) -> Result<(), AxeError> {
+        if !Self::is_installed() {
+            return Err(AxeError::NotInstalled);
+        }
+
+        let output = Command::new("axe")
+            .args(["tap", "--label", label, "--udid", udid])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(AxeError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Finds an element by its accessibility label.
+    ///
+    /// Performs a recursive depth-first search through the element hierarchy
+    /// to find an element with a matching `AXLabel`.
+    ///
+    /// # Arguments
+    ///
+    /// * `element` - The root element to search from
+    /// * `label` - The accessibility label to find
+    ///
+    /// # Returns
+    ///
+    /// `Some(UIElement)` containing a clone of the found element,
+    /// or `None` if no matching element exists.
+    pub fn find_element_by_label(element: &UIElement, label: &str) -> Option<UIElement> {
+        if element.label.as_deref() == Some(label) {
+            return Some(element.clone());
+        }
+        for child in &element.children {
+            if let Some(found) = Self::find_element_by_label(child, label) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Finds an element by its accessibility label in a list of elements.
+    ///
+    /// Performs a recursive depth-first search through the element hierarchy
+    /// to find an element with a matching `AXLabel`. This is the slice-based
+    /// variant that mirrors [`Self::find_element`].
+    ///
+    /// # Arguments
+    ///
+    /// * `elements` - The root elements to search through
+    /// * `label` - The accessibility label to find
+    ///
+    /// # Returns
+    ///
+    /// `Some(UIElement)` containing a clone of the found element,
+    /// or `None` if no matching element exists.
+    pub fn find_elements_by_label(elements: &[UIElement], label: &str) -> Option<UIElement> {
+        for element in elements {
+            if let Some(found) = Self::find_element_by_label(element, label) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Gets the current value of an element by its accessibility label.
+    ///
+    /// Dumps the UI hierarchy and searches for the specified element by label,
+    /// returning its `AXValue` property. This is useful for reading the
+    /// contents of elements that are identified by their visible label rather
+    /// than an accessibility identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `label` - The accessibility label of the element
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(String))` if the element has a value, `Ok(None)` if the
+    /// element exists but has no value.
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::CommandFailed`] if the element is not found
+    /// - Any errors from [`Self::dump_hierarchy`]
+    pub fn get_element_value_by_label(udid: &str, label: &str) -> Result<Option<String>, AxeError> {
+        let hierarchy = Self::dump_hierarchy(udid)?;
+        let element = Self::find_elements_by_label(&hierarchy, label)
+            .ok_or_else(|| AxeError::CommandFailed(format!("Element with label '{}' not found", label)))?;
+        Ok(element.value)
+    }
+
+    /// Finds an element by selector (ID or label) with optional type filtering.
+    ///
+    /// This is a unified search method that can match by accessibility ID or label,
+    /// and optionally filter by element type.
+    ///
+    /// # Arguments
+    ///
+    /// * `elements` - The root elements to search through
+    /// * `selector` - The value to match against (ID or label)
+    /// * `by_label` - If true, match against label; if false, match against ID
+    /// * `element_type` - Optional type filter (e.g., "Button", "TextField")
+    ///
+    /// # Returns
+    ///
+    /// `Some(UIElement)` if a matching element is found, `None` otherwise.
+    pub fn find_element_with_type(
+        elements: &[UIElement],
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+    ) -> Option<UIElement> {
+        fn search(
+            elements: &[UIElement],
+            selector: &str,
+            by_label: bool,
+            element_type: Option<&str>,
+        ) -> Option<UIElement> {
+            for element in elements {
+                // Check if this element matches the selector
+                let selector_matches = if by_label {
+                    element.label.as_deref() == Some(selector)
+                } else {
+                    element.identifier.as_deref() == Some(selector)
+                };
+
+                // Check if type matches (if type filter is specified)
+                let type_matches = match element_type {
+                    Some(typ) => element.element_type.as_deref() == Some(typ),
+                    None => true,
+                };
+
+                if selector_matches && type_matches {
+                    return Some(element.clone());
+                }
+
+                // Recurse into children
+                if let Some(found) = search(&element.children, selector, by_label, element_type) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        search(elements, selector, by_label, element_type)
+    }
+
+    /// Taps an element with optional type filtering.
+    ///
+    /// Finds an element by ID or label with optional type filter, extracts its
+    /// center coordinates, and taps at that location.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `selector` - The selector value (accessibility ID or label)
+    /// * `by_label` - If true, selector is a label; if false, it's an ID
+    /// * `element_type` - Optional element type filter
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::CommandFailed`] if the element is not found
+    /// - Any errors from [`Self::dump_hierarchy`] or [`Self::tap`]
+    pub fn tap_with_type(
+        udid: &str,
+        selector: &str,
+        by_label: bool,
+        element_type: &str,
+    ) -> Result<(), AxeError> {
+        let hierarchy = Self::dump_hierarchy(udid)?;
+        let element = Self::find_element_with_type(&hierarchy, selector, by_label, Some(element_type))
+            .ok_or_else(|| {
+                let lookup_type = if by_label { "label" } else { "ID" };
+                AxeError::CommandFailed(format!(
+                    "Element with {} '{}' and type '{}' not found",
+                    lookup_type, selector, element_type
+                ))
+            })?;
+
+        let frame = element.frame.ok_or_else(|| {
+            AxeError::CommandFailed("Element has no frame".to_string())
+        })?;
+
+        let center_x = (frame.x + frame.width / 2.0) as i32;
+        let center_y = (frame.y + frame.height / 2.0) as i32;
+
+        Self::tap(udid, center_x, center_y)
+    }
+
+    /// Gets the value of an element with optional type filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `selector` - The selector value (accessibility ID or label)
+    /// * `by_label` - If true, selector is a label; if false, it's an ID
+    /// * `element_type` - Optional element type filter
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(String))` if the element has a value, `Ok(None)` if it exists but has no value.
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::CommandFailed`] if the element is not found
+    /// - Any errors from [`Self::dump_hierarchy`]
+    pub fn get_value_with_type(
+        udid: &str,
+        selector: &str,
+        by_label: bool,
+        element_type: &str,
+    ) -> Result<Option<String>, AxeError> {
+        let hierarchy = Self::dump_hierarchy(udid)?;
+        let element = Self::find_element_with_type(&hierarchy, selector, by_label, Some(element_type))
+            .ok_or_else(|| {
+                let lookup_type = if by_label { "label" } else { "ID" };
+                AxeError::CommandFailed(format!(
+                    "Element with {} '{}' and type '{}' not found",
+                    lookup_type, selector, element_type
+                ))
+            })?;
+
+        Ok(element.value)
+    }
+
     /// Flattens the element hierarchy into a list.
     ///
     /// Recursively traverses the element tree and collects all elements
@@ -656,5 +901,129 @@ mod tests {
         let cloned = original.clone();
         assert_eq!(original.identifier, cloned.identifier);
         assert_eq!(original.label, cloned.label);
+    }
+
+    #[test]
+    fn test_find_element_by_label_direct_match() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_elements_by_label(&elements, "Main View");
+
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("main-view"));
+    }
+
+    #[test]
+    fn test_find_element_by_label_nested() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_elements_by_label(&elements, "Log In");
+
+        assert!(found.is_some());
+        let button = found.unwrap();
+        assert_eq!(button.identifier.as_deref(), Some("login-button"));
+        assert_eq!(button.label.as_deref(), Some("Log In"));
+    }
+
+    #[test]
+    fn test_find_element_by_label_deeply_nested() {
+        let elements = Axe::parse_hierarchy(NESTED_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_elements_by_label(&elements, "Deep Button");
+
+        assert!(found.is_some());
+        let button = found.unwrap();
+        assert_eq!(button.identifier.as_deref(), Some("deeply-nested-button"));
+    }
+
+    #[test]
+    fn test_find_element_by_label_not_found() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+        let found = Axe::find_elements_by_label(&elements, "Nonexistent Label");
+
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_element_by_label_empty_hierarchy() {
+        let elements: Vec<UIElement> = vec![];
+        let found = Axe::find_elements_by_label(&elements, "any-label");
+
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_element_by_label_single_element() {
+        let element = UIElement {
+            identifier: Some("test-id".to_string()),
+            label: Some("Test Label".to_string()),
+            value: None,
+            element_type: Some("Button".to_string()),
+            frame: None,
+            children: vec![],
+            role: None,
+        };
+
+        let found = Axe::find_element_by_label(&element, "Test Label");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("test-id"));
+    }
+
+    #[test]
+    fn test_tap_by_label_with_invalid_udid() {
+        if !Axe::is_installed() {
+            return;
+        }
+
+        let result = Axe::tap_by_label("invalid-udid-that-does-not-exist", "some-label");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_element_with_type_by_id() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+
+        // Find by ID without type filter
+        let found = Axe::find_element_with_type(&elements, "login-button", false, None);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("login-button"));
+
+        // Find by ID with matching type filter
+        let found = Axe::find_element_with_type(&elements, "login-button", false, Some("Button"));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().element_type.as_deref(), Some("Button"));
+
+        // Find by ID with non-matching type filter
+        let found = Axe::find_element_with_type(&elements, "login-button", false, Some("TextField"));
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_element_with_type_by_label() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+
+        // Find by label without type filter
+        let found = Axe::find_element_with_type(&elements, "Log In", true, None);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().label.as_deref(), Some("Log In"));
+
+        // Find by label with matching type filter
+        let found = Axe::find_element_with_type(&elements, "Email", true, Some("TextField"));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("email-field"));
+
+        // Find by label with non-matching type filter
+        let found = Axe::find_element_with_type(&elements, "Email", true, Some("Button"));
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_element_with_type_not_found() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+
+        // Non-existent selector
+        let found = Axe::find_element_with_type(&elements, "nonexistent", false, None);
+        assert!(found.is_none());
+
+        // Existing selector but wrong lookup type
+        let found = Axe::find_element_with_type(&elements, "login-button", true, None);
+        assert!(found.is_none()); // "login-button" is an ID, not a label
     }
 }

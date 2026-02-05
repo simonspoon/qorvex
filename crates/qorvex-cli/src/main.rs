@@ -6,7 +6,13 @@
 //!
 //! ```bash
 //! # Tap an element by accessibility ID
-//! qorvex tap-element login-button
+//! qorvex tap login-button
+//!
+//! # Tap an element by label
+//! qorvex tap "Sign In" --label
+//!
+//! # Tap a specific element type by label
+//! qorvex tap "Sign In" -l -T Button
 //!
 //! # Tap at coordinates
 //! qorvex tap-location 100 200
@@ -20,8 +26,16 @@
 //! # Get screen info (JSON)
 //! qorvex screen-info | jq '.elements'
 //!
+//! # Get element value
+//! qorvex get-value username-field
+//! qorvex get-value "Email" --label
+//!
+//! # Wait for an element
+//! qorvex wait-for spinner-id
+//! qorvex wait-for "Loading" -l -t 10000
+//!
 //! # Connect to a specific session
-//! qorvex -s my-session tap-element button
+//! qorvex -s my-session tap button
 //! ```
 
 use clap::{Parser, Subcommand};
@@ -59,15 +73,21 @@ enum OutputFormat {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Tap an element by accessibility ID
-    TapElement {
-        /// The accessibility identifier of the element to tap
-        id: String,
+    /// Tap an element by ID or label
+    Tap {
+        /// The selector (accessibility ID or label)
+        selector: String,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
         /// Wait for the element to appear before tapping
         #[arg(short, long)]
         wait: bool,
         /// Timeout in milliseconds when waiting
-        #[arg(short, long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000")]
         timeout: u64,
     },
 
@@ -91,15 +111,21 @@ enum Command {
     /// Get UI hierarchy information (outputs JSON)
     ScreenInfo,
 
-    /// Get the value of an element
+    /// Get the value of an element by ID or label
     GetValue {
-        /// The accessibility identifier of the element
-        id: String,
+        /// The selector (accessibility ID or label)
+        selector: String,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
         /// Wait for the element to appear before getting value
         #[arg(short, long)]
         wait: bool,
         /// Timeout in milliseconds when waiting
-        #[arg(short, long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000")]
         timeout: u64,
     },
 
@@ -109,12 +135,18 @@ enum Command {
         message: String,
     },
 
-    /// Wait for an element to appear
+    /// Wait for an element to appear by ID or label
     WaitFor {
-        /// Element accessibility identifier
-        id: String,
+        /// The selector (accessibility ID or label)
+        selector: String,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
         /// Timeout in milliseconds
-        #[arg(short, long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000")]
         timeout: u64,
     },
 
@@ -208,11 +240,20 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         .map_err(|e| CliError::Connection(format!("Failed to connect to session '{}': {}", cli.session, e)))?;
 
     match cli.command {
-        Command::TapElement { ref id, wait, timeout } => {
+        Command::Tap { ref selector, label, ref element_type, wait, timeout } => {
             if wait {
-                execute_action(&mut client, ActionType::WaitFor { id: id.clone(), timeout_ms: timeout }, &cli).await?;
+                execute_action(&mut client, ActionType::WaitFor {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                    timeout_ms: timeout,
+                }, &cli).await?;
             }
-            execute_action(&mut client, ActionType::TapElement { id: id.clone() }, &cli).await
+            execute_action(&mut client, ActionType::Tap {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+            }, &cli).await
         }
         Command::TapLocation { x, y } => {
             execute_action(&mut client, ActionType::TapLocation { x, y }, &cli).await
@@ -226,17 +267,31 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::ScreenInfo => {
             execute_action(&mut client, ActionType::GetScreenInfo, &cli).await
         }
-        Command::GetValue { ref id, wait, timeout } => {
+        Command::GetValue { ref selector, label, ref element_type, wait, timeout } => {
             if wait {
-                execute_action(&mut client, ActionType::WaitFor { id: id.clone(), timeout_ms: timeout }, &cli).await?;
+                execute_action(&mut client, ActionType::WaitFor {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                    timeout_ms: timeout,
+                }, &cli).await?;
             }
-            execute_action(&mut client, ActionType::GetElementValue { id: id.clone() }, &cli).await
+            execute_action(&mut client, ActionType::GetValue {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+            }, &cli).await
         }
         Command::Comment { ref message } => {
             execute_action(&mut client, ActionType::LogComment { message: message.clone() }, &cli).await
         }
-        Command::WaitFor { ref id, timeout } => {
-            execute_action(&mut client, ActionType::WaitFor { id: id.clone(), timeout_ms: timeout }, &cli).await
+        Command::WaitFor { ref selector, label, ref element_type, timeout } => {
+            execute_action(&mut client, ActionType::WaitFor {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+                timeout_ms: timeout,
+            }, &cli).await
         }
         Command::Status => {
             get_status(&mut client, &cli).await

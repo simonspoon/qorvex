@@ -30,7 +30,11 @@
 //!
 //!     // Log an action
 //!     session.log_action(
-//!         ActionType::TapElement { id: "button".to_string() },
+//!         ActionType::Tap {
+//!             selector: "button".to_string(),
+//!             by_label: false,
+//!             element_type: None,
+//!         },
 //!         ActionResult::Success,
 //!         None
 //!     ).await;

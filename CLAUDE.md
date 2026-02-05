@@ -57,7 +57,7 @@ qorvex-cli     - Scriptable CLI client for automation pipelines
   - Socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
   - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
-- **action.rs** - Action types (`TapElement`, `SendKeys`, `GetScreenshot`, etc.) and logging
+- **action.rs** - Action types (`TapElement`, `TapByLabel`, `SendKeys`, `GetScreenshot`, `WaitFor`, `WaitForByLabel`, etc.) and logging
 - **executor.rs** - Action execution engine that wraps simctl/axe operations with result handling
 
 ### qorvex-repl modules

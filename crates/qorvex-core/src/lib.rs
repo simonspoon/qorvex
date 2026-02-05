@@ -13,6 +13,7 @@
 //! - [`session`] - Session state management with event broadcasting
 //! - [`ipc`] - Unix socket-based IPC for REPL and watcher communication
 //! - [`action`] - Action types and logging for automation operations
+//! - [`executor`] - Action execution engine with result handling
 //!
 //! ## External Dependencies
 //!

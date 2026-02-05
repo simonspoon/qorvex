@@ -43,6 +43,8 @@ pub enum CandidateKind {
     Command,
     /// An element identifier.
     ElementId,
+    /// An element label.
+    ElementLabel,
     /// A device UDID.
     DeviceUdid,
 }
@@ -113,6 +115,9 @@ impl CompletionState {
                     match arg_spec.completion {
                         ArgCompletion::ElementId => {
                             element_candidates(&prefix, cached_elements)
+                        }
+                        ArgCompletion::ElementLabel => {
+                            element_label_candidates(&prefix, cached_elements)
                         }
                         ArgCompletion::DeviceUdid => {
                             device_candidates(&prefix, cached_devices)
@@ -203,6 +208,43 @@ fn element_candidates(prefix: &str, elements: &[UIElement]) -> Vec<Candidate> {
                 text: id.clone(),
                 description,
                 kind: CandidateKind::ElementId,
+                score,
+                match_indices: indices,
+            })
+        })
+        .collect();
+
+    // Sort by score descending
+    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates
+}
+
+/// Generate element label completion candidates with fuzzy matching.
+fn element_label_candidates(prefix: &str, elements: &[UIElement]) -> Vec<Candidate> {
+    let filter = FuzzyFilter::new();
+
+    let mut candidates: Vec<Candidate> = elements
+        .iter()
+        .filter_map(|elem| {
+            let label = elem.label.as_ref()?;
+            if label.is_empty() {
+                return None;
+            }
+
+            let (score, indices) = filter.score(prefix, label)?;
+
+            let elem_type = elem.element_type.as_deref().unwrap_or("Unknown");
+            let id_info = elem.identifier.as_deref().unwrap_or("");
+            let description = if id_info.is_empty() {
+                elem_type.to_string()
+            } else {
+                format!("{} [{}]", elem_type, id_info)
+            };
+
+            Some(Candidate {
+                text: label.clone(),
+                description,
+                kind: CandidateKind::ElementLabel,
                 score,
                 match_indices: indices,
             })
