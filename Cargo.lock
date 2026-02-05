@@ -1711,11 +1711,28 @@ dependencies = [
  "base64",
  "chrono",
  "dirs",
+ "image",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "qorvex-live"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "crossterm",
+ "image",
+ "qorvex-core",
+ "ratatui",
+ "ratatui-image",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1730,21 +1747,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tui-input",
-]
-
-[[package]]
-name = "qorvex-watcher"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clap",
- "crossterm",
- "image",
- "qorvex-core",
- "ratatui",
- "ratatui-image",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]

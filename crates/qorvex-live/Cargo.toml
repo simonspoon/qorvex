@@ -1,5 +1,5 @@
 [package]
-name = "qorvex-watcher"
+name = "qorvex-live"
 description = "TUI client for monitoring iOS Simulator automation sessions"
 version.workspace = true
 edition.workspace = true

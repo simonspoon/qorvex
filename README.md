@@ -8,7 +8,7 @@ Qorvex provides programmatic control over iOS Simulators through a Rust workspac
 
 - **qorvex-core** — Core library with simulator control, UI automation, and IPC
 - **qorvex-repl** — Interactive command-line interface for manual testing
-- **qorvex-watcher** — TUI client for live screenshot and action log monitoring
+- **qorvex-live** — TUI client for live screenshot and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines
 
 ## Requirements
@@ -22,7 +22,7 @@ Qorvex provides programmatic control over iOS Simulators through a Rust workspac
 
 ```bash
 cargo install --path crates/qorvex-repl
-cargo install --path crates/qorvex-watcher
+cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
 ```
 
@@ -72,12 +72,12 @@ Available commands:
 - `help` — Show available commands
 - `quit` — Exit
 
-### Watcher
+### Live TUI
 
 Monitor a session in real-time with a terminal UI:
 
 ```bash
-qorvex-watcher
+qorvex-live
 ```
 
 Controls:
@@ -158,7 +158,7 @@ Command-specific options:
 
 ```
 ┌─────────────┐     IPC      ┌──────────────┐
-│ qorvex-repl │◄────────────►│qorvex-watcher│
+│ qorvex-repl │◄────────────►│ qorvex-live  │
 └──────┬──────┘              └──────────────┘
        │                            ▲
        │ IPC                   IPC  │

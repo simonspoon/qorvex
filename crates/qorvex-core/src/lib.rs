@@ -46,3 +46,4 @@ pub mod executor;
 pub mod ipc;
 pub mod session;
 pub mod simctl;
+pub mod watcher;

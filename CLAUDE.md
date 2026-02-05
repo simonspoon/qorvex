@@ -14,15 +14,15 @@ cargo build --release
 # Run REPL
 cargo run -p qorvex-repl
 
-# Run watcher TUI
-cargo run -p qorvex-watcher
+# Run live TUI
+cargo run -p qorvex-live
 
 # Run CLI (requires running REPL session)
 cargo run -p qorvex-cli -- tap-element button-id
 
 # Install binaries locally
 cargo install --path crates/qorvex-repl
-cargo install --path crates/qorvex-watcher
+cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
 
 # Run tests
@@ -40,7 +40,7 @@ Rust workspace with four crates for iOS Simulator automation on macOS:
 ```
 qorvex-core    - Core library (simctl, axe, session, ipc, action, executor)
 qorvex-repl    - TUI REPL with tab completion, uses core directly
-qorvex-watcher - TUI client that connects via IPC to monitor sessions
+qorvex-live    - TUI client that connects via IPC to monitor sessions
 qorvex-cli     - Scriptable CLI client for automation pipelines
 ```
 
@@ -59,6 +59,7 @@ qorvex-cli     - Scriptable CLI client for automation pipelines
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
 - **action.rs** - Unified action types (`Tap`, `TapLocation`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, session management) with selector/by_label/element_type pattern for element lookup
 - **executor.rs** - Action execution engine that wraps simctl/axe operations with result handling
+- **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash)
 
 ### qorvex-repl modules
 

@@ -91,6 +91,19 @@ pub static COMMANDS: &[CommandDef] = &[
         description: "Get UI hierarchy as JSON",
         args: &[],
     },
+    CommandDef {
+        name: "start_watcher",
+        description: "Start screen change detection",
+        args: &[ArgSpec {
+            name: "interval_ms",
+            completion: ArgCompletion::None,
+        }],
+    },
+    CommandDef {
+        name: "stop_watcher",
+        description: "Stop screen change detection",
+        args: &[],
+    },
     // UI commands
     CommandDef {
         name: "list_elements",

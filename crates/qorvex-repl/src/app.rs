@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tui_input::Input;
 
@@ -12,8 +13,9 @@ use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::axe::{Axe, UIElement};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{socket_path, IpcServer};
-use qorvex_core::session::Session;
+use qorvex_core::session::{Session, SessionEvent};
 use qorvex_core::simctl::{Simctl, SimulatorDevice};
+use qorvex_core::watcher::{ScreenWatcher, WatcherConfig, WatcherHandle};
 
 use crate::completion::{CandidateKind, CompletionState};
 use crate::format::{format_command, format_device, format_element, format_result};
@@ -45,6 +47,10 @@ pub struct App {
     pub simulator_udid: Option<String>,
     /// IPC server handle.
     pub ipc_server_handle: Option<JoinHandle<()>>,
+    /// Screen watcher handle.
+    pub watcher_handle: Option<WatcherHandle>,
+    /// Channel receiver for element updates from session events.
+    pub element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
     /// Whether the app should quit.
     pub should_quit: bool,
 }
@@ -70,6 +76,8 @@ impl App {
             session: None,
             simulator_udid,
             ipc_server_handle: None,
+            watcher_handle: None,
+            element_update_rx: None,
             should_quit: false,
         };
 
@@ -173,6 +181,15 @@ impl App {
         self.output_scroll_state.select(Some(self.output_scroll_position));
     }
 
+    /// Check for element updates from the watcher (non-blocking).
+    pub fn check_element_updates(&mut self) {
+        if let Some(ref mut rx) = self.element_update_rx {
+            while let Ok(elements) = rx.try_recv() {
+                self.cached_elements = elements;
+            }
+        }
+    }
+
     fn capture_screenshot(&self) -> Option<String> {
         self.simulator_udid.as_ref().and_then(|udid| {
             Simctl::screenshot(udid).ok().map(|bytes| {
@@ -206,6 +223,11 @@ impl App {
                 self.add_output(format_result(true, "Session started"));
             }
             "end_session" => {
+                // Stop watcher first
+                if let Some(handle) = self.watcher_handle.take() {
+                    handle.cancel();
+                }
+                self.element_update_rx = None;
                 if let Some(handle) = self.ipc_server_handle.take() {
                     handle.abort();
                 }
@@ -213,11 +235,69 @@ impl App {
                 self.add_output(format_result(true, "Session ended"));
             }
             "quit" => {
+                // Stop watcher first
+                if let Some(handle) = self.watcher_handle.take() {
+                    handle.cancel();
+                }
+                self.element_update_rx = None;
                 if let Some(handle) = self.ipc_server_handle.take() {
                     handle.abort();
                 }
                 self.session = None;
                 self.should_quit = true;
+            }
+            "start_watcher" => {
+                if self.watcher_handle.is_some() {
+                    self.add_output(format_result(false, "Watcher already running"));
+                } else if self.session.is_none() {
+                    self.add_output(format_result(false, "No active session. Run start_session first."));
+                } else if self.simulator_udid.is_none() {
+                    self.add_output(format_result(false, "No simulator selected"));
+                } else {
+                    let interval_ms = args.first()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(500);
+
+                    let config = WatcherConfig {
+                        interval_ms,
+                        capture_screenshots: true,
+                        visual_change_threshold: 5,
+                    };
+
+                    let session = self.session.as_ref().unwrap().clone();
+                    let udid = self.simulator_udid.as_ref().unwrap().clone();
+
+                    // Create channel for element updates
+                    let (tx, rx) = mpsc::channel::<Vec<UIElement>>(16);
+                    self.element_update_rx = Some(rx);
+
+                    // Spawn task to forward session events to the channel
+                    let mut event_rx = session.subscribe();
+                    tokio::spawn(async move {
+                        while let Ok(event) = event_rx.recv().await {
+                            if let SessionEvent::ScreenInfoUpdated { elements, .. } = event {
+                                let elements_vec = (*elements).clone();
+                                if tx.send(elements_vec).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    let handle = ScreenWatcher::spawn(session, udid, config);
+                    self.watcher_handle = Some(handle);
+
+                    self.add_output(format_result(true, &format!("Watcher started ({}ms interval)", interval_ms)));
+                }
+            }
+            "stop_watcher" => {
+                if let Some(handle) = self.watcher_handle.take() {
+                    handle.cancel();
+                    self.element_update_rx = None;
+                    self.add_output(format_result(true, "Watcher stopped"));
+                } else {
+                    self.add_output(format_result(false, "No watcher running"));
+                }
             }
             "help" => {
                 self.show_help();
@@ -581,6 +661,9 @@ impl App {
             "Screen:",
             "  get_screenshot         Capture a screenshot (base64 PNG)",
             "  get_screen_info        Get UI hierarchy",
+            "  start_watcher          Auto-detect screen changes (500ms)",
+            "  start_watcher(ms)      Auto-detect with custom interval",
+            "  stop_watcher           Stop screen change detection",
             "",
             "UI:",
             "  list_elements          List all UI elements",

@@ -24,7 +24,7 @@ use qorvex_core::session::SessionEvent;
 use qorvex_core::simctl::Simctl;
 
 #[derive(Parser, Debug)]
-#[command(name = "qorvex-watcher")]
+#[command(name = "qorvex-live")]
 #[command(about = "TUI client for monitoring iOS Simulator automation sessions")]
 struct Args {
     /// Session name to connect to
@@ -217,6 +217,11 @@ async fn main() -> io::Result<()> {
                     }
                     SessionEvent::ScreenshotUpdated(ss) => {
                         app.update_screenshot(&ss);
+                    }
+                    SessionEvent::ScreenInfoUpdated { screenshot, .. } => {
+                        if let Some(ss) = screenshot {
+                            app.update_screenshot(&ss);
+                        }
                     }
                     _ => {}
                 },
