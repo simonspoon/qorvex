@@ -55,19 +55,19 @@ Available commands:
 - `start_session` — Begin a new automation session
 - `end_session` — End the current session
 - `get_session_info` — Get session status info
-- `tap_element(id)` — Tap a UI element by accessibility ID
+- `tap(selector)` — Tap element by accessibility ID
+- `tap(selector, label)` — Tap element by label (pass "label" as 2nd arg)
+- `tap(selector, label, type)` — Tap element by label with type filter
 - `tap_location(x, y)` — Tap at screen coordinates
 - `send_keys(text)` — Type text into the focused field
-- `wait_for(id)` — Wait for element to appear (5s default timeout)
-- `wait_for(id, ms)` — Wait for element with custom timeout
-- `tap_by_label(label)` — Tap a UI element by accessibility label
-- `get_value_by_label(label)` — Get element's value by accessibility label
-- `wait_for_by_label(label)` — Wait for element by label (5s default)
-- `wait_for_by_label(label, ms)` — Wait for element by label with custom timeout
+- `wait_for(selector)` — Wait for element by ID (5s default timeout)
+- `wait_for(selector, timeout_ms)` — Wait with custom timeout
+- `wait_for(selector, timeout_ms, label)` — Wait for element by label
 - `get_screenshot` — Capture current screen
 - `get_screen_info` — Get UI hierarchy information
 - `list_elements` — List actionable UI elements
-- `get_element_value(id)` — Get element's current value
+- `get_value(selector)` — Get element's value by ID
+- `get_value(selector, label)` — Get element's value by label
 - `log_comment(text)` — Add a comment to the action log
 - `help` — Show available commands
 - `quit` — Exit
@@ -91,10 +91,16 @@ Scriptable client for automation pipelines (requires a running REPL session):
 
 ```bash
 # Tap an element by accessibility ID
-qorvex tap-element login-button
+qorvex tap login-button
+
+# Tap an element by accessibility label
+qorvex tap "Sign In" --label
+
+# Tap a specific element type by label
+qorvex tap "Sign In" --label --type Button
 
 # Tap with wait (waits for element to appear first)
-qorvex tap-element login-button --wait --timeout 10000
+qorvex tap login-button --wait --timeout 10000
 
 # Tap at coordinates
 qorvex tap-location 100 200
@@ -108,29 +114,26 @@ qorvex screenshot > screen.b64
 # Get screen info (JSON)
 qorvex screen-info | jq '.elements'
 
-# Get element value
-qorvex get-value text-field-id
+# Get element value by ID
+qorvex get-value username-field
+
+# Get element value by label
+qorvex get-value "Email" --label
 
 # Get element value with wait
 qorvex get-value text-field-id --wait --timeout 5000
 
-# Wait for element to appear
-qorvex wait-for loading-spinner --timeout 10000
-
-# Tap element by accessibility label
-qorvex tap-by-label "Sign In"
-
-# Get value by accessibility label
-qorvex get-value-by-label "Username Field"
+# Wait for element to appear by ID
+qorvex wait-for spinner-id --timeout 10000
 
 # Wait for element by label
-qorvex wait-for-by-label "Loading..." --timeout 10000
+qorvex wait-for "Loading" --label --timeout 10000
 
 # Log a comment to the session
 qorvex comment "Starting login flow"
 
 # Connect to a specific session
-qorvex -s my-session tap-element button
+qorvex -s my-session tap button
 
 # List all running sessions
 qorvex list-sessions
@@ -148,9 +151,8 @@ Options:
 - `-q, --quiet` — Suppress non-essential output
 
 Command-specific options:
-- `tap-element`, `get-value`: `-w, --wait` — Wait for element before acting; `-t, --timeout <ms>` — Wait timeout (default: 5000)
-- `get-value-by-label`: `-w, --wait` — Wait for element before getting value; `-t, --timeout <ms>` — Wait timeout (default: 5000)
-- `wait-for`, `wait-for-by-label`: `-t, --timeout <ms>` — Wait timeout (default: 5000)
+- `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-w, --wait` — Wait for element first; `-o, --timeout <ms>` — Wait timeout (default: 5000)
+- `wait-for`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-o, --timeout <ms>` — Wait timeout (default: 5000)
 
 ## Architecture
 

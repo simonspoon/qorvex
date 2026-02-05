@@ -58,8 +58,7 @@ struct App {
 
 impl App {
     fn new(session_name: String) -> Self {
-        let picker = Picker::from_query_stdio()
-            .unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
+        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
         Self {
             action_log: Vec::new(),

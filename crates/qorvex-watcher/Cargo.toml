@@ -12,9 +12,9 @@ categories.workspace = true
 qorvex-core = { path = "../qorvex-core" }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = "0.29"
-ratatui-image = "4"
+ratatui-image = "10"
 image = "0.25"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
