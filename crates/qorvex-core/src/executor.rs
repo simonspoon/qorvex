@@ -175,6 +175,34 @@ impl ActionExecutor {
                 }
             }
 
+            ActionType::Swipe { ref direction } => {
+                // Use reasonable default coordinates for a typical iOS screen.
+                // Center horizontally (195), swipe from 600→300 for "up", etc.
+                let (start_x, start_y, end_x, end_y) = match direction.as_str() {
+                    "up" => (195, 600, 195, 300),
+                    "down" => (195, 300, 195, 600),
+                    "left" => (300, 420, 90, 420),
+                    "right" => (90, 420, 300, 420),
+                    _ => {
+                        return ExecutionResult::failure(format!(
+                            "Invalid swipe direction '{}'. Use: up, down, left, right",
+                            direction
+                        ));
+                    }
+                };
+
+                match Axe::swipe(&self.simulator_udid, start_x, start_y, end_x, end_y, Some(0.3)) {
+                    Ok(_) => {
+                        let mut result = ExecutionResult::success(format!("Swiped {}", direction));
+                        if let Some(screenshot) = self.capture_screenshot() {
+                            result = result.with_screenshot(screenshot);
+                        }
+                        result
+                    }
+                    Err(e) => ExecutionResult::failure(e.to_string()),
+                }
+            }
+
             ActionType::SendKeys { ref text } => {
                 match Simctl::send_keys(&self.simulator_udid, text) {
                     Ok(_) => {

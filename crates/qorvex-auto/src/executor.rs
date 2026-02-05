@@ -273,7 +273,7 @@ impl ScriptExecutor {
                 Ok(Value::String(info))
             }
             "help" => {
-                eprintln!("Commands: start_session, end_session, tap, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log_comment, start_watcher, stop_watcher, get_session_info, help");
+                eprintln!("Commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log_comment, start_watcher, stop_watcher, get_session_info, help");
                 Ok(Value::String("help".to_string()))
             }
             "tap" => {
@@ -297,6 +297,11 @@ impl ScriptExecutor {
                 }
 
                 let action = ActionType::Tap { selector, by_label, element_type };
+                self.execute_action(action, line).await
+            }
+            "swipe" => {
+                let direction = args.first().cloned().unwrap_or_else(|| "up".to_string());
+                let action = ActionType::Swipe { direction };
                 self.execute_action(action, line).await
             }
             "tap_location" => {

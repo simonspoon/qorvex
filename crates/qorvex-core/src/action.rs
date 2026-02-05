@@ -7,7 +7,7 @@
 //!
 //! Actions fall into several categories:
 //!
-//! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::SendKeys`]
+//! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::Swipe`], [`ActionType::SendKeys`]
 //! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetValue`]
 //! - **Waiting**: [`ActionType::WaitFor`]
 //! - **Session Management**: [`ActionType::StartSession`], [`ActionType::EndSession`], [`ActionType::Quit`]
@@ -68,6 +68,12 @@ pub enum ActionType {
         x: i32,
         /// The y-coordinate in screen points.
         y: i32,
+    },
+
+    /// Swipe the screen in a direction.
+    Swipe {
+        /// Direction to swipe: "up", "down", "left", or "right".
+        direction: String,
     },
 
     /// Log a comment (for documentation purposes).

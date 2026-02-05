@@ -66,7 +66,7 @@ qorvex-auto    - Script runner (.qvx files) and JSONL log-to-script converter
   - Socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
   - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
-- **action.rs** - Unified action types (`Tap`, `TapLocation`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, session management) with selector/by_label/element_type pattern for element lookup
+- **action.rs** - Unified action types (`Tap`, `TapLocation`, `Swipe`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, session management) with selector/by_label/element_type pattern for element lookup
 - **executor.rs** - Action execution engine that wraps simctl/axe operations with result handling
 - **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash)
 

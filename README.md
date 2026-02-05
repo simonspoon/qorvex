@@ -61,6 +61,8 @@ Available commands:
 - `tap(selector, label)` — Tap element by label (pass "label" as 2nd arg)
 - `tap(selector, label, type)` — Tap element by label with type filter
 - `tap_location(x, y)` — Tap at screen coordinates
+- `swipe()` — Swipe up (default)
+- `swipe(direction)` — Swipe in a direction: up, down, left, right
 - `send_keys(text)` — Type text into the focused field
 - `wait_for(selector)` — Wait for element by ID (5s default timeout)
 - `wait_for(selector, timeout_ms)` — Wait with custom timeout
@@ -71,6 +73,9 @@ Available commands:
 - `get_value(selector)` — Get element's value by ID
 - `get_value(selector, label)` — Get element's value by label
 - `log_comment(text)` — Add a comment to the action log
+- `start_watcher` — Start screen change detection (500ms default)
+- `start_watcher(interval_ms)` — Start with custom polling interval
+- `stop_watcher` — Stop screen change detection
 - `help` — Show available commands
 - `quit` — Exit
 
@@ -181,6 +186,7 @@ The `.qvx` script language uses REPL-compatible commands with control flow:
 start_session
 tap("login-button")
 send_keys("user@example.com")
+swipe("down")
 
 # Capture command output into variables
 value = get_value("status-label")

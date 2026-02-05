@@ -449,6 +449,37 @@ impl App {
                     }
                 }
             }
+            "swipe" => {
+                let direction = args.first().map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "up".to_string());
+                match &self.simulator_udid {
+                    Some(udid) => {
+                        let executor = ActionExecutor::new(udid.clone());
+                        let result = executor.execute(ActionType::Swipe {
+                            direction: direction.clone(),
+                        }).await;
+
+                        let action_result = if result.success {
+                            ActionResult::Success
+                        } else {
+                            ActionResult::Failure(result.message.clone())
+                        };
+
+                        self.log_action(
+                            ActionType::Swipe { direction },
+                            action_result,
+                        ).await;
+
+                        if result.success {
+                            self.add_output(format_result(true, &result.message));
+                        } else {
+                            self.add_output(format_result(false, &result.message));
+                        }
+                    }
+                    None => {
+                        self.add_output(format_result(false, "No simulator selected"));
+                    }
+                }
+            }
             "tap_location" => {
                 if args.len() < 2 {
                     self.add_output(format_result(false, "tap_location requires 2 arguments: tap_location(x, y)"));
@@ -721,6 +752,8 @@ impl App {
             "  tap(sel, label)        Tap element by label (waits 5s)",
             "  tap(sel, label, type)  Tap by label + type (waits 5s)",
             "  tap(sel, --no-wait)    Tap without waiting",
+            "  swipe()                Swipe up (default)",
+            "  swipe(direction)       Swipe: up, down, left, right",
             "  tap_location(x, y)     Tap at screen coordinates",
             "  get_value(selector)    Get element value by ID (waits 5s)",
             "  get_value(sel, label)  Get element value by label (waits 5s)",

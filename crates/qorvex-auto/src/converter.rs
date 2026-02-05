@@ -60,6 +60,9 @@ impl LogConverter {
             ActionType::TapLocation { x, y } => {
                 Some(format!("tap_location({}, {})", x, y))
             }
+            ActionType::Swipe { direction } => {
+                Some(format!("swipe(\"{}\")", direction))
+            }
             ActionType::SendKeys { text } => {
                 Some(format!("send_keys(\"{}\")", escape_string(text)))
             }

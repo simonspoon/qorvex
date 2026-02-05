@@ -119,6 +119,14 @@ pub static COMMANDS: &[CommandDef] = &[
         }],
     },
     CommandDef {
+        name: "swipe",
+        description: "Swipe the screen",
+        args: &[ArgSpec {
+            name: "direction",
+            completion: ArgCompletion::None,
+        }],
+    },
+    CommandDef {
         name: "tap_location",
         description: "Tap at screen coordinates",
         args: &[

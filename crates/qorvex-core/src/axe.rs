@@ -228,6 +228,58 @@ impl Axe {
         Ok(())
     }
 
+    /// Performs a swipe gesture from one point to another.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `start_x` - Starting x-coordinate
+    /// * `start_y` - Starting y-coordinate
+    /// * `end_x` - Ending x-coordinate
+    /// * `end_y` - Ending y-coordinate
+    /// * `duration` - Optional swipe duration in seconds
+    ///
+    /// # Errors
+    ///
+    /// - [`AxeError::NotInstalled`] if axe is not available
+    /// - [`AxeError::Io`] if the command fails to execute
+    /// - [`AxeError::CommandFailed`] if the swipe command fails
+    pub fn swipe(
+        udid: &str,
+        start_x: i32,
+        start_y: i32,
+        end_x: i32,
+        end_y: i32,
+        duration: Option<f64>,
+    ) -> Result<(), AxeError> {
+        if !Self::is_installed() {
+            return Err(AxeError::NotInstalled);
+        }
+
+        let mut cmd = Command::new("axe");
+        cmd.args([
+            "swipe",
+            "--start-x", &start_x.to_string(),
+            "--start-y", &start_y.to_string(),
+            "--end-x", &end_x.to_string(),
+            "--end-y", &end_y.to_string(),
+            "--udid", udid,
+        ]);
+
+        if let Some(dur) = duration {
+            cmd.args(["--duration", &dur.to_string()]);
+        }
+
+        let output = cmd.output()?;
+
+        if !output.status.success() {
+            return Err(AxeError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string()
+            ));
+        }
+        Ok(())
+    }
+
     /// Taps an element by its accessibility identifier.
     ///
     /// Uses axe's `--id` flag to locate and tap the element with the
