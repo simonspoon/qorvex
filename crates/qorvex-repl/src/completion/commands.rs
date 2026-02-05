@@ -32,6 +32,8 @@ pub enum ArgCompletion {
     ElementId,
     /// Complete with element labels from cached screen info.
     ElementLabel,
+    /// Smart element selector that auto-composes arguments (selector, label flag, type).
+    ElementSelector,
     /// Complete with device UDIDs from cached device list.
     DeviceUdid,
     /// No special completion (free text).
@@ -98,20 +100,10 @@ pub static COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "tap",
         description: "Tap an element",
-        args: &[
-            ArgSpec {
-                name: "selector",
-                completion: ArgCompletion::ElementId,
-            },
-            ArgSpec {
-                name: "label?",
-                completion: ArgCompletion::None,
-            },
-            ArgSpec {
-                name: "type?",
-                completion: ArgCompletion::None,
-            },
-        ],
+        args: &[ArgSpec {
+            name: "selector",
+            completion: ArgCompletion::ElementSelector,
+        }],
     },
     CommandDef {
         name: "tap_location",
@@ -130,42 +122,18 @@ pub static COMMANDS: &[CommandDef] = &[
     CommandDef {
         name: "get_value",
         description: "Get an element's value",
-        args: &[
-            ArgSpec {
-                name: "selector",
-                completion: ArgCompletion::ElementId,
-            },
-            ArgSpec {
-                name: "label?",
-                completion: ArgCompletion::None,
-            },
-            ArgSpec {
-                name: "type?",
-                completion: ArgCompletion::None,
-            },
-        ],
+        args: &[ArgSpec {
+            name: "selector",
+            completion: ArgCompletion::ElementSelector,
+        }],
     },
     CommandDef {
         name: "wait_for",
         description: "Wait for element to appear",
-        args: &[
-            ArgSpec {
-                name: "selector",
-                completion: ArgCompletion::ElementId,
-            },
-            ArgSpec {
-                name: "timeout_ms?",
-                completion: ArgCompletion::None,
-            },
-            ArgSpec {
-                name: "label?",
-                completion: ArgCompletion::None,
-            },
-            ArgSpec {
-                name: "type?",
-                completion: ArgCompletion::None,
-            },
-        ],
+        args: &[ArgSpec {
+            name: "selector",
+            completion: ArgCompletion::ElementSelector,
+        }],
     },
     // Input commands
     CommandDef {

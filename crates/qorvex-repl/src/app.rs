@@ -15,7 +15,7 @@ use qorvex_core::ipc::{socket_path, IpcServer};
 use qorvex_core::session::Session;
 use qorvex_core::simctl::{Simctl, SimulatorDevice};
 
-use crate::completion::CompletionState;
+use crate::completion::{CandidateKind, CompletionState};
 use crate::format::{format_command, format_device, format_element, format_result};
 
 /// Maximum number of lines to keep in output history.
@@ -113,6 +113,7 @@ impl App {
     pub fn accept_completion(&mut self) {
         if let Some(candidate) = self.completion.selected_candidate() {
             let text = candidate.text.clone();
+            let kind = candidate.kind;
             let current = self.input.value().to_string();
 
             // Find where to insert the completion
@@ -120,11 +121,16 @@ impl App {
                 let before_paren = &current[..=paren_idx];
                 let args_part = &current[paren_idx + 1..];
 
-                // Find the last comma or start of args
-                if let Some(comma_idx) = args_part.rfind(',') {
-                    format!("{}{}, {}", before_paren, &args_part[..comma_idx], text)
-                } else {
+                // For ElementSelector kinds, replace ALL arguments (the composed text contains everything)
+                if matches!(kind, CandidateKind::ElementSelectorById | CandidateKind::ElementSelectorByLabel) {
                     format!("{}{}", before_paren, text)
+                } else {
+                    // Find the last comma or start of args
+                    if let Some(comma_idx) = args_part.rfind(',') {
+                        format!("{}{}, {}", before_paren, &args_part[..comma_idx], text)
+                    } else {
+                        format!("{}{}", before_paren, text)
+                    }
                 }
             } else {
                 // Completing a command name

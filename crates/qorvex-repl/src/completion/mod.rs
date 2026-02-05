@@ -45,6 +45,10 @@ pub enum CandidateKind {
     ElementId,
     /// An element label.
     ElementLabel,
+    /// Smart selector by element ID (auto-composed args).
+    ElementSelectorById,
+    /// Smart selector by element label (auto-composed args).
+    ElementSelectorByLabel,
     /// A device UDID.
     DeviceUdid,
 }
@@ -118,6 +122,9 @@ impl CompletionState {
                         }
                         ArgCompletion::ElementLabel => {
                             element_label_candidates(&prefix, cached_elements)
+                        }
+                        ArgCompletion::ElementSelector => {
+                            element_selector_candidates(&prefix, cached_elements, command.name)
                         }
                         ArgCompletion::DeviceUdid => {
                             device_candidates(&prefix, cached_devices)
@@ -290,6 +297,134 @@ fn device_candidates(prefix: &str, devices: &[SimulatorDevice]) -> Vec<Candidate
                 text: dev.udid.clone(),
                 description,
                 kind: CandidateKind::DeviceUdid,
+                score,
+                match_indices: indices,
+            })
+        })
+        .collect();
+
+    // Sort by score descending
+    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates
+}
+
+/// Generate smart element selector candidates that auto-compose command arguments.
+///
+/// Shows ALL elements (with identifier OR label) and composes appropriate arguments:
+/// - Unique identifier → `"the-id"`
+/// - Unique label (no id) → `"The Label", label`
+/// - Non-unique id → `"the-id", , Type`
+/// - Non-unique label → `"The Label", label, Type`
+///
+/// For `wait_for` command, label-based selectors include default timeout:
+/// - By label → `"The Label", 5000, label`
+fn element_selector_candidates(
+    prefix: &str,
+    elements: &[UIElement],
+    command_name: &str,
+) -> Vec<Candidate> {
+    use std::collections::HashMap;
+
+    let filter = FuzzyFilter::new();
+
+    // Build uniqueness maps
+    let mut id_counts: HashMap<&str, usize> = HashMap::new();
+    let mut label_counts: HashMap<&str, usize> = HashMap::new();
+
+    for elem in elements {
+        if let Some(id) = elem.identifier.as_deref() {
+            *id_counts.entry(id).or_insert(0) += 1;
+        }
+        if let Some(label) = elem.label.as_deref() {
+            if !label.is_empty() {
+                *label_counts.entry(label).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let is_wait_for = command_name == "wait_for";
+
+    let mut candidates: Vec<Candidate> = elements
+        .iter()
+        .filter_map(|elem| {
+            let id = elem.identifier.as_deref();
+            let label = elem.label.as_deref().filter(|l| !l.is_empty());
+            let elem_type = elem.element_type.as_deref().unwrap_or("Unknown");
+
+            // Skip elements with neither id nor label
+            if id.is_none() && label.is_none() {
+                return None;
+            }
+
+            // Determine uniqueness
+            let id_is_unique = id.map(|i| id_counts.get(i) == Some(&1)).unwrap_or(false);
+            let label_is_unique = label.map(|l| label_counts.get(l) == Some(&1)).unwrap_or(false);
+
+            // Determine best selector strategy
+            // Priority: unique ID > unique label > ID + type > label + type
+            let (text, kind) = if let Some(id) = id {
+                if id_is_unique {
+                    // Unique ID: just the selector
+                    (id.to_string(), CandidateKind::ElementSelectorById)
+                } else {
+                    // Non-unique ID: add type for disambiguation
+                    // Format: selector, , Type (empty label flag position)
+                    let composed = format!("{}, , {}", id, elem_type);
+                    (composed, CandidateKind::ElementSelectorById)
+                }
+            } else if let Some(label) = label {
+                if label_is_unique {
+                    // Unique label: selector, label flag
+                    let composed = if is_wait_for {
+                        // wait_for has timeout as arg 2, label as arg 3
+                        format!("{}, 5000, label", label)
+                    } else {
+                        format!("{}, label", label)
+                    };
+                    (composed, CandidateKind::ElementSelectorByLabel)
+                } else {
+                    // Non-unique label: add type for disambiguation
+                    let composed = if is_wait_for {
+                        format!("{}, 5000, label, {}", label, elem_type)
+                    } else {
+                        format!("{}, label, {}", label, elem_type)
+                    };
+                    (composed, CandidateKind::ElementSelectorByLabel)
+                }
+            } else {
+                return None;
+            };
+
+            // Try matching against identifier or label
+            let id_match = id.and_then(|i| filter.score(prefix, i));
+            let label_match = label.and_then(|l| filter.score(prefix, l));
+
+            // Use the best match
+            let (score, indices) = match (id_match, label_match) {
+                (Some((id_score, id_indices)), Some((label_score, _))) => {
+                    if id_score >= label_score {
+                        (id_score, id_indices)
+                    } else {
+                        (label_score, Vec::new())
+                    }
+                }
+                (Some(m), None) => m,
+                (None, Some((score, _))) => (score, Vec::new()),
+                (None, None) => return None,
+            };
+
+            // Build description
+            let description = match (id, label) {
+                (Some(_), Some(l)) => format!("{} \"{}\"", elem_type, l),
+                (Some(_), None) => elem_type.to_string(),
+                (None, Some(_)) => elem_type.to_string(),
+                (None, None) => elem_type.to_string(),
+            };
+
+            Some(Candidate {
+                text,
+                description,
+                kind,
                 score,
                 match_indices: indices,
             })

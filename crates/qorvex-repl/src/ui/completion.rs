@@ -93,6 +93,8 @@ fn format_candidate(candidate: &Candidate, selected: bool, max_width: usize) -> 
         CandidateKind::Command => "Cmd",
         CandidateKind::ElementId => "ID",
         CandidateKind::ElementLabel => "Lbl",
+        CandidateKind::ElementSelectorById => "ID",
+        CandidateKind::ElementSelectorByLabel => "Lbl",
         CandidateKind::DeviceUdid => "Dev",
     };
 
