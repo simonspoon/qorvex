@@ -4,12 +4,13 @@ iOS Simulator automation and testing toolkit for macOS.
 
 ## Overview
 
-Qorvex provides programmatic control over iOS Simulators through a Rust workspace containing four crates:
+Qorvex provides programmatic control over iOS Simulators through a Rust workspace containing five crates:
 
 - **qorvex-core** — Core library with simulator control, UI automation, and IPC
 - **qorvex-repl** — Interactive command-line interface for manual testing
 - **qorvex-live** — TUI client for live screenshot and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines
+- **qorvex-auto** — Script runner for `.qvx` automation scripts and JSONL log converter
 
 ## Requirements
 
@@ -24,6 +25,7 @@ Qorvex provides programmatic control over iOS Simulators through a Rust workspac
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
+cargo install --path crates/qorvex-auto
 ```
 
 ## Usage
@@ -90,7 +92,7 @@ Controls:
 Scriptable client for automation pipelines (requires a running REPL session):
 
 ```bash
-# Tap an element by accessibility ID
+# Tap an element by accessibility ID (waits for it by default)
 qorvex tap login-button
 
 # Tap an element by accessibility label
@@ -99,8 +101,8 @@ qorvex tap "Sign In" --label
 # Tap a specific element type by label
 qorvex tap "Sign In" --label --type Button
 
-# Tap with wait (waits for element to appear first)
-qorvex tap login-button --wait --timeout 10000
+# Tap without waiting for element
+qorvex tap login-button --no-wait
 
 # Tap at coordinates
 qorvex tap-location 100 200
@@ -114,14 +116,14 @@ qorvex screenshot > screen.b64
 # Get screen info (JSON)
 qorvex screen-info | jq '.elements'
 
-# Get element value by ID
+# Get element value by ID (waits for element by default)
 qorvex get-value username-field
 
 # Get element value by label
 qorvex get-value "Email" --label
 
-# Get element value with wait
-qorvex get-value text-field-id --wait --timeout 5000
+# Get value without waiting
+qorvex get-value username-field --no-wait
 
 # Wait for element to appear by ID
 qorvex wait-for spinner-id --timeout 10000
@@ -151,8 +153,55 @@ Options:
 - `-q, --quiet` — Suppress non-essential output
 
 Command-specific options:
-- `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-w, --wait` — Wait for element first; `-o, --timeout <ms>` — Wait timeout (default: 5000)
+- `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip auto-wait for element; `-o, --timeout <ms>` — Wait timeout (default: 5000)
 - `wait-for`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-o, --timeout <ms>` — Wait timeout (default: 5000)
+
+### Auto
+
+Run `.qvx` automation scripts or convert action logs to scripts:
+
+```bash
+# Run a script against a booted simulator
+qorvex-auto run test-login.qvx
+
+# Run against a specific session
+qorvex-auto -s my-session run test-login.qvx
+
+# Convert an action log to a replayable script
+qorvex-auto convert ~/.qorvex/logs/default_20250101_120000.jsonl --stdout
+
+# Convert and save to file
+qorvex-auto convert session.jsonl --name login-flow
+```
+
+The `.qvx` script language uses REPL-compatible commands with control flow:
+
+```
+# Variables and commands
+start_session
+tap("login-button")
+send_keys("user@example.com")
+
+# Capture command output into variables
+value = get_value("status-label")
+
+# Control flow
+if value == "Success" {
+    log_comment("Login passed")
+} else {
+    tap("retry-button")
+}
+
+# Loops
+foreach item in ["tab1", "tab2", "tab3"] {
+    tap(item)
+    get_screenshot
+}
+
+for i from 1 to 5 {
+    tap("next-button")
+}
+```
 
 ## Architecture
 
@@ -167,16 +216,18 @@ Command-specific options:
        │                     │ qorvex-cli │
        │                     └────────────┘
        ▼
-┌─────────────┐
-│ qorvex-core │
-├─────────────┤
-│  • simctl   │ ──► iOS Simulator
-│  • axe      │ ──► Accessibility tree
-│  • session  │ ──► State management
-│  • ipc      │ ──► Unix sockets
-│  • executor │ ──► Action execution
+┌─────────────┐        ┌──────────────┐
+│ qorvex-core │◄───────┤ qorvex-auto  │
+├─────────────┤        ├──────────────┤
+│  • simctl   │ ──►    │  .qvx parser │
+│  • axe      │  iOS   │  runtime     │
+│  • session  │  Sim   │  executor    │
+│  • ipc      │        │  converter   │
+│  • executor │        └──────────────┘
 └─────────────┘
 ```
+
+`qorvex-auto` uses core directly (not via IPC) but spawns its own IPC server so `qorvex-live` can monitor script execution.
 
 ### Directory Structure
 
@@ -186,13 +237,17 @@ Qorvex stores runtime files in `~/.qorvex/`:
 ~/.qorvex/
 ├── qorvex_default.sock      # Unix socket for "default" session
 ├── qorvex_my-session.sock   # Unix socket for "my-session"
-└── logs/
-    ├── default.jsonl        # Action log for "default" session
-    └── my-session.jsonl     # Action log for "my-session"
+├── logs/
+│   ├── default_20250101_120000.jsonl
+│   └── my-session_20250101_130000.jsonl
+└── automation/
+    ├── logs/                # Action logs from qorvex-auto runs
+    └── scripts/             # Converted .qvx scripts
 ```
 
-- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Watcher connect to these to communicate with running sessions.
-- **Logs** (`~/.qorvex/logs/<session>.jsonl`) — Persistent action logs in JSON Lines format. Each line is a timestamped action record, enabling replay, debugging, and audit trails.
+- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL and auto sessions. The CLI, Live TUI, and auto runner all use these to communicate.
+- **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format.
+- **Automation** (`~/.qorvex/automation/`) — Separate log and script directories for `qorvex-auto`. The `convert` command saves output scripts here by default.
 
 Use `qorvex list-sessions` to discover running sessions by scanning for active socket files.
 

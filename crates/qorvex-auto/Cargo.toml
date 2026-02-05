@@ -1,0 +1,20 @@
+[package]
+name = "qorvex-auto"
+description = "Script-based automation runner for iOS Simulator via qorvex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "qorvex-auto"
+path = "src/main.rs"
+
+[dependencies]
+qorvex-core = { path = "../qorvex-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "time"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = "1"
+chrono = "0.4"

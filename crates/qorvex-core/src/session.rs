@@ -160,13 +160,30 @@ impl Session {
     /// initialized with a new UUID, the current timestamp, an empty action log,
     /// no screenshot, and a persistent log file at `~/.qorvex/logs/{session_name}_{timestamp}.jsonl`.
     pub fn new(simulator_udid: Option<String>, session_name: &str) -> Arc<Self> {
+        Self::new_with_log_dir(simulator_udid, session_name, logs_dir())
+    }
+
+    /// Creates a new session with a custom log directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `simulator_udid` - Optional UDID of the simulator to associate with this session
+    /// * `session_name` - Name used for the persistent log file
+    /// * `log_dir` - Directory path for persistent log files
+    ///
+    /// # Returns
+    ///
+    /// An `Arc<Session>` for safe sharing across async tasks.
+    pub fn new_with_log_dir(simulator_udid: Option<String>, session_name: &str, log_dir: PathBuf) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(100);
         let created_at = Utc::now();
+
+        std::fs::create_dir_all(&log_dir).ok();
 
         // Create persistent log file
         let log_writer = {
             let timestamp = created_at.format("%Y%m%d_%H%M%S");
-            let log_path = logs_dir().join(format!("{}_{}.jsonl", session_name, timestamp));
+            let log_path = log_dir.join(format!("{}_{}.jsonl", session_name, timestamp));
             std::fs::File::create(&log_path)
                 .ok()
                 .map(BufWriter::new)

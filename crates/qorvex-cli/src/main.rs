@@ -5,11 +5,14 @@
 //! # Usage
 //!
 //! ```bash
-//! # Tap an element by accessibility ID
+//! # Tap an element by accessibility ID (waits for it by default)
 //! qorvex tap login-button
 //!
 //! # Tap an element by label
 //! qorvex tap "Sign In" --label
+//!
+//! # Tap without waiting for element
+//! qorvex tap "Sign In" -l --no-wait
 //!
 //! # Tap a specific element type by label
 //! qorvex tap "Sign In" -l -T Button
@@ -26,9 +29,12 @@
 //! # Get screen info (JSON)
 //! qorvex screen-info | jq '.elements'
 //!
-//! # Get element value
+//! # Get element value (waits for element by default)
 //! qorvex get-value username-field
 //! qorvex get-value "Email" --label
+//!
+//! # Get value without waiting
+//! qorvex get-value username-field --no-wait
 //!
 //! # Wait for an element
 //! qorvex wait-for spinner-id
@@ -83,9 +89,9 @@ enum Command {
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
-        /// Wait for the element to appear before tapping
-        #[arg(short, long)]
-        wait: bool,
+        /// Skip waiting for the element to appear before tapping
+        #[arg(long)]
+        no_wait: bool,
         /// Timeout in milliseconds when waiting
         #[arg(short = 'o', long, default_value = "5000")]
         timeout: u64,
@@ -121,9 +127,9 @@ enum Command {
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
-        /// Wait for the element to appear before getting value
-        #[arg(short, long)]
-        wait: bool,
+        /// Skip waiting for the element to appear before getting value
+        #[arg(long)]
+        no_wait: bool,
         /// Timeout in milliseconds when waiting
         #[arg(short = 'o', long, default_value = "5000")]
         timeout: u64,
@@ -240,8 +246,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         .map_err(|e| CliError::Connection(format!("Failed to connect to session '{}': {}", cli.session, e)))?;
 
     match cli.command {
-        Command::Tap { ref selector, label, ref element_type, wait, timeout } => {
-            if wait {
+        Command::Tap { ref selector, label, ref element_type, no_wait, timeout } => {
+            if !no_wait {
                 execute_action(&mut client, ActionType::WaitFor {
                     selector: selector.clone(),
                     by_label: label,
@@ -267,8 +273,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::ScreenInfo => {
             execute_action(&mut client, ActionType::GetScreenInfo, &cli).await
         }
-        Command::GetValue { ref selector, label, ref element_type, wait, timeout } => {
-            if wait {
+        Command::GetValue { ref selector, label, ref element_type, no_wait, timeout } => {
+            if !no_wait {
                 execute_action(&mut client, ActionType::WaitFor {
                     selector: selector.clone(),
                     by_label: label,

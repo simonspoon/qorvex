@@ -374,6 +374,8 @@ impl App {
                 }
             }
             "tap" => {
+                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
+                let args: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
                 let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
                 if selector.is_empty() {
                     self.add_output(format_result(false, "tap requires at least 1 argument: tap(selector) or tap(selector, label) or tap(selector, label, type)"));
@@ -386,6 +388,29 @@ impl App {
                     match &self.simulator_udid {
                         Some(udid) => {
                             let executor = ActionExecutor::new(udid.clone());
+
+                            // Wait for element first (default behavior, skip with --no-wait)
+                            if !no_wait {
+                                let wait_result = executor.execute(ActionType::WaitFor {
+                                    selector: selector.to_string(),
+                                    by_label,
+                                    element_type: element_type.clone(),
+                                    timeout_ms: 5000,
+                                }).await;
+                                if !wait_result.success {
+                                    self.log_action(
+                                        ActionType::Tap {
+                                            selector: selector.to_string(),
+                                            by_label,
+                                            element_type,
+                                        },
+                                        ActionResult::Failure(wait_result.message.clone()),
+                                    ).await;
+                                    self.add_output(format_result(false, &wait_result.message));
+                                    return;
+                                }
+                            }
+
                             let result = executor.execute(ActionType::Tap {
                                 selector: selector.to_string(),
                                 by_label,
@@ -542,6 +567,8 @@ impl App {
                 }
             }
             "get_value" => {
+                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
+                let args: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
                 let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
                 if selector.is_empty() {
                     self.add_output(format_result(false, "get_value requires at least 1 argument: get_value(selector) or get_value(selector, label) or get_value(selector, label, type)"));
@@ -554,6 +581,29 @@ impl App {
                     match &self.simulator_udid {
                         Some(udid) => {
                             let executor = ActionExecutor::new(udid.clone());
+
+                            // Wait for element first (default behavior, skip with --no-wait)
+                            if !no_wait {
+                                let wait_result = executor.execute(ActionType::WaitFor {
+                                    selector: selector.to_string(),
+                                    by_label,
+                                    element_type: element_type.clone(),
+                                    timeout_ms: 5000,
+                                }).await;
+                                if !wait_result.success {
+                                    self.log_action(
+                                        ActionType::GetValue {
+                                            selector: selector.to_string(),
+                                            by_label,
+                                            element_type,
+                                        },
+                                        ActionResult::Failure(wait_result.message.clone()),
+                                    ).await;
+                                    self.add_output(format_result(false, &wait_result.message));
+                                    return;
+                                }
+                            }
+
                             let result = executor.execute(ActionType::GetValue {
                                 selector: selector.to_string(),
                                 by_label,
@@ -667,12 +717,14 @@ impl App {
             "",
             "UI:",
             "  list_elements          List all UI elements",
-            "  tap(selector)          Tap an element by ID",
-            "  tap(sel, label)        Tap an element by label",
-            "  tap(sel, label, type)  Tap an element by label + type",
+            "  tap(selector)          Tap element by ID (waits 5s)",
+            "  tap(sel, label)        Tap element by label (waits 5s)",
+            "  tap(sel, label, type)  Tap by label + type (waits 5s)",
+            "  tap(sel, --no-wait)    Tap without waiting",
             "  tap_location(x, y)     Tap at screen coordinates",
-            "  get_value(selector)    Get element value by ID",
-            "  get_value(sel, label)  Get element value by label",
+            "  get_value(selector)    Get element value by ID (waits 5s)",
+            "  get_value(sel, label)  Get element value by label (waits 5s)",
+            "  get_value(s, --no-wait) Get value without waiting",
             "  wait_for(selector)     Wait for element (5s timeout)",
             "  wait_for(sel, ms)      Wait with custom timeout",
             "  wait_for(sel,ms,label) Wait by label with timeout",
