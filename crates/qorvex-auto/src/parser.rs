@@ -34,6 +34,7 @@ enum Token {
     To,
     If,
     Else,
+    Set,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +207,7 @@ fn tokenize(source: &str) -> Result<Vec<Located>, AutoError> {
                     "to" => Token::To,
                     "if" => Token::If,
                     "else" => Token::Else,
+                    "set" => Token::Set,
                     _ => Token::Ident(ident),
                 };
                 tokens.push(Located { token, line });
@@ -291,6 +293,7 @@ impl Parser {
             Some(Token::Foreach) => self.parse_foreach(),
             Some(Token::For) => self.parse_for(),
             Some(Token::If) => self.parse_if(),
+            Some(Token::Set) => self.parse_set(),
             Some(Token::Ident(_)) => {
                 // Look ahead: is this `ident = expr` or `ident(args)`?
                 let ident_pos = self.pos;
@@ -385,6 +388,20 @@ impl Parser {
         };
 
         Ok(Statement::If { condition, then_block, else_block })
+    }
+
+    fn parse_set(&mut self) -> Result<Statement, AutoError> {
+        let line = self.current_line();
+        self.expect(&Token::Set)?;
+        let key = match self.advance() {
+            Some(Token::Ident(s)) => s.clone(),
+            _ => return Err(AutoError::Parse {
+                message: "Expected setting name after 'set' (e.g. 'set timeout 10000')".to_string(),
+                line,
+            }),
+        };
+        let value = self.parse_expression()?;
+        Ok(Statement::Set { key, value, line })
     }
 
     fn parse_block(&mut self) -> Result<Vec<Statement>, AutoError> {
@@ -976,5 +993,35 @@ end_session
             }
             _ => panic!("Expected Command"),
         }
+    }
+
+    #[test]
+    fn test_parse_set_timeout() {
+        let script = parse("set timeout 10000").unwrap();
+        assert_eq!(script.statements.len(), 1);
+        match &script.statements[0] {
+            Statement::Set { key, value, .. } => {
+                assert_eq!(key, "timeout");
+                assert!(matches!(value, Expression::Number(10000)));
+            }
+            _ => panic!("Expected Set"),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_in_script() {
+        let script = parse(r#"
+set timeout 8000
+tap("login-button")
+wait_for("dashboard")
+"#).unwrap();
+        assert_eq!(script.statements.len(), 3);
+        assert!(matches!(&script.statements[0], Statement::Set { key, .. } if key == "timeout"));
+    }
+
+    #[test]
+    fn test_parse_set_missing_key() {
+        let result = parse("set 5000");
+        assert!(result.is_err());
     }
 }

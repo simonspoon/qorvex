@@ -17,6 +17,7 @@ pub struct ScriptExecutor {
     executor: Option<ActionExecutor>,
     simulator_udid: Option<String>,
     watcher_handle: Option<WatcherHandle>,
+    default_timeout_ms: u64,
 }
 
 impl ScriptExecutor {
@@ -32,6 +33,7 @@ impl ScriptExecutor {
             executor,
             simulator_udid,
             watcher_handle: None,
+            default_timeout_ms: 5000,
         }
     }
 
@@ -101,6 +103,26 @@ impl ScriptExecutor {
                     } else if let Some(else_stmts) = else_block {
                         for stmt in else_stmts {
                             self.execute_statement(stmt).await?;
+                        }
+                    }
+                    Ok(())
+                }
+                Statement::Set { key, value, line } => {
+                    let val = self.eval_expression(value, *line).await?;
+                    match key.as_str() {
+                        "timeout" => {
+                            let ms: u64 = val.as_string().parse().map_err(|_| AutoError::Runtime {
+                                message: format!("Invalid timeout value: {}", val.as_string()),
+                                line: *line,
+                            })?;
+                            self.default_timeout_ms = ms;
+                            eprintln!("[line {}] Default timeout set to {}ms", line, ms);
+                        }
+                        _ => {
+                            return Err(AutoError::Runtime {
+                                message: format!("Unknown setting: {}", key),
+                                line: *line,
+                            });
                         }
                     }
                     Ok(())
@@ -300,7 +322,7 @@ impl ScriptExecutor {
                         selector: selector.clone(),
                         by_label,
                         element_type: element_type.clone(),
-                        timeout_ms: 5000,
+                        timeout_ms: self.default_timeout_ms,
                     };
                     let wait_result = self.execute_action(wait_action, line).await?;
 
@@ -353,7 +375,7 @@ impl ScriptExecutor {
                 })?.clone();
                 let timeout_ms: u64 = args.get(1)
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(5000);
+                    .unwrap_or(self.default_timeout_ms);
                 let by_label = args.get(2).map(|s| s.to_lowercase() == "label").unwrap_or(false);
                 let element_type = args.get(3).cloned().filter(|s| !s.is_empty());
 
@@ -375,7 +397,7 @@ impl ScriptExecutor {
                         selector: selector.clone(),
                         by_label,
                         element_type: element_type.clone(),
-                        timeout_ms: 5000,
+                        timeout_ms: self.default_timeout_ms,
                     };
                     self.execute_action(wait_action, line).await?;
                 }

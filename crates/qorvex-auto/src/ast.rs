@@ -26,6 +26,11 @@ pub enum Statement {
         then_block: Vec<Statement>,
         else_block: Option<Vec<Statement>>,
     },
+    Set {
+        key: String,
+        value: Expression,
+        line: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
