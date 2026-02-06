@@ -36,7 +36,8 @@
 //!             element_type: None,
 //!         },
 //!         ActionResult::Success,
-//!         None
+//!         None,
+//!         None,
 //!     ).await;
 //! }
 //! ```
@@ -241,10 +242,10 @@ impl Session {
     /// The action log is maintained as a ring buffer. When the maximum size
     /// is reached, the oldest entry is removed. Actions are also persisted to
     /// the JSON Lines log file at `~/.qorvex/logs/`.
-    pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>) -> ActionLog {
+    pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>, duration_ms: Option<u64>) -> ActionLog {
         // Wrap screenshot in Arc for cheap clones in hot path
         let screenshot_arc = screenshot.map(Arc::new);
-        let log = ActionLog::new(action, result, screenshot_arc.clone());
+        let log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms);
 
         // Update action log with ring buffer behavior
         {
@@ -266,6 +267,7 @@ impl Session {
                     action: log.action.clone(),
                     result: log.result.clone(),
                     screenshot: None,
+                    duration_ms: log.duration_ms,
                 };
                 if let Ok(json) = serde_json::to_string(&file_log) {
                     let _ = writeln!(writer, "{}", json);

@@ -245,7 +245,7 @@ impl IpcServer {
                         let executor = ActionExecutor::new(String::new());
                         let result = executor.execute(action.clone()).await;
 
-                        session.log_action(action, ActionResult::Success, None).await;
+                        session.log_action(action, ActionResult::Success, None, None).await;
 
                         IpcResponse::ActionResult {
                             success: result.success,
@@ -265,7 +265,10 @@ impl IpcServer {
                                 } else {
                                     ActionResult::Failure(result.message.clone())
                                 };
-                                session.log_action(action, action_result, result.screenshot.clone()).await;
+                                let duration_ms = result.data.as_ref()
+                                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                                    .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
+                                session.log_action(action, action_result, result.screenshot.clone(), duration_ms).await;
 
                                 IpcResponse::ActionResult {
                                     success: result.success,

@@ -199,10 +199,10 @@ impl App {
         })
     }
 
-    async fn log_action(&self, action: ActionType, result: ActionResult) {
+    async fn log_action(&self, action: ActionType, result: ActionResult, duration_ms: Option<u64>) {
         if let Some(session) = &self.session {
             let screenshot = self.capture_screenshot();
-            session.log_action(action, result, screenshot).await;
+            session.log_action(action, result, screenshot, duration_ms).await;
         }
     }
 
@@ -358,13 +358,13 @@ impl App {
                             self.add_output(format_result(true, &format!("{} elements", elements.len())));
 
                             if cmd == "get_screen_info" {
-                                self.log_action(ActionType::GetScreenInfo, ActionResult::Success).await;
+                                self.log_action(ActionType::GetScreenInfo, ActionResult::Success, None).await;
                             }
                         }
                         Err(e) => {
                             self.add_output(format_result(false, &e.to_string()));
                             if cmd == "get_screen_info" {
-                                self.log_action(ActionType::GetScreenInfo, ActionResult::Failure(e.to_string())).await;
+                                self.log_action(ActionType::GetScreenInfo, ActionResult::Failure(e.to_string()), None).await;
                             }
                         }
                     },
@@ -405,6 +405,7 @@ impl App {
                                             element_type,
                                         },
                                         ActionResult::Failure(wait_result.message.clone()),
+                                        None,
                                     ).await;
                                     self.add_output(format_result(false, &wait_result.message));
                                     return;
@@ -430,6 +431,7 @@ impl App {
                                     element_type,
                                 },
                                 action_result,
+                                None,
                             ).await;
 
                             if result.success {
@@ -467,6 +469,7 @@ impl App {
                         self.log_action(
                             ActionType::Swipe { direction },
                             action_result,
+                            None,
                         ).await;
 
                         if result.success {
@@ -495,6 +498,7 @@ impl App {
                                         self.log_action(
                                             ActionType::TapLocation { x, y },
                                             ActionResult::Success,
+                                            None,
                                         ).await;
                                         self.add_output(format_result(true, &format!("Tapped ({}, {})", x, y)));
                                     }
@@ -502,6 +506,7 @@ impl App {
                                         self.log_action(
                                             ActionType::TapLocation { x, y },
                                             ActionResult::Failure(e.to_string()),
+                                            None,
                                         ).await;
                                         self.add_output(format_result(false, &e.to_string()));
                                     }
@@ -547,6 +552,10 @@ impl App {
                                 ActionResult::Failure(result.message.clone())
                             };
 
+                            let duration_ms = result.data.as_ref()
+                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                                .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
+
                             self.log_action(
                                 ActionType::WaitFor {
                                     selector: selector.to_string(),
@@ -555,6 +564,7 @@ impl App {
                                     timeout_ms,
                                 },
                                 action_result,
+                                duration_ms,
                             ).await;
 
                             if result.success {
@@ -580,6 +590,7 @@ impl App {
                                 self.log_action(
                                     ActionType::SendKeys { text: text.clone() },
                                     ActionResult::Success,
+                                    None,
                                 ).await;
                                 self.add_output(format_result(true, &format!("Sent: {}", text)));
                             }
@@ -587,6 +598,7 @@ impl App {
                                 self.log_action(
                                     ActionType::SendKeys { text: text.clone() },
                                     ActionResult::Failure(e.to_string()),
+                                    None,
                                 ).await;
                                 self.add_output(format_result(false, &e.to_string()));
                             }
@@ -629,6 +641,7 @@ impl App {
                                             element_type,
                                         },
                                         ActionResult::Failure(wait_result.message.clone()),
+                                        None,
                                     ).await;
                                     self.add_output(format_result(false, &wait_result.message));
                                     return;
@@ -654,6 +667,7 @@ impl App {
                                     element_type,
                                 },
                                 action_result,
+                                None,
                             ).await;
 
                             if result.success {
@@ -680,12 +694,13 @@ impl App {
                                     ActionType::GetScreenshot,
                                     ActionResult::Success,
                                     Some(b64.clone()),
+                                    None,
                                 ).await;
                             }
                             self.add_output(format_result(true, &format!("{} bytes (base64 logged)", bytes.len())));
                         }
                         Err(e) => {
-                            self.log_action(ActionType::GetScreenshot, ActionResult::Failure(e.to_string())).await;
+                            self.log_action(ActionType::GetScreenshot, ActionResult::Failure(e.to_string()), None).await;
                             self.add_output(format_result(false, &e.to_string()));
                         }
                     },
@@ -702,6 +717,7 @@ impl App {
                     self.log_action(
                         ActionType::LogComment { message: message.clone() },
                         ActionResult::Success,
+                        None,
                     ).await;
                     self.add_output(format_result(true, &format!("Logged: {}", message)));
                 }

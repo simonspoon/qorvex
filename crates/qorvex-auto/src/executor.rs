@@ -159,6 +159,7 @@ impl ScriptExecutor {
                     ActionType::StartSession,
                     ActionResult::Success,
                     None,
+                    None,
                 ).await;
                 eprintln!("[line {}] Session started", line);
                 Ok(Value::String("Session started".to_string()))
@@ -170,6 +171,7 @@ impl ScriptExecutor {
                 let _ = self.session.log_action(
                     ActionType::EndSession,
                     ActionResult::Success,
+                    None,
                     None,
                 ).await;
                 eprintln!("[line {}] Session ended", line);
@@ -260,7 +262,7 @@ impl ScriptExecutor {
                 } else {
                     ActionResult::Failure(result.message.clone())
                 };
-                self.session.log_action(action_type, action_result, result.screenshot.clone()).await;
+                self.session.log_action(action_type, action_result, result.screenshot.clone(), None).await;
 
                 if result.success {
                     if let Some(ref data) = result.data {
@@ -387,7 +389,7 @@ impl ScriptExecutor {
                 } else {
                     ActionResult::Failure(result.message.clone())
                 };
-                self.session.log_action(action, action_result, result.screenshot.clone()).await;
+                self.session.log_action(action, action_result, result.screenshot.clone(), None).await;
 
                 if result.success {
                     let data = result.data.unwrap_or_else(|| "null".to_string());
@@ -407,7 +409,7 @@ impl ScriptExecutor {
                     line,
                 })?.clone();
                 let action = ActionType::LogComment { message: message.clone() };
-                self.session.log_action(action, ActionResult::Success, None).await;
+                self.session.log_action(action, ActionResult::Success, None, None).await;
                 eprintln!("[line {}] Logged: {}", line, message);
                 Ok(Value::String(message))
             }
@@ -416,6 +418,13 @@ impl ScriptExecutor {
                 line,
             }),
         }
+    }
+
+    /// Extract elapsed_ms from execution result data JSON, if present.
+    fn extract_elapsed_ms(data: &Option<String>) -> Option<u64> {
+        let d = data.as_ref()?;
+        let parsed: serde_json::Value = serde_json::from_str(d).ok()?;
+        parsed.get("elapsed_ms").and_then(|v| v.as_u64())
     }
 
     /// Parse the center coordinates from a WaitFor result's JSON data.
@@ -446,7 +455,8 @@ impl ScriptExecutor {
         } else {
             ActionResult::Failure(result.message.clone())
         };
-        self.session.log_action(action, action_result, result.screenshot.clone()).await;
+        let duration_ms = Self::extract_elapsed_ms(&result.data);
+        self.session.log_action(action, action_result, result.screenshot.clone(), duration_ms).await;
 
         if result.success {
             eprintln!("[line {}] {}", line, result.message);

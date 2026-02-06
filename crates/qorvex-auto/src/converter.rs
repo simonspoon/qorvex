@@ -247,13 +247,14 @@ mod tests {
     fn test_convert_jsonl() {
         use qorvex_core::action::ActionResult;
 
-        let log1 = ActionLog::new(ActionType::StartSession, ActionResult::Success, None);
+        let log1 = ActionLog::new(ActionType::StartSession, ActionResult::Success, None, None);
         let log2 = ActionLog::new(
             ActionType::Tap { selector: "btn".to_string(), by_label: false, element_type: None },
             ActionResult::Success,
             None,
+            None,
         );
-        let log3 = ActionLog::new(ActionType::EndSession, ActionResult::Success, None);
+        let log3 = ActionLog::new(ActionType::EndSession, ActionResult::Success, None, None);
 
         let jsonl = format!(
             "{}\n{}\n{}\n",

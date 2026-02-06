@@ -26,7 +26,7 @@
 //! };
 //!
 //! // Create a log entry
-//! let log = ActionLog::new(action, ActionResult::Success, None);
+//! let log = ActionLog::new(action, ActionResult::Success, None, None);
 //! println!("Action {} at {}", log.id, log.timestamp);
 //! ```
 
@@ -150,6 +150,10 @@ pub struct ActionLog {
     ///
     /// Wrapped in `Arc` for efficient cloning when broadcasting to multiple watchers.
     pub screenshot: Option<Arc<String>>,
+
+    /// How long the action took in milliseconds (e.g., for `WaitFor`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 impl ActionLog {
@@ -166,13 +170,14 @@ impl ActionLog {
     /// # Returns
     ///
     /// A new `ActionLog` instance with a unique ID and current timestamp.
-    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<Arc<String>>) -> Self {
+    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<Arc<String>>, duration_ms: Option<u64>) -> Self {
         Self {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             action,
             result,
             screenshot,
+            duration_ms,
         }
     }
 }
