@@ -89,6 +89,8 @@ impl ExecutionResult {
 pub struct ActionExecutor {
     /// The UDID of the target simulator.
     simulator_udid: String,
+    /// Whether to capture screenshots after actions.
+    capture_screenshots: bool,
 }
 
 impl ActionExecutor {
@@ -98,7 +100,15 @@ impl ActionExecutor {
     ///
     /// * `simulator_udid` - The unique device identifier of the target simulator
     pub fn new(simulator_udid: String) -> Self {
-        Self { simulator_udid }
+        Self {
+            simulator_udid,
+            capture_screenshots: true,
+        }
+    }
+
+    /// Sets whether to capture screenshots after actions.
+    pub fn set_capture_screenshots(&mut self, capture: bool) {
+        self.capture_screenshots = capture;
     }
 
     /// Returns the simulator UDID.
@@ -107,7 +117,11 @@ impl ActionExecutor {
     }
 
     /// Captures a screenshot and returns it as base64-encoded PNG.
+    /// Returns `None` if screenshot capture is disabled.
     fn capture_screenshot(&self) -> Option<String> {
+        if !self.capture_screenshots {
+            return None;
+        }
         Simctl::screenshot(&self.simulator_udid).ok().map(|bytes| {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.encode(&bytes)
@@ -293,28 +307,46 @@ impl ActionExecutor {
                 let start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
+                let mut last_frame: Option<(f64, f64, f64, f64)> = None;
 
                 loop {
                     if let Ok(elements) = Axe::dump_hierarchy(&self.simulator_udid) {
                         let found = match element_type {
-                            Some(typ) => Axe::find_element_with_type(&elements, selector, by_label, Some(typ)).is_some(),
-                            None if by_label => Axe::find_elements_by_label(&elements, selector).is_some(),
-                            None => Axe::find_element(&elements, selector).is_some(),
+                            Some(typ) => Axe::find_element_with_type(&elements, selector, by_label, Some(typ)),
+                            None if by_label => Axe::find_elements_by_label(&elements, selector),
+                            None => Axe::find_element(&elements, selector),
                         };
 
-                        if found {
-                            let elapsed_ms = start.elapsed().as_millis() as u64;
-                            let msg = if by_label {
-                                format!("Element with label '{}' found", selector)
-                            } else {
-                                format!("Element '{}' found", selector)
-                            };
-                            let mut result = ExecutionResult::success(msg)
-                                .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
-                            if let Some(screenshot) = self.capture_screenshot() {
-                                result = result.with_screenshot(screenshot);
+                        if let Some(element) = found {
+                            let current_frame = element.frame.as_ref()
+                                .map(|f| (f.x, f.y, f.width, f.height));
+
+                            // Require the frame to match across two consecutive polls
+                            // so we don't return stale coordinates during animations.
+                            if current_frame.is_none() || current_frame == last_frame {
+                                let elapsed_ms = start.elapsed().as_millis() as u64;
+                                let msg = if by_label {
+                                    format!("Element with label '{}' found", selector)
+                                } else {
+                                    format!("Element '{}' found", selector)
+                                };
+                                let data = if let Some(ref frame) = element.frame {
+                                    format!(
+                                        r#"{{"elapsed_ms":{},"frame":{{"x":{},"y":{},"width":{},"height":{}}}}}"#,
+                                        elapsed_ms, frame.x, frame.y, frame.width, frame.height
+                                    )
+                                } else {
+                                    format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms)
+                                };
+                                let mut result = ExecutionResult::success(msg).with_data(data);
+                                if let Some(screenshot) = self.capture_screenshot() {
+                                    result = result.with_screenshot(screenshot);
+                                }
+                                return result;
                             }
-                            return result;
+                            last_frame = current_frame;
+                        } else {
+                            last_frame = None;
                         }
                     }
                     if start.elapsed() >= timeout {

@@ -21,7 +21,11 @@ pub struct ScriptExecutor {
 
 impl ScriptExecutor {
     pub fn new(session: Arc<Session>, simulator_udid: Option<String>) -> Self {
-        let executor = simulator_udid.as_ref().map(|udid| ActionExecutor::new(udid.clone()));
+        let executor = simulator_udid.as_ref().map(|udid| {
+            let mut e = ActionExecutor::new(udid.clone());
+            e.set_capture_screenshots(false);
+            e
+        });
         Self {
             runtime: Runtime::new(),
             session,
@@ -178,7 +182,9 @@ impl ScriptExecutor {
                     line,
                 })?;
                 self.simulator_udid = Some(udid.clone());
-                self.executor = Some(ActionExecutor::new(udid.clone()));
+                let mut executor = ActionExecutor::new(udid.clone());
+                executor.set_capture_screenshots(false);
+                self.executor = Some(executor);
                 eprintln!("[line {}] Using device {}", line, udid);
                 Ok(Value::String(format!("Using device {}", udid)))
             }
@@ -192,7 +198,9 @@ impl ScriptExecutor {
                     line,
                 })?;
                 self.simulator_udid = Some(udid.clone());
-                self.executor = Some(ActionExecutor::new(udid.clone()));
+                let mut executor = ActionExecutor::new(udid.clone());
+                executor.set_capture_screenshots(false);
+                self.executor = Some(executor);
                 eprintln!("[line {}] Booted device {}", line, udid);
                 Ok(Value::String(format!("Booted device {}", udid)))
             }
@@ -293,7 +301,14 @@ impl ScriptExecutor {
                         element_type: element_type.clone(),
                         timeout_ms: 5000,
                     };
-                    self.execute_action(wait_action, line).await?;
+                    let wait_result = self.execute_action(wait_action, line).await?;
+
+                    // Reuse frame from wait_for to tap by coordinates directly,
+                    // avoiding a second axe invocation.
+                    if let Some(coords) = Self::parse_frame_center(&wait_result.as_string()) {
+                        let action = ActionType::TapLocation { x: coords.0, y: coords.1 };
+                        return self.execute_action(action, line).await;
+                    }
                 }
 
                 let action = ActionType::Tap { selector, by_label, element_type };
@@ -402,6 +417,18 @@ impl ScriptExecutor {
                 line,
             }),
         }
+    }
+
+    /// Parse the center coordinates from a WaitFor result's JSON data.
+    /// Expected format: `{"elapsed_ms":123,"frame":{"x":10,"y":20,"width":100,"height":50}}`
+    fn parse_frame_center(data: &str) -> Option<(i32, i32)> {
+        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+        let frame = parsed.get("frame")?;
+        let x = frame.get("x")?.as_f64()?;
+        let y = frame.get("y")?.as_f64()?;
+        let w = frame.get("width")?.as_f64()?;
+        let h = frame.get("height")?.as_f64()?;
+        Some(((x + w / 2.0) as i32, (y + h / 2.0) as i32))
     }
 
     fn require_executor(&self, line: usize) -> Result<&ActionExecutor, AutoError> {

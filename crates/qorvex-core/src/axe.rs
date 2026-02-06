@@ -33,6 +33,7 @@
 //! ```
 
 use std::process::Command;
+use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -115,6 +116,8 @@ pub struct ElementFrame {
 /// shell commands.
 pub struct Axe;
 
+static AXE_INSTALLED: OnceLock<bool> = OnceLock::new();
+
 impl Axe {
     /// Checks if the axe tool is installed and available.
     ///
@@ -124,11 +127,13 @@ impl Axe {
     ///
     /// `true` if axe is installed and available, `false` otherwise.
     pub fn is_installed() -> bool {
-        Command::new("which")
-            .arg("axe")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        *AXE_INSTALLED.get_or_init(|| {
+            Command::new("which")
+                .arg("axe")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
     }
 
     /// Dumps the complete UI accessibility hierarchy.
