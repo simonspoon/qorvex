@@ -337,7 +337,7 @@ impl Axe {
         let hierarchy = Self::dump_hierarchy(udid)?;
         let element = Self::find_element(&hierarchy, identifier)
             .ok_or_else(|| AxeError::CommandFailed(format!("Element '{}' not found", identifier)))?;
-        Ok(element.value)
+        Ok(element.value.or(element.label))
     }
 
     /// Taps an element by its accessibility label.
@@ -448,7 +448,7 @@ impl Axe {
         let hierarchy = Self::dump_hierarchy(udid)?;
         let element = Self::find_elements_by_label(&hierarchy, label)
             .ok_or_else(|| AxeError::CommandFailed(format!("Element with label '{}' not found", label)))?;
-        Ok(element.value)
+        Ok(element.value.or(element.label))
     }
 
     /// Finds an element by selector (ID or label) with optional type filtering.
@@ -582,7 +582,7 @@ impl Axe {
                 ))
             })?;
 
-        Ok(element.value)
+        Ok(element.value.or(element.label))
     }
 
     /// Flattens the element hierarchy into a list.
