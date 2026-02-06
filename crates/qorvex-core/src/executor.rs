@@ -307,7 +307,9 @@ impl ActionExecutor {
                 let start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
+                let stable_polls_required = 3;
                 let mut last_frame: Option<(f64, f64, f64, f64)> = None;
+                let mut stable_count: u32 = 0;
 
                 loop {
                     if let Ok(elements) = Axe::dump_hierarchy(&self.simulator_udid) {
@@ -321,9 +323,18 @@ impl ActionExecutor {
                             let current_frame = element.frame.as_ref()
                                 .map(|f| (f.x, f.y, f.width, f.height));
 
-                            // Require the frame to match across two consecutive polls
-                            // so we don't return stale coordinates during animations.
-                            if current_frame.is_none() || current_frame == last_frame {
+                            // Require the frame to be stable across multiple consecutive
+                            // polls to avoid tapping during iOS animations.
+                            if current_frame.is_none() {
+                                stable_count = stable_polls_required;
+                            } else if current_frame == last_frame {
+                                stable_count += 1;
+                            } else {
+                                stable_count = 1;
+                                last_frame = current_frame;
+                            }
+
+                            if stable_count >= stable_polls_required {
                                 let elapsed_ms = start.elapsed().as_millis() as u64;
                                 let msg = if by_label {
                                     format!("Element with label '{}' found", selector)
@@ -344,9 +355,9 @@ impl ActionExecutor {
                                 }
                                 return result;
                             }
-                            last_frame = current_frame;
                         } else {
                             last_frame = None;
+                            stable_count = 0;
                         }
                     }
                     if start.elapsed() >= timeout {
