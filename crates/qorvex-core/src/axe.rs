@@ -109,6 +109,48 @@ pub struct ElementFrame {
     pub height: f64,
 }
 
+/// Returns true if the pattern contains glob wildcard characters (`*` or `?`).
+fn has_wildcard(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?')
+}
+
+/// Matches a string against a glob pattern with `*` (any chars) and `?` (single char).
+///
+/// When the pattern has no wildcards, falls back to exact equality.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    if !has_wildcard(pattern) {
+        return pattern == text;
+    }
+
+    let pat: Vec<char> = pattern.chars().collect();
+    let txt: Vec<char> = text.chars().collect();
+    let (plen, tlen) = (pat.len(), txt.len());
+
+    // dp[i][j] = pattern[..i] matches text[..j]
+    let mut dp = vec![vec![false; tlen + 1]; plen + 1];
+    dp[0][0] = true;
+
+    // Leading *'s can match empty text
+    for i in 1..=plen {
+        if pat[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+
+    for i in 1..=plen {
+        for j in 1..=tlen {
+            if pat[i - 1] == '*' {
+                // * matches zero chars (dp[i-1][j]) or one more char (dp[i][j-1])
+                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+            } else if pat[i - 1] == '?' || pat[i - 1] == txt[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1];
+            }
+        }
+    }
+
+    dp[plen][tlen]
+}
+
 /// Wrapper for `axe` CLI commands.
 ///
 /// Provides static methods for interacting with the iOS Simulator UI
@@ -191,7 +233,9 @@ impl Axe {
     /// or `None` if no matching element exists.
     pub fn find_element(elements: &[UIElement], identifier: &str) -> Option<UIElement> {
         for element in elements {
-            if element.identifier.as_deref() == Some(identifier) {
+            if element.identifier.as_deref()
+                .map_or(false, |id| glob_match(identifier, id))
+            {
                 return Some(element.clone());
             }
             if let Some(found) = Self::find_element(&element.children, identifier) {
@@ -306,6 +350,19 @@ impl Axe {
             return Err(AxeError::NotInstalled);
         }
 
+        // Wildcard selectors can't be delegated to axe CLI; search hierarchy instead
+        if has_wildcard(identifier) {
+            let hierarchy = Self::dump_hierarchy(udid)?;
+            let element = Self::find_element(&hierarchy, identifier)
+                .ok_or_else(|| AxeError::CommandFailed(format!("Element matching '{}' not found", identifier)))?;
+            let frame = element.frame.ok_or_else(|| {
+                AxeError::CommandFailed("Element has no frame".to_string())
+            })?;
+            let center_x = (frame.x + frame.width / 2.0) as i32;
+            let center_y = (frame.y + frame.height / 2.0) as i32;
+            return Self::tap(udid, center_x, center_y);
+        }
+
         let output = Command::new("axe")
             .args(["tap", "--id", identifier, "--udid", udid])
             .output()?;
@@ -366,6 +423,19 @@ impl Axe {
             return Err(AxeError::NotInstalled);
         }
 
+        // Wildcard selectors can't be delegated to axe CLI; search hierarchy instead
+        if has_wildcard(label) {
+            let hierarchy = Self::dump_hierarchy(udid)?;
+            let element = Self::find_elements_by_label(&hierarchy, label)
+                .ok_or_else(|| AxeError::CommandFailed(format!("Element with label matching '{}' not found", label)))?;
+            let frame = element.frame.ok_or_else(|| {
+                AxeError::CommandFailed("Element has no frame".to_string())
+            })?;
+            let center_x = (frame.x + frame.width / 2.0) as i32;
+            let center_y = (frame.y + frame.height / 2.0) as i32;
+            return Self::tap(udid, center_x, center_y);
+        }
+
         let output = Command::new("axe")
             .args(["tap", "--label", label, "--udid", udid])
             .output()?;
@@ -393,7 +463,9 @@ impl Axe {
     /// `Some(UIElement)` containing a clone of the found element,
     /// or `None` if no matching element exists.
     pub fn find_element_by_label(element: &UIElement, label: &str) -> Option<UIElement> {
-        if element.label.as_deref() == Some(label) {
+        if element.label.as_deref()
+            .map_or(false, |l| glob_match(label, l))
+        {
             return Some(element.clone());
         }
         for child in &element.children {
@@ -484,11 +556,13 @@ impl Axe {
             element_type: Option<&str>,
         ) -> Option<UIElement> {
             for element in elements {
-                // Check if this element matches the selector
+                // Check if this element matches the selector (supports glob wildcards)
                 let selector_matches = if by_label {
-                    element.label.as_deref() == Some(selector)
+                    element.label.as_deref()
+                        .map_or(false, |l| glob_match(selector, l))
                 } else {
-                    element.identifier.as_deref() == Some(selector)
+                    element.identifier.as_deref()
+                        .map_or(false, |id| glob_match(selector, id))
                 };
 
                 // Check if type matches (if type filter is specified)
@@ -1068,6 +1142,104 @@ mod tests {
 
         // Find by label with non-matching type filter
         let found = Axe::find_element_with_type(&elements, "Email", true, Some("Button"));
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_glob_match_exact() {
+        assert!(glob_match("hello", "hello"));
+        assert!(!glob_match("hello", "world"));
+    }
+
+    #[test]
+    fn test_glob_match_star() {
+        assert!(glob_match("Log*", "Log In"));
+        assert!(glob_match("Log*", "Login"));
+        assert!(glob_match("Log*", "Log"));
+        assert!(glob_match("Log*", "Logout"));
+        assert!(!glob_match("Log*", "Blog"));
+    }
+
+    #[test]
+    fn test_glob_match_star_patterns() {
+        assert!(glob_match("*Button", "Login Button"));
+        assert!(glob_match("*Button", "Button"));
+        assert!(glob_match("*utton", "Button"));
+        assert!(!glob_match("*Button", "Buttons"));
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("*", ""));
+        assert!(glob_match("Save*File", "Save My File"));
+        assert!(glob_match("Save*File", "SaveFile"));
+    }
+
+    #[test]
+    fn test_glob_match_question_mark() {
+        assert!(glob_match("Item ?", "Item 1"));
+        assert!(glob_match("Item ?", "Item A"));
+        assert!(!glob_match("Item ?", "Item 12"));
+        assert!(glob_match("???", "abc"));
+        assert!(!glob_match("???", "ab"));
+    }
+
+    #[test]
+    fn test_glob_match_combined() {
+        assert!(glob_match("Tab ?*", "Tab 1 Selected"));
+        assert!(glob_match("Tab ?*", "Tab 1"));
+        assert!(!glob_match("Tab ?*", "Tab "));
+    }
+
+    #[test]
+    fn test_has_wildcard() {
+        assert!(has_wildcard("Log*"));
+        assert!(has_wildcard("Item ?"));
+        assert!(has_wildcard("*"));
+        assert!(!has_wildcard("login-button"));
+        assert!(!has_wildcard("Log In"));
+    }
+
+    #[test]
+    fn test_find_element_wildcard_by_id() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+
+        let found = Axe::find_element(&elements, "login-*");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("login-button"));
+
+        let found = Axe::find_element(&elements, "*-field");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("email-field"));
+
+        let found = Axe::find_element(&elements, "*-view");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("main-view"));
+    }
+
+    #[test]
+    fn test_find_element_wildcard_by_label() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+
+        let found = Axe::find_elements_by_label(&elements, "Log*");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().label.as_deref(), Some("Log In"));
+
+        let found = Axe::find_elements_by_label(&elements, "E?ail");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().label.as_deref(), Some("Email"));
+
+        let found = Axe::find_elements_by_label(&elements, "No*Match");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_element_with_type_wildcard() {
+        let elements = Axe::parse_hierarchy(SAMPLE_HIERARCHY.as_bytes()).unwrap();
+
+        let found = Axe::find_element_with_type(&elements, "Log*", true, Some("Button"));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().label.as_deref(), Some("Log In"));
+
+        // Wildcard matches but type doesn't
+        let found = Axe::find_element_with_type(&elements, "Log*", true, Some("TextField"));
         assert!(found.is_none());
     }
 
