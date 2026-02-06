@@ -6,7 +6,6 @@ pub enum AutoError {
     Runtime { message: String, line: usize },
     ActionFailed { message: String, line: usize },
     Io(std::io::Error),
-    Session(String),
 }
 
 impl AutoError {
@@ -16,7 +15,6 @@ impl AutoError {
             AutoError::Runtime { .. } => 3,
             AutoError::ActionFailed { .. } => 1,
             AutoError::Io(_) => 4,
-            AutoError::Session(_) => 5,
         }
     }
 }
@@ -28,7 +26,6 @@ impl fmt::Display for AutoError {
             AutoError::Runtime { message, line } => write!(f, "Runtime error at line {}: {}", line, message),
             AutoError::ActionFailed { message, line } => write!(f, "Action failed at line {}: {}", line, message),
             AutoError::Io(e) => write!(f, "IO error: {}", e),
-            AutoError::Session(msg) => write!(f, "Session error: {}", msg),
         }
     }
 }

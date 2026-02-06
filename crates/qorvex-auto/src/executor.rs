@@ -48,7 +48,6 @@ impl ScriptExecutor {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AutoError>> + 'a>> {
         Box::pin(async move {
             match stmt {
-                Statement::Comment(_) => Ok(()),
                 Statement::Command(call) => {
                     self.execute_command(call).await?;
                     Ok(())

@@ -26,7 +26,6 @@ pub enum Statement {
         then_block: Vec<Statement>,
         else_block: Option<Vec<Statement>>,
     },
-    Comment(String),
 }
 
 #[derive(Debug, Clone)]
