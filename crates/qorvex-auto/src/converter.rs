@@ -21,7 +21,6 @@ impl LogConverter {
 
     fn convert_str(content: &str) -> Result<String, AutoError> {
         let mut lines = Vec::new();
-        lines.push("start_session".to_string());
 
         for line in content.lines() {
             let line = line.trim();
@@ -38,7 +37,6 @@ impl LogConverter {
             }
         }
 
-        lines.push("end_session".to_string());
         Ok(lines.join("\n") + "\n")
     }
 
@@ -264,10 +262,10 @@ mod tests {
         );
 
         let result = LogConverter::convert_str(&jsonl).unwrap();
-        assert!(result.contains("start_session"));
         assert!(result.contains("tap(\"btn\")"));
-        assert!(result.contains("end_session"));
-        // StartSession/EndSession from log should be skipped, but the wrapper adds them
-        assert_eq!(result.lines().count(), 3); // start_session, tap, end_session
+        assert!(!result.contains("start_session"));
+        assert!(!result.contains("end_session"));
+        // Only the tap action should remain; session lifecycle is handled by `run`
+        assert_eq!(result.lines().count(), 1); // tap
     }
 }

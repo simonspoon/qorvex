@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use qorvex_core::action::{ActionResult, ActionType};
@@ -9,6 +11,7 @@ use qorvex_core::watcher::{ScreenWatcher, WatcherConfig, WatcherHandle};
 
 use crate::ast::*;
 use crate::error::AutoError;
+use crate::parser;
 use crate::runtime::{Runtime, Value};
 
 pub struct ScriptExecutor {
@@ -18,10 +21,12 @@ pub struct ScriptExecutor {
     simulator_udid: Option<String>,
     watcher_handle: Option<WatcherHandle>,
     default_timeout_ms: u64,
+    base_dir: PathBuf,
+    include_stack: HashSet<PathBuf>,
 }
 
 impl ScriptExecutor {
-    pub fn new(session: Arc<Session>, simulator_udid: Option<String>) -> Self {
+    pub fn new(session: Arc<Session>, simulator_udid: Option<String>, base_dir: PathBuf) -> Self {
         let executor = simulator_udid.as_ref().map(|udid| {
             let mut e = ActionExecutor::new(udid.clone());
             e.set_capture_screenshots(false);
@@ -34,6 +39,8 @@ impl ScriptExecutor {
             simulator_udid,
             watcher_handle: None,
             default_timeout_ms: 5000,
+            base_dir,
+            include_stack: HashSet::new(),
         }
     }
 
@@ -127,6 +134,45 @@ impl ScriptExecutor {
                     }
                     Ok(())
                 }
+                Statement::Include { path, line } => {
+                    let val = self.eval_expression(path, *line).await?;
+                    let raw_path = val.as_string();
+                    let resolved = self.resolve_include_path(&raw_path);
+                    let canonical = resolved.canonicalize().map_err(|e| AutoError::Runtime {
+                        message: format!("Cannot resolve include path '{}': {}", raw_path, e),
+                        line: *line,
+                    })?;
+
+                    if self.include_stack.contains(&canonical) {
+                        return Err(AutoError::Runtime {
+                            message: format!("Circular include detected: {}", canonical.display()),
+                            line: *line,
+                        });
+                    }
+
+                    let source = std::fs::read_to_string(&canonical).map_err(|e| AutoError::Runtime {
+                        message: format!("Cannot read '{}': {}", canonical.display(), e),
+                        line: *line,
+                    })?;
+                    let included_script = parser::parse(&source).map_err(|e| AutoError::Runtime {
+                        message: format!("In included file '{}': {}", raw_path, e),
+                        line: *line,
+                    })?;
+
+                    let prev_base = self.base_dir.clone();
+                    if let Some(parent) = canonical.parent() {
+                        self.base_dir = parent.to_path_buf();
+                    }
+                    self.include_stack.insert(canonical.clone());
+
+                    eprintln!("[line {}] Including {}", line, canonical.display());
+                    let result = self.execute_script(&included_script).await;
+
+                    self.include_stack.remove(&canonical);
+                    self.base_dir = prev_base;
+
+                    result
+                }
             }
         })
     }
@@ -177,26 +223,11 @@ impl ScriptExecutor {
 
         match call.name.as_str() {
             "start_session" => {
-                let _ = self.session.log_action(
-                    ActionType::StartSession,
-                    ActionResult::Success,
-                    None,
-                    None,
-                ).await;
-                eprintln!("[line {}] Session started", line);
+                eprintln!("[line {}] start_session is handled automatically and can be removed from scripts", line);
                 Ok(Value::String("Session started".to_string()))
             }
             "end_session" => {
-                if let Some(handle) = self.watcher_handle.take() {
-                    handle.cancel();
-                }
-                let _ = self.session.log_action(
-                    ActionType::EndSession,
-                    ActionResult::Success,
-                    None,
-                    None,
-                ).await;
-                eprintln!("[line {}] Session ended", line);
+                eprintln!("[line {}] end_session is handled automatically and can be removed from scripts", line);
                 Ok(Value::String("Session ended".to_string()))
             }
             "use_device" => {
@@ -459,6 +490,15 @@ impl ScriptExecutor {
         let w = frame.get("width")?.as_f64()?;
         let h = frame.get("height")?.as_f64()?;
         Some(((x + w / 2.0) as i32, (y + h / 2.0) as i32))
+    }
+
+    fn resolve_include_path(&self, path: &str) -> PathBuf {
+        let p = Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.base_dir.join(p)
+        }
     }
 
     fn require_executor(&self, line: usize) -> Result<&ActionExecutor, AutoError> {

@@ -31,6 +31,10 @@ pub enum Statement {
         value: Expression,
         line: usize,
     },
+    Include {
+        path: Expression,
+        line: usize,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -35,6 +35,7 @@ enum Token {
     If,
     Else,
     Set,
+    Include,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +209,7 @@ fn tokenize(source: &str) -> Result<Vec<Located>, AutoError> {
                     "if" => Token::If,
                     "else" => Token::Else,
                     "set" => Token::Set,
+                    "include" => Token::Include,
                     _ => Token::Ident(ident),
                 };
                 tokens.push(Located { token, line });
@@ -294,6 +296,7 @@ impl Parser {
             Some(Token::For) => self.parse_for(),
             Some(Token::If) => self.parse_if(),
             Some(Token::Set) => self.parse_set(),
+            Some(Token::Include) => self.parse_include(),
             Some(Token::Ident(_)) => {
                 // Look ahead: is this `ident = expr` or `ident(args)`?
                 let ident_pos = self.pos;
@@ -402,6 +405,13 @@ impl Parser {
         };
         let value = self.parse_expression()?;
         Ok(Statement::Set { key, value, line })
+    }
+
+    fn parse_include(&mut self) -> Result<Statement, AutoError> {
+        let line = self.current_line();
+        self.expect(&Token::Include)?;
+        let path = self.parse_expression()?;
+        Ok(Statement::Include { path, line })
     }
 
     fn parse_block(&mut self) -> Result<Vec<Statement>, AutoError> {
@@ -1023,5 +1033,44 @@ wait_for("dashboard")
     fn test_parse_set_missing_key() {
         let result = parse("set 5000");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_include() {
+        let script = parse(r#"include "login.qvx""#).unwrap();
+        assert_eq!(script.statements.len(), 1);
+        match &script.statements[0] {
+            Statement::Include { path, line } => {
+                assert!(matches!(path, Expression::String(s) if s == "login.qvx"));
+                assert_eq!(*line, 1);
+            }
+            _ => panic!("Expected Include"),
+        }
+    }
+
+    #[test]
+    fn test_parse_include_with_variable() {
+        let script = parse(r#"include "scripts/$name.qvx""#).unwrap();
+        assert_eq!(script.statements.len(), 1);
+        match &script.statements[0] {
+            Statement::Include { path, .. } => {
+                // Interpolated string produces a BinaryOp::Add chain
+                assert!(matches!(path, Expression::BinaryOp { op: BinOp::Add, .. }));
+            }
+            _ => panic!("Expected Include"),
+        }
+    }
+
+    #[test]
+    fn test_parse_include_in_script() {
+        let script = parse(r#"
+include "setup.qvx"
+tap("login-button")
+include "teardown.qvx"
+"#).unwrap();
+        assert_eq!(script.statements.len(), 3);
+        assert!(matches!(&script.statements[0], Statement::Include { .. }));
+        assert!(matches!(&script.statements[1], Statement::Command(_)));
+        assert!(matches!(&script.statements[2], Statement::Include { .. }));
     }
 }

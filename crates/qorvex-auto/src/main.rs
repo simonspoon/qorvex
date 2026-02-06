@@ -76,14 +76,22 @@ async fn main() {
 }
 
 async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<(), AutoError> {
-    // Read the script source
-    let source = match script_path {
-        Some(path) => std::fs::read_to_string(&path).map_err(|e| AutoError::Io(e))?,
+    // Read the script source and determine base directory for includes
+    let (source, base_dir) = match script_path {
+        Some(ref path) => {
+            let src = std::fs::read_to_string(path).map_err(|e| AutoError::Io(e))?;
+            let dir = path.canonicalize()
+                .unwrap_or_else(|_| path.clone())
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            (src, dir)
+        }
         None => {
             use std::io::Read;
             let mut buf = String::new();
             std::io::stdin().read_to_string(&mut buf)?;
-            buf
+            (buf, std::env::current_dir().unwrap_or_default())
         }
     };
 
@@ -108,9 +116,24 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
         let _ = server.run().await;
     });
 
-    // Execute
-    let mut script_executor = ScriptExecutor::new(session, simulator_udid);
+    // Execute with automatic session lifecycle
+    let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir);
+
+    session.log_action(
+        qorvex_core::action::ActionType::StartSession,
+        qorvex_core::action::ActionResult::Success,
+        None,
+        None,
+    ).await;
+
     let result = script_executor.execute_script(&script).await;
+
+    session.log_action(
+        qorvex_core::action::ActionType::EndSession,
+        qorvex_core::action::ActionResult::Success,
+        None,
+        None,
+    ).await;
 
     // Brief delay for event delivery to connected watchers
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
