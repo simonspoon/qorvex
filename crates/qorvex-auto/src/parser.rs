@@ -1,10 +1,18 @@
 use crate::ast::*;
 use crate::error::AutoError;
 
+/// A segment of an interpolated string: either a literal part or a variable reference.
+#[derive(Debug, Clone, PartialEq)]
+enum StringSegment {
+    Literal(String),
+    Variable(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Ident(String),
     String(String),
+    InterpolatedString(Vec<StringSegment>),
     Number(i64),
     LParen,
     RParen,
@@ -92,15 +100,21 @@ fn tokenize(source: &str) -> Result<Vec<Located>, AutoError> {
             }
             '"' | '\'' => {
                 let quote = ch;
+                let is_double = quote == '"';
                 chars.next();
                 let mut s = String::new();
+                // For double-quoted strings, track segments for interpolation
+                let mut segments: Vec<StringSegment> = Vec::new();
+                let mut has_interpolation = false;
                 loop {
-                    match chars.next() {
-                        Some('\\') => {
+                    match chars.peek() {
+                        Some(&'\\') => {
+                            chars.next();
                             match chars.next() {
                                 Some('n') => s.push('\n'),
                                 Some('t') => s.push('\t'),
                                 Some('\\') => s.push('\\'),
+                                Some('$') if is_double => s.push('$'),
                                 Some(c) if c == quote => s.push(c),
                                 Some(c) => { s.push('\\'); s.push(c); }
                                 None => return Err(AutoError::Parse {
@@ -109,15 +123,50 @@ fn tokenize(source: &str) -> Result<Vec<Located>, AutoError> {
                                 }),
                             }
                         }
-                        Some(c) if c == quote => break,
-                        Some(c) => s.push(c),
+                        Some(&'$') if is_double => {
+                            chars.next();
+                            // Collect identifier after $
+                            let mut ident = String::new();
+                            while let Some(&c) = chars.peek() {
+                                if c.is_ascii_alphanumeric() || c == '_' {
+                                    ident.push(c);
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if ident.is_empty() {
+                                // Bare $ with no identifier, treat as literal
+                                s.push('$');
+                            } else {
+                                has_interpolation = true;
+                                if !s.is_empty() {
+                                    segments.push(StringSegment::Literal(std::mem::take(&mut s)));
+                                }
+                                segments.push(StringSegment::Variable(ident));
+                            }
+                        }
+                        Some(&c) if c == quote => {
+                            chars.next();
+                            break;
+                        }
+                        Some(_) => {
+                            s.push(chars.next().unwrap());
+                        }
                         None => return Err(AutoError::Parse {
                             message: "Unterminated string".to_string(),
                             line,
                         }),
                     }
                 }
-                tokens.push(Located { token: Token::String(s), line });
+                if has_interpolation {
+                    if !s.is_empty() {
+                        segments.push(StringSegment::Literal(s));
+                    }
+                    tokens.push(Located { token: Token::InterpolatedString(segments), line });
+                } else {
+                    tokens.push(Located { token: Token::String(s), line });
+                }
             }
             c if c.is_ascii_digit() || (c == '-' && chars.clone().nth(1).map_or(false, |n| n.is_ascii_digit())) => {
                 let mut num_str = String::new();
@@ -429,6 +478,28 @@ impl Parser {
             Some(Token::String(_)) => {
                 if let Some(Token::String(s)) = self.advance().cloned() {
                     Ok(Expression::String(s))
+                } else {
+                    unreachable!()
+                }
+            }
+            Some(Token::InterpolatedString(_)) => {
+                if let Some(Token::InterpolatedString(segments)) = self.advance().cloned() {
+                    // Build a chain of BinaryOp::Add from segments
+                    let mut exprs: Vec<Expression> = segments.into_iter().map(|seg| {
+                        match seg {
+                            StringSegment::Literal(s) => Expression::String(s),
+                            StringSegment::Variable(name) => Expression::Variable(name),
+                        }
+                    }).collect();
+                    // Fold left into Add chain
+                    let first = exprs.remove(0);
+                    Ok(exprs.into_iter().fold(first, |acc, expr| {
+                        Expression::BinaryOp {
+                            op: BinOp::Add,
+                            left: Box::new(acc),
+                            right: Box::new(expr),
+                        }
+                    }))
                 } else {
                     unreachable!()
                 }
@@ -780,6 +851,128 @@ end_session
                     Expression::String(s) => assert_eq!(s, "line1\nline2"),
                     _ => panic!("Expected String"),
                 }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interpolated_string_single_var() {
+        let script = parse(r#"log("Hello $name")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                assert_eq!(call.name, "log");
+                assert_eq!(call.args.len(), 1);
+                // Should be BinaryOp::Add("Hello ", Variable("name"))
+                match &call.args[0] {
+                    Expression::BinaryOp { op: BinOp::Add, left, right } => {
+                        assert!(matches!(left.as_ref(), Expression::String(s) if s == "Hello "));
+                        assert!(matches!(right.as_ref(), Expression::Variable(v) if v == "name"));
+                    }
+                    _ => panic!("Expected BinaryOp, got {:?}", call.args[0]),
+                }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interpolated_string_multiple_vars() {
+        let script = parse(r#"log("Iteration:$i Screen: $sometext")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                // Should produce: Add(Add(Add("Iteration:", var(i)), " Screen: "), var(sometext))
+                assert!(matches!(&call.args[0], Expression::BinaryOp { op: BinOp::Add, .. }));
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interpolated_string_var_at_start() {
+        let script = parse(r#"log("$name is here")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                match &call.args[0] {
+                    Expression::BinaryOp { op: BinOp::Add, left, right } => {
+                        assert!(matches!(left.as_ref(), Expression::Variable(v) if v == "name"));
+                        assert!(matches!(right.as_ref(), Expression::String(s) if s == " is here"));
+                    }
+                    _ => panic!("Expected BinaryOp, got {:?}", call.args[0]),
+                }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interpolated_string_var_at_end() {
+        let script = parse(r#"log("Value: $val")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                match &call.args[0] {
+                    Expression::BinaryOp { op: BinOp::Add, left, right } => {
+                        assert!(matches!(left.as_ref(), Expression::String(s) if s == "Value: "));
+                        assert!(matches!(right.as_ref(), Expression::Variable(v) if v == "val"));
+                    }
+                    _ => panic!("Expected BinaryOp, got {:?}", call.args[0]),
+                }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_single_quote_no_interpolation() {
+        // Single quotes should NOT interpolate
+        let script = parse("log('Hello $name')").unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                match &call.args[0] {
+                    Expression::String(s) => assert_eq!(s, "Hello $name"),
+                    _ => panic!("Expected plain String (no interpolation in single quotes)"),
+                }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_escaped_dollar_no_interpolation() {
+        let script = parse(r#"log("Price: \$99")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                match &call.args[0] {
+                    Expression::String(s) => assert_eq!(s, "Price: $99"),
+                    _ => panic!("Expected plain String (escaped dollar)"),
+                }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_bare_dollar_no_interpolation() {
+        // $ followed by non-identifier chars is treated as literal
+        let script = parse(r#"log("Cost: $ 5")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                match &call.args[0] {
+                    Expression::String(s) => assert_eq!(s, "Cost: $ 5"),
+                    _ => panic!("Expected plain String"),
+                }
+            }
+            _ => panic!("Expected Command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interpolated_string_only_var() {
+        let script = parse(r#"log("$x")"#).unwrap();
+        match &script.statements[0] {
+            Statement::Command(call) => {
+                // Should be just Variable("x"), no wrapping needed
+                assert!(matches!(&call.args[0], Expression::Variable(v) if v == "x"));
             }
             _ => panic!("Expected Command"),
         }

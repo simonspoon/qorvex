@@ -281,7 +281,7 @@ impl ScriptExecutor {
                 Ok(Value::String(info))
             }
             "help" => {
-                eprintln!("Commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log_comment, start_watcher, stop_watcher, get_session_info, help");
+                eprintln!("Commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
                 Ok(Value::String("help".to_string()))
             }
             "tap" => {
@@ -402,7 +402,7 @@ impl ScriptExecutor {
                 let action = ActionType::GetScreenshot;
                 self.execute_action(action, line).await
             }
-            "log_comment" => {
+            "log" | "log_comment" => {
                 let message = args.first().ok_or_else(|| AutoError::Runtime {
                     message: "log_comment requires 1 argument".to_string(),
                     line,
