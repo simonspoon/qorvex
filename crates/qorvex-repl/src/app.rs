@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::ListState;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tui_input::Input;
@@ -27,6 +27,68 @@ use crate::format::{format_command, format_device, format_element, format_result
 /// Maximum number of lines to keep in output history.
 const MAX_OUTPUT_HISTORY: usize = 1000;
 
+/// A position in the output text (logical line index + column offset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextPosition {
+    /// Index into output_history.
+    pub line: usize,
+    /// Character column within the line.
+    pub col: usize,
+}
+
+impl TextPosition {
+    pub fn new(line: usize, col: usize) -> Self {
+        Self { line, col }
+    }
+}
+
+impl PartialOrd for TextPosition {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TextPosition {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.line.cmp(&other.line).then(self.col.cmp(&other.col))
+    }
+}
+
+/// Text selection state for the output area.
+#[derive(Debug, Default)]
+pub struct SelectionState {
+    /// Anchor point (where the mouse was pressed).
+    pub anchor: Option<TextPosition>,
+    /// Current end point (where the mouse is now).
+    pub endpoint: Option<TextPosition>,
+    /// Whether a drag is currently in progress.
+    pub dragging: bool,
+}
+
+impl SelectionState {
+    /// Returns the ordered (start, end) positions if a selection exists.
+    pub fn range(&self) -> Option<(TextPosition, TextPosition)> {
+        match (self.anchor, self.endpoint) {
+            (Some(a), Some(b)) if a != b => {
+                if a <= b { Some((a, b)) } else { Some((b, a)) }
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether there is an active selection.
+    pub fn has_selection(&self) -> bool {
+        self.range().is_some()
+    }
+
+    /// Clear the selection.
+    pub fn clear(&mut self) {
+        self.anchor = None;
+        self.endpoint = None;
+        self.dragging = false;
+    }
+}
+
 /// Application state.
 pub struct App {
     /// Text input widget state.
@@ -35,10 +97,12 @@ pub struct App {
     pub completion: CompletionState,
     /// Output history lines.
     pub output_history: VecDeque<Line<'static>>,
-    /// Scroll position in output.
+    /// Scroll offset from bottom (0 = at bottom).
     pub output_scroll_position: usize,
-    /// Scroll state for list widget.
-    pub output_scroll_state: ListState,
+    /// Text selection state for copy support.
+    pub selection: SelectionState,
+    /// Cached output area rect from last render (for mouse hit-testing).
+    pub output_area: Option<Rect>,
     /// Cached UI elements from last screen info.
     pub cached_elements: Vec<UIElement>,
     /// Cached simulator devices.
@@ -53,6 +117,8 @@ pub struct App {
     pub ipc_server_handle: Option<JoinHandle<()>>,
     /// Action executor for automation commands.
     pub executor: Option<ActionExecutor>,
+    /// Managed agent lifecycle (set when agent is started via start_agent with a path).
+    pub agent_lifecycle: Option<AgentLifecycle>,
     /// Screen watcher handle.
     pub watcher_handle: Option<WatcherHandle>,
     /// Channel receiver for element updates from session events.
@@ -78,13 +144,15 @@ impl App {
             completion: CompletionState::default(),
             output_history: VecDeque::new(),
             output_scroll_position: 0,
-            output_scroll_state: ListState::default(),
+            selection: SelectionState::default(),
+            output_area: None,
             cached_elements: Vec::new(),
             cached_devices,
             session_name,
             session: None,
             simulator_udid,
             executor,
+            agent_lifecycle: None,
             ipc_server_handle: None,
             watcher_handle: None,
             element_update_rx: None,
@@ -117,8 +185,7 @@ impl App {
             self.output_history.pop_front();
         }
         // Auto-scroll to bottom
-        self.output_scroll_position = self.output_history.len().saturating_sub(1);
-        self.output_scroll_state.select(Some(self.output_scroll_position));
+        self.output_scroll_position = 0;
     }
 
     /// Update completion state based on current input.
@@ -178,17 +245,58 @@ impl App {
         self.completion.hide();
     }
 
-    /// Scroll output up.
+    /// Scroll output up (away from bottom).
     pub fn scroll_up(&mut self) {
-        self.output_scroll_position = self.output_scroll_position.saturating_sub(1);
-        self.output_scroll_state.select(Some(self.output_scroll_position));
+        self.output_scroll_position = self.output_scroll_position.saturating_add(1);
     }
 
-    /// Scroll output down.
+    /// Scroll output down (toward bottom).
     pub fn scroll_down(&mut self) {
-        let max = self.output_history.len().saturating_sub(1);
-        self.output_scroll_position = (self.output_scroll_position + 1).min(max);
-        self.output_scroll_state.select(Some(self.output_scroll_position));
+        self.output_scroll_position = self.output_scroll_position.saturating_sub(1);
+    }
+
+    /// Extract the selected text from output history.
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection.range()?;
+        let mut result = String::new();
+
+        for i in start.line..=end.line.min(self.output_history.len().saturating_sub(1)) {
+            let line = &self.output_history[i];
+            let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+            let start_col = if i == start.line { start.col } else { 0 };
+            let end_col = if i == end.line { end.col } else { line_str.len() };
+
+            let start_col = start_col.min(line_str.len());
+            let end_col = end_col.min(line_str.len());
+
+            if start_col < end_col {
+                result.push_str(&line_str[start_col..end_col]);
+            } else if i == start.line && i == end.line {
+                // Single line, but cols might be equal — skip
+            } else {
+                // Full line selected but empty
+            }
+
+            if i < end.line {
+                result.push('\n');
+            }
+        }
+
+        if result.is_empty() { None } else { Some(result) }
+    }
+
+    /// Copy the current selection to the system clipboard.
+    pub fn copy_selection_to_clipboard(&mut self) -> bool {
+        if let Some(text) = self.selected_text() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                if clipboard.set_text(&text).is_ok() {
+                    self.selection.clear();
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Check for element updates from the watcher (non-blocking).
@@ -254,6 +362,10 @@ impl App {
                 self.element_update_rx = None;
                 if let Some(handle) = self.ipc_server_handle.take() {
                     handle.abort();
+                }
+                // Stop managed agent
+                if let Some(lifecycle) = self.agent_lifecycle.take() {
+                    let _ = lifecycle.terminate_agent();
                 }
                 self.session = None;
                 self.should_quit = true;
@@ -364,42 +476,85 @@ impl App {
                     self.add_output(format_result(false, "No simulator selected. Use use_device or boot_device first."));
                 } else {
                     let udid = self.simulator_udid.clone().unwrap();
-                    let app_path = args.first().map(|s| PathBuf::from(strip_quotes(s)));
-                    let has_app_path = app_path.is_some();
 
-                    let config = AgentLifecycleConfig {
-                        agent_app_path: app_path,
-                        agent_port: 8080,
-                        ..Default::default()
-                    };
-                    let lifecycle = AgentLifecycle::new(udid, config);
+                    if let Some(project_dir_str) = args.first() {
+                        // With path: build, spawn, wait, store lifecycle
+                        let project_dir = PathBuf::from(strip_quotes(project_dir_str));
+                        let config = AgentLifecycleConfig::new(project_dir);
+                        let lifecycle = AgentLifecycle::new(udid, config);
 
-                    self.add_output(Line::from("Starting agent..."));
+                        self.add_output(Line::from("Building and starting agent..."));
 
-                    let result = if has_app_path {
-                        lifecycle.ensure_running().await
-                    } else {
-                        match lifecycle.launch_agent() {
-                            Ok(()) => lifecycle.wait_for_ready().await,
-                            Err(e) => Err(e),
+                        match lifecycle.ensure_running().await {
+                            Ok(()) => {
+                                self.agent_lifecycle = Some(lifecycle);
+                                let mut driver = AgentDriver::direct("127.0.0.1", 8080);
+                                match driver.connect().await {
+                                    Ok(()) => {
+                                        self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                        self.add_output(format_result(true, "Agent started and connected"));
+                                    }
+                                    Err(e) => {
+                                        self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.add_output(format_result(false, &format!("Failed to start agent: {}", e)));
+                            }
                         }
-                    };
+                    } else {
+                        // No path: connect to externally-started agent
+                        self.add_output(Line::from("Connecting to agent..."));
+                        let config = AgentLifecycleConfig::new(PathBuf::new());
+                        let lifecycle = AgentLifecycle::new(udid, config);
 
-                    match result {
-                        Ok(()) => {
-                            let mut driver = AgentDriver::direct("localhost", 8080);
-                            match driver.connect().await {
+                        match lifecycle.wait_for_ready().await {
+                            Ok(()) => {
+                                let mut driver = AgentDriver::direct("127.0.0.1", 8080);
+                                match driver.connect().await {
+                                    Ok(()) => {
+                                        self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                        self.add_output(format_result(true, "Agent connected"));
+                                    }
+                                    Err(e) => {
+                                        self.add_output(format_result(false, &format!("Connection failed: {}", e)));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                self.add_output(format_result(false, &format!("Agent not reachable: {}", e)));
+                            }
+                        }
+                    }
+                }
+            }
+            "stop_agent" => {
+                if let Some(lifecycle) = self.agent_lifecycle.take() {
+                    let _ = lifecycle.terminate_agent();
+                    self.add_output(format_result(true, "Agent stopped"));
+                } else {
+                    self.add_output(format_result(false, "No managed agent to stop"));
+                }
+            }
+            "set_target" => {
+                let bundle_id = args.first().map(|s| strip_quotes(s)).unwrap_or("");
+                if bundle_id.is_empty() {
+                    self.add_output(format_result(false, "set_target requires 1 argument: set_target(bundle_id)"));
+                } else {
+                    match &self.executor {
+                        Some(executor) => {
+                            match executor.driver().set_target(bundle_id).await {
                                 Ok(()) => {
-                                    self.executor = Some(ActionExecutor::new(Arc::new(driver)));
-                                    self.add_output(format_result(true, "Agent started and connected"));
+                                    self.add_output(format_result(true, &format!("Target set to {}", bundle_id)));
                                 }
                                 Err(e) => {
-                                    self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
+                                    self.add_output(format_result(false, &format!("Failed to set target: {}", e)));
                                 }
                             }
                         }
-                        Err(e) => {
-                            self.add_output(format_result(false, &format!("Failed to start agent: {}", e)));
+                        None => {
+                            self.add_output(format_result(false, "No agent connected"));
                         }
                     }
                 }
@@ -818,8 +973,10 @@ impl App {
             "  list_devices           List available simulators",
             "  use_device(udid)       Select a simulator by UDID",
             "  boot_device(udid)      Boot a simulator",
-            "  start_agent            Launch agent (must be installed)",
-            "  start_agent(path)      Install and launch agent from .app",
+            "  start_agent            Connect to externally-started agent",
+            "  start_agent(path)      Build and launch agent from project dir",
+            "  stop_agent             Stop managed agent process",
+            "  set_target(bundle_id)  Set target app for automation",
             "",
             "Screen:",
             "  get_screenshot         Capture a screenshot (base64 PNG)",

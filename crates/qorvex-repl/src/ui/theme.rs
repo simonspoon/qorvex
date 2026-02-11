@@ -76,6 +76,11 @@ impl Theme {
         Style::default().fg(Color::Black).bg(Color::Cyan)
     }
 
+    /// Text selection highlight (mouse selection for copy).
+    pub fn text_selection() -> Style {
+        Style::default().bg(Color::DarkGray).fg(Color::White)
+    }
+
     /// Title bar styling.
     pub fn title() -> Style {
         Style::default().fg(Color::Cyan)

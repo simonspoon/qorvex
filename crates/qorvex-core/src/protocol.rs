@@ -92,6 +92,8 @@ pub enum OpCode {
     DumpTree = 0x10,
     /// Request a screenshot capture (no payload).
     Screenshot = 0x11,
+    /// Set the target application for accessibility queries (length-prefixed string).
+    SetTarget = 0x12,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -113,6 +115,7 @@ impl OpCode {
             0x09 => Ok(OpCode::LongPress),
             0x10 => Ok(OpCode::DumpTree),
             0x11 => Ok(OpCode::Screenshot),
+            0x12 => Ok(OpCode::SetTarget),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -163,6 +166,8 @@ pub enum Request {
     DumpTree,
     /// Request a screenshot.
     Screenshot,
+    /// Set the target application bundle ID for accessibility queries.
+    SetTarget { bundle_id: String },
 }
 
 /// Response sub-type byte used inside the `Response` opcode payload.
@@ -442,6 +447,10 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
         Request::Screenshot => {
             payload.push(OpCode::Screenshot as u8);
         }
+        Request::SetTarget { bundle_id } => {
+            payload.push(OpCode::SetTarget as u8);
+            write_string(&mut payload, bundle_id);
+        }
     }
 
     encode_frame(&payload)
@@ -535,6 +544,11 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
         OpCode::DumpTree => Ok(Request::DumpTree),
 
         OpCode::Screenshot => Ok(Request::Screenshot),
+
+        OpCode::SetTarget => {
+            let bundle_id = cur.read_string()?;
+            Ok(Request::SetTarget { bundle_id })
+        }
 
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
@@ -794,6 +808,13 @@ mod tests {
         round_trip_request(&Request::Screenshot);
     }
 
+    #[test]
+    fn request_set_target() {
+        round_trip_request(&Request::SetTarget {
+            bundle_id: "com.example.myapp".into(),
+        });
+    }
+
     // -- Response round-trips -----------------------------------------------
 
     #[test]
@@ -914,7 +935,7 @@ mod tests {
     #[test]
     fn opcode_round_trip() {
         let codes: Vec<u8> = vec![
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x99, 0xA0,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x99, 0xA0,
         ];
         for &code in &codes {
             let op = OpCode::from_u8(code).unwrap();

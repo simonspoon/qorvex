@@ -72,14 +72,14 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 ### qorvex-core modules
 
 #### Driver abstraction layer
-- **driver.rs** - `AutomationDriver` trait (17 async + 1 sync method) and `DriverConfig` enum (`Agent`, `Device`). Includes glob matching (`*`/`?`) for element selectors and element search helpers
+- **driver.rs** - `AutomationDriver` trait (18 async + 1 sync method) and `DriverConfig` enum (`Agent`, `Device`). Includes glob matching (`*`/`?`) for element selectors, element search helpers, and `set_target()` for switching target app
 - **element.rs** - Shared `UIElement` and `ElementFrame` types used by all backends
-- **protocol.rs** - Binary wire protocol codec (little-endian, 4-byte length header) for Rust ↔ Swift agent communication. Defines `OpCode`, `Request`, and `Response` enums
+- **protocol.rs** - Binary wire protocol codec (little-endian, 4-byte length header) for Rust ↔ Swift agent communication. Defines `OpCode` (including `SetTarget` for app switching), `Request`, and `Response` enums
 
 #### Backends
 - **agent_client.rs** - Low-level async TCP client (`AgentClient`) for Swift agent communication with timeouts and reconnection
-- **agent_driver.rs** - `AgentDriver`: implements `AutomationDriver` using Swift agent TCP connection. Supports `Direct` (simulator) and `UsbDevice` (physical) connection targets
-- **agent_lifecycle.rs** - Build, install, launch, health-check, and stop the Swift agent on simulators via `xcrun simctl`
+- **agent_driver.rs** - `AgentDriver`: implements `AutomationDriver` using Swift agent TCP connection. Supports `Direct` (simulator) and `UsbDevice` (physical) connection targets. Includes `set_target()` to switch target app bundle ID
+- **agent_lifecycle.rs** - `AgentLifecycle` struct managing full agent process lifecycle: build (`xcodebuild build-for-testing`), spawn (`test-without-building`), terminate, health-check via TCP heartbeat, and retry logic. Auto-cleanup via `Drop`. Configured via `AgentLifecycleConfig` (port, timeout, retries)
 - **usb_tunnel.rs** - Physical device discovery and port forwarding via usbmuxd (`idevice` crate). Provides `list_devices()` and `connect(udid, port)`
 
 #### Infrastructure
@@ -91,15 +91,15 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
 - **action.rs** - Unified action types (`Tap`, `TapLocation`, `Swipe`, `LongPress`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, session management) with selector/by_label/element_type pattern for element lookup. `ActionLog` includes optional `duration_ms` for timed actions
 - **executor.rs** - Backend-agnostic action execution engine. Takes `Arc<dyn AutomationDriver>` with convenience constructors: `with_agent(host, port)`, `from_config(config)`
-- **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash)
+- **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash) with configurable `visual_change_threshold` (hamming distance 0-64). Includes exponential backoff on errors
 
 ### qorvex-repl modules
 
-- **main.rs** - Entry point, event loop, and command dispatch
-- **app.rs** - Application state (input, completion, output history, session references)
+- **main.rs** - Entry point, event loop, command dispatch, and mouse event handling (drag-to-select, scroll, Ctrl+C copy)
+- **app.rs** - Application state (input, completion, output history, session references, text selection/clipboard, `AgentLifecycle` management). Supports `stop_agent` and `set_target` commands
 - **completion/** - Tab completion engine with command definitions, fuzzy matching, and context-aware suggestions
 - **format.rs** - Output formatting for commands, results, and elements
-- **ui/** - TUI rendering with ratatui (theme, completion popup, layout)
+- **ui/** - TUI rendering with ratatui (theme, completion popup, layout, selection overlay highlighting, scrollbar)
 
 ### qorvex-auto modules
 
@@ -113,14 +113,18 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 
 ### qorvex-agent (Swift)
 
-Not a Cargo crate — a Swift XCTest UI Testing project built with `xcodebuild`.
+Not a Cargo crate — a Swift XCTest UI Testing project generated via xcodegen from `project.yml`.
 
-- **AgentServer.swift** - NWListener TCP server (Network framework), accepts connections and dispatches to CommandHandler
-- **Protocol.swift** - Binary protocol codec matching the Rust side (OpCode enums, request/response encoding)
-- **CommandHandler.swift** - Executes XCUIElement accessibility actions (tap, swipe, type, getValue, dumpTree, screenshot)
+- **AgentServer.swift** - NWListener TCP server (Network framework), accepts connections and dispatches to CommandHandler on main thread
+- **Protocol.swift** - Binary protocol codec matching the Rust side (12 request opcodes including SetTarget, 5 response types)
+- **CommandHandler.swift** - Executes XCUIElement accessibility actions (tap, swipe, type, getValue, dumpTree, screenshot, setTarget) with ObjC exception catching via `QVXTryCatch()`
 - **UITreeSerializer.swift** - Serializes XCUIApplication accessibility hierarchy to JSON matching `UIElement`
-- **QorvexAgentTests.swift** - XCTest wrapper that starts the server and blocks
-- **Makefile** - Build/test commands using `xcodebuild`
+- **ObjCExceptionCatcher.{h,m}** - Objective-C `@try/@catch` bridge preventing XCUIElement NSExceptions from crashing the agent
+- **BridgingHeader.h** - Swift-ObjC bridging header for exception catcher
+- **App/QorvexAgentApp.swift** - Minimal SwiftUI app stub required by xcodegen project structure
+- **QorvexAgentTests.swift** - XCTest entry point that starts the server and blocks indefinitely
+- **project.yml** - XcodeGen project definition (app target + UI test bundle, iOS 16.0+)
+- **Makefile** - Build/test commands using `xcodebuild` with xcodegen project generation and auto-detection of booted simulator
 
 ### Data flow
 

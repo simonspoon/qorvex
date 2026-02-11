@@ -10,7 +10,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
@@ -315,6 +315,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
+    let inner_width = log_block.inner(chunks[1]).width as usize;
+
     let items: Vec<ListItem> = app.action_log.iter().map(|log| {
         let timestamp = log.timestamp.format("%H:%M:%S%.3f").to_string();
         let action_desc = format!("{:?}", log.action);
@@ -322,19 +324,41 @@ fn ui(f: &mut Frame, app: &mut App) {
             qorvex_core::action::ActionResult::Success => "success",
             qorvex_core::action::ActionResult::Failure(e) => e.as_str(),
         };
-        let has_screenshot = if log.screenshot.is_some() { "[img]" } else { "" };
+        let has_screenshot = if log.screenshot.is_some() { " [img]" } else { "" };
 
-        let line = Line::from(vec![
+        let header = Line::from(vec![
             Span::styled(timestamp, Style::default().fg(Color::Yellow)),
-            Span::raw(" "),
-            Span::styled(action_desc, Style::default().fg(Color::White)),
             Span::raw(" -> "),
-            Span::styled(result, Style::default().fg(if result == "success" { Color::Green } else { Color::Red })),
-            Span::raw(" "),
+            Span::styled(
+                result,
+                Style::default().fg(if result == "success" { Color::Green } else { Color::Red }),
+            ),
             Span::raw(has_screenshot),
         ]);
 
-        ListItem::new(line)
+        let indent = "  ";
+        let wrap_width = inner_width.saturating_sub(indent.len()).max(1);
+        let mut lines = vec![header];
+
+        let mut remaining = action_desc.as_str();
+        while !remaining.is_empty() {
+            let (chunk, rest) = if remaining.len() > wrap_width {
+                let break_at = remaining[..wrap_width]
+                    .rfind(|c: char| c == ' ' || c == ',' || c == '{' || c == '}')
+                    .map(|i| i + 1)
+                    .unwrap_or(wrap_width);
+                (&remaining[..break_at], &remaining[break_at..])
+            } else {
+                (remaining, "")
+            };
+            lines.push(Line::from(vec![
+                Span::raw(indent.to_string()),
+                Span::styled(chunk.to_string(), Style::default().fg(Color::White)),
+            ]));
+            remaining = rest;
+        }
+
+        ListItem::new(Text::from(lines))
     }).collect();
 
     let list = List::new(items)

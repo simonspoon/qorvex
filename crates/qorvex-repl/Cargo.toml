@@ -17,3 +17,4 @@ clap = { version = "4", features = ["derive"] }
 ratatui = { version = "0.30", features = ["crossterm"] }
 tui-input = "0.15"
 fuzzy-matcher = "0.3"
+arboard = "3"

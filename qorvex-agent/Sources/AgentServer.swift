@@ -159,7 +159,9 @@ final class AgentServer {
             let response: AgentResponse
             do {
                 let request = try decodeRequest(from: payloadData)
-                response = self.handler.handle(request)
+                response = DispatchQueue.main.sync {
+                    self.handler.handle(request)
+                }
             } catch {
                 NSLog("[qorvex-agent] Decode error: %@", "\(error)")
                 response = .error(message: "decode error: \(error)")

@@ -4,7 +4,7 @@
 import XCTest
 
 final class CommandHandler {
-    private let app: XCUIApplication
+    private var app: XCUIApplication
 
     init(app: XCUIApplication) {
         self.app = app
@@ -49,6 +49,9 @@ final class CommandHandler {
 
         case .screenshot:
             return handleScreenshot()
+
+        case .setTarget(let bundleId):
+            return handleSetTarget(bundleId: bundleId)
         }
     }
 
@@ -58,7 +61,14 @@ final class CommandHandler {
         let coordinate = app.coordinate(
             withNormalizedOffset: CGVector(dx: 0, dy: 0)
         ).withOffset(CGVector(dx: Double(x), dy: Double(y)))
-        coordinate.tap()
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            coordinate.tap()
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Tap failed: \(msg)")
+        }
         return .ok
     }
 
@@ -69,11 +79,26 @@ final class CommandHandler {
             NSPredicate(format: "identifier == %@", selector)
         ).firstMatch
 
-        guard element.exists else {
-            return .error(message: "Element with identifier '\(selector)' not found")
+        var errorMsg: String?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            guard element.exists else {
+                errorMsg = "Element with identifier '\(selector)' not found"
+                return
+            }
+            guard element.isHittable else {
+                errorMsg = "Element with identifier '\(selector)' exists but is not hittable"
+                return
+            }
+            element.tap()
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Tap failed: \(msg)")
         }
-
-        element.tap()
+        if let errorMsg = errorMsg {
+            return .error(message: errorMsg)
+        }
         return .ok
     }
 
@@ -84,11 +109,26 @@ final class CommandHandler {
             NSPredicate(format: "label == %@", label)
         ).firstMatch
 
-        guard element.exists else {
-            return .error(message: "Element with label '\(label)' not found")
+        var errorMsg: String?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            guard element.exists else {
+                errorMsg = "Element with label '\(label)' not found"
+                return
+            }
+            guard element.isHittable else {
+                errorMsg = "Element with label '\(label)' exists but is not hittable"
+                return
+            }
+            element.tap()
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Tap failed: \(msg)")
         }
-
-        element.tap()
+        if let errorMsg = errorMsg {
+            return .error(message: errorMsg)
+        }
         return .ok
     }
 
@@ -105,14 +145,28 @@ final class CommandHandler {
         )
 
         let element = query.firstMatch
-        guard element.exists else {
-            let lookupKind = byLabel ? "label" : "identifier"
-            return .error(
-                message: "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found"
-            )
+        var errorMsg: String?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            guard element.exists else {
+                let lookupKind = byLabel ? "label" : "identifier"
+                errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found"
+                return
+            }
+            guard element.isHittable else {
+                let lookupKind = byLabel ? "label" : "identifier"
+                errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' exists but is not hittable"
+                return
+            }
+            element.tap()
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Tap failed: \(msg)")
         }
-
-        element.tap()
+        if let errorMsg = errorMsg {
+            return .error(message: errorMsg)
+        }
         return .ok
     }
 
@@ -121,17 +175,30 @@ final class CommandHandler {
     private func handleTypeText(text: String) -> AgentResponse {
         // Type text into the element that currently has keyboard focus.
         // On iOS, the first responder receives typeText events through the app.
-        // We try to find the focused element first; if we can't, we use the app
-        // directly which sends events to the key window.
+        // We try to find the focused element first; if we can't, we check for
+        // a visible keyboard and use the app directly. If neither is available,
+        // return an error instead of crashing from an unhandled ObjC exception.
         let focusedElement = app.descendants(matching: .any).matching(
             NSPredicate(format: "hasKeyboardFocus == YES")
         ).firstMatch
 
-        if focusedElement.exists {
-            focusedElement.typeText(text)
-        } else {
-            // Fallback: type into the app. XCUIApplication forwards to key window.
-            app.typeText(text)
+        var errorMsg: String?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            if focusedElement.exists {
+                focusedElement.typeText(text)
+            } else if self.app.keyboards.firstMatch.exists {
+                self.app.typeText(text)
+            } else {
+                errorMsg = "No keyboard visible; tap a text field first"
+            }
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "TypeText failed: \(msg)")
+        }
+        if let errorMsg = errorMsg {
+            return .error(message: errorMsg)
         }
         return .ok
     }
@@ -152,8 +219,15 @@ final class CommandHandler {
         ).withOffset(CGVector(dx: Double(endX), dy: Double(endY)))
 
         let swipeDuration = duration ?? 0.3
-        startCoord.press(forDuration: 0.05, thenDragTo: endCoord, withVelocity: .default,
-                         thenHoldForDuration: 0)
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            startCoord.press(forDuration: 0.05, thenDragTo: endCoord, withVelocity: .default,
+                             thenHoldForDuration: 0)
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Swipe failed: \(msg)")
+        }
         // Note: For more precise duration control, we use press+drag.
         // The velocity-based API doesn't directly accept duration, so we approximate.
         // An alternative for exact duration:
@@ -170,7 +244,14 @@ final class CommandHandler {
         let coordinate = app.coordinate(
             withNormalizedOffset: CGVector(dx: 0, dy: 0)
         ).withOffset(CGVector(dx: Double(x), dy: Double(y)))
-        coordinate.press(forDuration: duration)
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            coordinate.press(forDuration: duration)
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Long press failed: \(msg)")
+        }
         return .ok
     }
 
@@ -191,29 +272,51 @@ final class CommandHandler {
             ).firstMatch
         }
 
-        guard element.exists else {
-            let lookupKind = byLabel ? "label" : "identifier"
-            let typeInfo = elementType.map { " and type '\($0)'" } ?? ""
-            return .error(
-                message: "Element with \(lookupKind) '\(selector)'\(typeInfo) not found"
-            )
+        var result: AgentResponse?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            guard element.exists else {
+                let lookupKind = byLabel ? "label" : "identifier"
+                let typeInfo = elementType.map { " and type '\($0)'" } ?? ""
+                result = .error(
+                    message: "Element with \(lookupKind) '\(selector)'\(typeInfo) not found"
+                )
+                return
+            }
+            let value = element.value as? String ?? element.label
+            if value.isEmpty {
+                result = .value(nil)
+            } else {
+                result = .value(value)
+            }
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "GetValue failed: \(msg)")
         }
-
-        let value = element.value as? String ?? element.label
-        if value.isEmpty {
-            return .value(nil)
-        }
-        return .value(value)
+        return result ?? .error(message: "GetValue produced no result")
     }
 
     // MARK: - Dump tree
 
     private func handleDumpTree() -> AgentResponse {
-        let snapshot: XCUIElementSnapshot
-        do {
-            snapshot = try app.snapshot()
-        } catch {
-            return .error(message: "Failed to capture accessibility tree: \(error)")
+        var snapshot: XCUIElementSnapshot?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            do {
+                snapshot = try self.app.snapshot()
+            } catch {
+                snapshot = nil
+            }
+        }, &objcError)
+
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Failed to capture accessibility tree: \(msg)")
+        }
+
+        guard let snapshot = snapshot else {
+            return .error(message: "Failed to capture accessibility tree: snapshot returned nil")
         }
 
         let tree = serializeElement(snapshot)
@@ -233,9 +336,30 @@ final class CommandHandler {
     // MARK: - Screenshot
 
     private func handleScreenshot() -> AgentResponse {
-        let screenshot = XCUIScreen.main.screenshot()
-        let pngData = screenshot.pngRepresentation
-        return .screenshot(data: pngData)
+        var pngData: Data?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            let screenshot = XCUIScreen.main.screenshot()
+            pngData = screenshot.pngRepresentation
+        }, &objcError)
+
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Screenshot failed: \(msg)")
+        }
+
+        guard let data = pngData else {
+            return .error(message: "Screenshot failed: no PNG data produced")
+        }
+
+        return .screenshot(data: data)
+    }
+
+    // MARK: - Set target app
+
+    private func handleSetTarget(bundleId: String) -> AgentResponse {
+        app = XCUIApplication(bundleIdentifier: bundleId)
+        return .ok
     }
 
     // MARK: - Helpers

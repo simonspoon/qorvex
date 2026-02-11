@@ -476,6 +476,14 @@ pub trait AutomationDriver: Send + Sync {
     ///
     /// Raw PNG image bytes.
     async fn screenshot(&self) -> Result<Vec<u8>, DriverError>;
+
+    /// Set the target application for accessibility queries.
+    ///
+    /// Not all backends support this. The default implementation returns
+    /// an error.
+    async fn set_target(&self, _bundle_id: &str) -> Result<(), DriverError> {
+        Err(DriverError::CommandFailed("set_target not supported by this backend".to_string()))
+    }
 }
 
 #[cfg(test)]

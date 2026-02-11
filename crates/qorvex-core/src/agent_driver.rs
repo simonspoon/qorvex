@@ -351,6 +351,13 @@ impl AutomationDriver for AgentDriver {
             ))),
         }
     }
+
+    async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
+        let response = self.send(&Request::SetTarget {
+            bundle_id: bundle_id.to_string(),
+        }).await?;
+        expect_ok(response)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -800,6 +807,15 @@ mod tests {
 
         let data = driver.screenshot().await.unwrap();
         assert_eq!(data, png_header);
+    }
+
+    #[tokio::test]
+    async fn set_target_sends_request() {
+        let addr = mock_server_with_connect(Response::Ok).await;
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        driver.connect().await.unwrap();
+
+        driver.set_target("com.example.myapp").await.unwrap();
     }
 
     #[tokio::test]

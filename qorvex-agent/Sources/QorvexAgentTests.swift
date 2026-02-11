@@ -16,10 +16,9 @@ final class QorvexAgentTests: XCTestCase {
     /// simulator. It does NOT launch any app itself -- the Rust host is responsible
     /// for launching and managing the target app via `simctl`.
     func testRunAgent() throws {
-        let app = XCUIApplication()
-        // Do NOT call app.launch() -- we operate on the current foreground app.
-        // XCUIApplication() without launch() gives us a handle to query the
-        // accessibility hierarchy without changing the running app.
+        let app = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // Default to SpringBoard, which is always running on the simulator.
+        // Use the SetTarget protocol command to switch to a specific app.
 
         let handler = CommandHandler(app: app)
         let server = AgentServer(port: 8080, handler: handler)

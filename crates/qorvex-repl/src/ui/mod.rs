@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Modifier,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 
@@ -30,6 +30,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     render_title(frame, app, chunks[0]);
+    app.output_area = Some(chunks[1]);
     render_output(frame, app, chunks[1]);
     render_input(frame, app, chunks[2]);
 
@@ -55,7 +56,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(" qorvex-repl ", Theme::title().add_modifier(Modifier::BOLD)),
         Span::styled(format!("({}) ", session_info), Theme::muted()),
         Span::styled(format!("[{}] ", device_info), Theme::muted()),
-        Span::styled("[q=quit, Tab=complete]", Theme::muted()),
+        Span::styled("[q=quit, Tab=complete, Ctrl+C=copy/quit]", Theme::muted()),
     ]);
 
     let block = Block::default()
@@ -73,27 +74,107 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
         .border_style(Theme::muted());
 
     let inner = block.inner(area);
+    let inner_width = inner.width as usize;
+    let viewport_height = inner.height as usize;
 
-    // Convert output lines to ListItems
-    let items: Vec<ListItem> = app.output_history
-        .iter()
-        .map(|line| ListItem::new(line.clone()))
-        .collect();
+    let lines: Vec<Line> = app.output_history.iter().cloned().collect();
 
-    let list = List::new(items)
+    // Calculate total visual lines after wrapping
+    let total_visual_lines: usize = lines.iter().map(|line| {
+        let w = line.width();
+        if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width }
+    }).sum();
+
+    // Clamp scroll offset and compute scroll position
+    let max_scroll = total_visual_lines.saturating_sub(viewport_height);
+    app.output_scroll_position = app.output_scroll_position.min(max_scroll);
+    let scroll_y = max_scroll.saturating_sub(app.output_scroll_position);
+
+    let paragraph = Paragraph::new(lines)
         .block(block)
-        .highlight_style(Theme::selected());
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_y as u16, 0));
 
-    frame.render_stateful_widget(list, area, &mut app.output_scroll_state);
+    frame.render_widget(paragraph, area);
+
+    // Render selection overlay
+    if let Some((sel_start, sel_end)) = app.selection.range() {
+        let sel_style = Theme::text_selection();
+        let lines_vec: Vec<&Line> = app.output_history.iter().collect();
+
+        // Walk through visual lines to find which screen cells to highlight
+        let mut visual_row: usize = 0;
+        for (line_idx, line) in lines_vec.iter().enumerate() {
+            let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let w = line.width();
+            let wrapped_rows = if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width };
+
+            for wrap_row in 0..wrapped_rows {
+                let vrow = visual_row + wrap_row;
+
+                // Skip if before scroll viewport
+                if vrow < scroll_y {
+                    continue;
+                }
+                let screen_row = vrow - scroll_y;
+                if screen_row >= viewport_height {
+                    break;
+                }
+
+                // Character range for this wrapped row
+                let row_char_start = wrap_row * inner_width;
+                let row_char_end = ((wrap_row + 1) * inner_width).min(line_str.len());
+
+                // Determine selection overlap on this visual row
+                let sel_char_start = if line_idx == sel_start.line {
+                    sel_start.col
+                } else if line_idx > sel_start.line {
+                    0
+                } else {
+                    continue; // Before selection
+                };
+
+                let sel_char_end = if line_idx == sel_end.line {
+                    sel_end.col
+                } else if line_idx < sel_end.line {
+                    line_str.len()
+                } else {
+                    continue; // After selection
+                };
+
+                // Clip to this wrapped row
+                let highlight_start = sel_char_start.max(row_char_start);
+                let highlight_end = sel_char_end.min(row_char_end);
+
+                if highlight_start < highlight_end {
+                    let x = inner.x + (highlight_start - row_char_start) as u16;
+                    let y = inner.y + screen_row as u16;
+                    let width = (highlight_end - highlight_start) as u16;
+
+                    // Read the existing buffer cells and apply selection style on top
+                    for dx in 0..width {
+                        if let Some(cell) = frame.buffer_mut().cell_mut(ratatui::layout::Position::new(x + dx, y)) {
+                            cell.set_style(sel_style);
+                        }
+                    }
+                }
+            }
+
+            visual_row += wrapped_rows;
+            if visual_row >= scroll_y + viewport_height {
+                break; // Past viewport
+            }
+        }
+    }
 
     // Render scrollbar if needed
-    if app.output_history.len() > inner.height as usize {
+    if total_visual_lines > viewport_height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"));
 
-        let mut scrollbar_state = ScrollbarState::new(app.output_history.len())
-            .position(app.output_scroll_position);
+        let mut scrollbar_state = ScrollbarState::new(max_scroll)
+            .position(scroll_y);
 
         frame.render_stateful_widget(
             scrollbar,

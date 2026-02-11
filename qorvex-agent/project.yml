@@ -1,0 +1,40 @@
+name: QorvexAgent
+options:
+  bundleIdPrefix: com.qorvex
+  deploymentTarget:
+    iOS: "16.0"
+  generateEmptyDirectories: true
+targets:
+  QorvexAgent:
+    type: application
+    platform: iOS
+    sources:
+      - App/
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.qorvex.agent
+      GENERATE_INFOPLIST_FILE: "YES"
+      MARKETING_VERSION: "1.0"
+      CURRENT_PROJECT_VERSION: "1"
+      CODE_SIGN_IDENTITY: ""
+      CODE_SIGNING_ALLOWED: "NO"
+  QorvexAgentUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Sources/
+    dependencies:
+      - target: QorvexAgent
+    settings:
+      GENERATE_INFOPLIST_FILE: "YES"
+      CODE_SIGN_IDENTITY: ""
+      CODE_SIGNING_ALLOWED: "NO"
+      SWIFT_OBJC_BRIDGING_HEADER: "Sources/BridgingHeader.h"
+schemes:
+  QorvexAgentUITests:
+    build:
+      targets:
+        QorvexAgentUITests:
+          test: true
+    test:
+      targets:
+        - QorvexAgentUITests

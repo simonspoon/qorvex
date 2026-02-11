@@ -21,6 +21,7 @@ enum OpCode: UInt8 {
     case longPress  = 0x09
     case dumpTree   = 0x10
     case screenshot  = 0x11
+    case setTarget   = 0x12
     case error      = 0x99
     case response   = 0xA0
 }
@@ -51,6 +52,7 @@ enum AgentRequest {
     case longPress(x: Int32, y: Int32, duration: Double)
     case dumpTree
     case screenshot
+    case setTarget(bundleId: String)
 }
 
 // MARK: - Response
@@ -220,6 +222,10 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
 
     case .screenshot:
         return .screenshot
+
+    case .setTarget:
+        let bundleId = try cursor.readString()
+        return .setTarget(bundleId: bundleId)
 
     case .error, .response:
         throw ProtocolError.invalidPayload(

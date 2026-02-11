@@ -26,7 +26,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 
 - macOS with Xcode and iOS Simulators installed
 - Rust 1.70+
-- **For Swift agent**: Xcode project setup (see `qorvex-agent/README.md`)
+- **For Swift agent**: [xcodegen](https://github.com/yonaskolb/XcodeGen) and Xcode (see `qorvex-agent/README.md`)
 - **For physical devices**: USB-connected iOS device with developer mode enabled
 
 ## Installation
@@ -63,13 +63,18 @@ Controls:
 - `Esc` — Hide completion popup
 - `q` — Quit (when input is empty)
 - `↑/↓` — Navigate completion or scroll output
+- Mouse drag — Select text in output area
+- `Ctrl+C` — Copy selection to clipboard (or quit if no selection)
+- Scroll wheel — Scroll output area
 
 Available commands:
 - `list_devices` — List all available simulators
 - `use_device(udid)` — Select a simulator to use
 - `boot_device(udid)` — Boot and select a simulator
-- `start_agent` — Launch Swift agent (must already be installed)
-- `start_agent(path)` — Install and launch Swift agent from .app bundle
+- `start_agent` — Connect to externally-started Swift agent
+- `start_agent(path)` — Build and launch Swift agent from project directory
+- `stop_agent` — Stop a managed agent process
+- `set_target(bundle_id)` — Set target app bundle ID
 - `start_session` — Begin a new automation session
 - `end_session` — End the current session
 - `get_session_info` — Get session status info

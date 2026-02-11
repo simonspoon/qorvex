@@ -21,60 +21,20 @@ iOS Simulator accessibility layer
 
 The agent is packaged as an XCTest UI Testing target. When `xcodebuild test` runs it, the test starts a TCP server (using Apple's Network framework `NWListener`) on port 8080 and blocks indefinitely. The Rust host connects to this server and sends binary commands; the agent executes them via XCUIElement APIs and sends responses back.
 
-## Xcode Project Setup
+## Getting Started
 
-Since `.xcodeproj` files cannot be generated from source alone, you need to create the Xcode project manually. This is a one-time setup.
+### Prerequisites
 
-### Step 1: Create the Xcode Project
+- Xcode with iOS Simulator runtime
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
 
-1. Open Xcode
-2. **File > New > Project**
-3. Choose **iOS > App** (we need a minimal host app for the UI test target)
-4. Set:
-   - **Product Name**: `QorvexAgent`
-   - **Organization Identifier**: `com.qorvex`
-   - **Interface**: SwiftUI (doesn't matter, we won't use it)
-   - **Language**: Swift
-5. Save in this directory (`qorvex-agent/`)
-
-### Step 2: Add a UI Testing Target
-
-1. **File > New > Target**
-2. Choose **iOS > UI Testing Bundle**
-3. Set:
-   - **Product Name**: `QorvexAgentUITests`
-   - **Target to be Tested**: `QorvexAgent`
-
-### Step 3: Replace Generated Files
-
-1. In the Project Navigator, delete the auto-generated UI test file (`QorvexAgentUITests.swift`)
-2. Add the Swift source files from `Sources/`:
-   - Right-click `QorvexAgentUITests` group > **Add Files to "QorvexAgent"**
-   - Select all `.swift` files from `Sources/`
-   - Make sure **Target Membership** is set to `QorvexAgentUITests`
-
-### Step 4: Configure the UI Test Target
-
-1. Select the `QorvexAgentUITests` target
-2. **Build Settings**:
-   - Ensure `TARGETED_DEVICE_FAMILY` includes iPhone/iPad
-3. **General**:
-   - Ensure the test host is `QorvexAgent.app`
-
-### Step 5: Verify
-
-Build and run the test to verify everything links correctly:
+### Build and Run
 
 ```bash
-make test
-```
+# Install xcodegen (one-time)
+make install-xcodegen
 
-Or from Xcode: select the `QorvexAgentUITests` scheme and press Cmd+U.
-
-## Building
-
-```bash
-# Build the test bundle (without running)
+# Build the test bundle
 make build
 
 # Build and run the agent on the simulator
@@ -83,9 +43,11 @@ make run
 # Single-step build + run
 make test
 
-# Clean build artifacts
+# Clean build artifacts and generated project
 make clean
 ```
+
+The Makefile automatically generates the Xcode project from `project.yml` before building. No manual Xcode setup is needed.
 
 ## How It Works
 

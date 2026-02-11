@@ -132,28 +132,37 @@ impl ScreenWatcher {
         config: WatcherConfig,
         cancel_token: CancellationToken,
     ) {
-        let interval = tokio::time::Duration::from_millis(config.interval_ms);
+        let base_interval = tokio::time::Duration::from_millis(config.interval_ms);
+        let mut consecutive_errors: u32 = 0;
 
         loop {
+            let sleep_duration = Self::backoff_interval(base_interval, consecutive_errors);
+
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     break;
                 }
-                _ = tokio::time::sleep(interval) => {
-                    Self::check_for_changes(&session, &driver, &config).await;
+                _ = tokio::time::sleep(sleep_duration) => {
+                    let ok = Self::check_for_changes(&session, &driver, &config).await;
+                    if ok {
+                        consecutive_errors = 0;
+                    } else {
+                        consecutive_errors = consecutive_errors.saturating_add(1);
+                    }
                 }
             }
         }
     }
 
+    /// Returns `true` if the poll cycle completed successfully, `false` on error.
     async fn check_for_changes(
         session: &Arc<Session>,
         driver: &Arc<dyn AutomationDriver>,
         config: &WatcherConfig,
-    ) {
+    ) -> bool {
         let hierarchy = match driver.dump_tree().await {
             Ok(h) => h,
-            Err(_) => return, // Skip this poll on error
+            Err(_) => return false,
         };
 
         let elements = crate::driver::flatten_elements(&hierarchy);
@@ -170,7 +179,7 @@ impl ScreenWatcher {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     (Some(b64), dhash)
                 }
-                Err(_) => (None, None),
+                Err(_) => return false,
             }
         } else {
             (None, None)
@@ -180,6 +189,17 @@ impl ScreenWatcher {
         session
             .update_screen_info(elements, element_hash, screenshot, screenshot_hash, config.visual_change_threshold)
             .await;
+
+        true
+    }
+
+    /// Computes the backoff interval given the base interval and consecutive error count.
+    /// Doubles with each error, capped at 30 seconds.
+    fn backoff_interval(base: std::time::Duration, consecutive_errors: u32) -> std::time::Duration {
+        const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
+        let multiplier = 1u64.checked_shl(consecutive_errors).unwrap_or(u64::MAX);
+        let backoff = base.saturating_mul(multiplier as u32);
+        std::cmp::min(backoff, MAX_BACKOFF)
     }
 
     /// Computes a hash of the element list for change detection.
@@ -447,5 +467,35 @@ mod tests {
         // Similar images should have low Hamming distance
         let distance = ScreenWatcher::hamming_distance(hash1, hash2);
         assert!(distance <= 10, "Expected low distance for similar images, got {}", distance);
+    }
+
+    #[test]
+    fn test_backoff_interval_no_errors() {
+        let base = std::time::Duration::from_millis(500);
+        let result = ScreenWatcher::backoff_interval(base, 0);
+        assert_eq!(result, base);
+    }
+
+    #[test]
+    fn test_backoff_interval_doubles() {
+        let base = std::time::Duration::from_millis(500);
+        assert_eq!(ScreenWatcher::backoff_interval(base, 1), std::time::Duration::from_millis(1000));
+        assert_eq!(ScreenWatcher::backoff_interval(base, 2), std::time::Duration::from_millis(2000));
+        assert_eq!(ScreenWatcher::backoff_interval(base, 3), std::time::Duration::from_millis(4000));
+    }
+
+    #[test]
+    fn test_backoff_interval_caps_at_30s() {
+        let base = std::time::Duration::from_millis(500);
+        let result = ScreenWatcher::backoff_interval(base, 10);
+        assert_eq!(result, std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_backoff_interval_overflow_safe() {
+        let base = std::time::Duration::from_millis(500);
+        // Very large error count should not panic, should cap at 30s
+        let result = ScreenWatcher::backoff_interval(base, u32::MAX);
+        assert_eq!(result, std::time::Duration::from_secs(30));
     }
 }

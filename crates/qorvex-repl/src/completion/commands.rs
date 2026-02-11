@@ -82,9 +82,22 @@ pub static COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "start_agent",
-        description: "Install/launch Swift agent",
+        description: "Build/launch Swift agent",
         args: &[ArgSpec {
-            name: "app_path",
+            name: "project_dir",
+            completion: ArgCompletion::None,
+        }],
+    },
+    CommandDef {
+        name: "stop_agent",
+        description: "Stop managed agent process",
+        args: &[],
+    },
+    CommandDef {
+        name: "set_target",
+        description: "Set target app bundle ID",
+        args: &[ArgSpec {
+            name: "bundle_id",
             completion: ArgCompletion::None,
         }],
     },
