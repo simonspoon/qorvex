@@ -1,27 +1,41 @@
 # qorvex
 
-iOS Simulator automation and testing toolkit for macOS.
+iOS Simulator and device automation toolkit for macOS.
 
 ## Overview
 
-Qorvex provides programmatic control over iOS Simulators through a Rust workspace containing five crates:
+Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with five crates and a Swift agent:
 
-- **qorvex-core** — Core library with simulator control, UI automation, and IPC
+- **qorvex-core** — Core library with driver abstraction, protocol, session, IPC, and execution engine
 - **qorvex-repl** — Interactive command-line interface for manual testing
 - **qorvex-live** — TUI client for live screenshot and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines
 - **qorvex-auto** — Script runner for `.qvx` automation scripts and JSONL log converter
+- **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
+
+### Automation backend
+
+Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
+
+| Target | Connection | Setup |
+|--------|------------|-------|
+| Simulators | Direct TCP (port 8080) | Build with Xcode, install via `simctl` |
+| Physical devices | USB tunnel via usbmuxd | Build with Xcode, deploy to device |
 
 ## Requirements
 
 - macOS with Xcode and iOS Simulators installed
-- [axe](https://github.com/cameroncooke/axe) CLI tool for accessibility tree inspection
-  - Install via: `brew install cameroncooke/axe/axe`
 - Rust 1.70+
+- **For Swift agent**: Xcode project setup (see `qorvex-agent/README.md`)
+- **For physical devices**: USB-connected iOS device with developer mode enabled
 
 ## Installation
 
 ```bash
+# Install all Rust binaries
+./install.sh
+
+# Or install individually
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
@@ -54,12 +68,15 @@ Available commands:
 - `list_devices` — List all available simulators
 - `use_device(udid)` — Select a simulator to use
 - `boot_device(udid)` — Boot and select a simulator
+- `start_agent` — Launch Swift agent (must already be installed)
+- `start_agent(path)` — Install and launch Swift agent from .app bundle
 - `start_session` — Begin a new automation session
 - `end_session` — End the current session
 - `get_session_info` — Get session status info
 - `tap(selector)` — Tap element by accessibility ID
 - `tap(selector, label)` — Tap element by label (pass "label" as 2nd arg)
 - `tap(selector, label, type)` — Tap element by label with type filter
+- `tap(selector, --no-wait)` — Tap without waiting for element
 - `tap_location(x, y)` — Tap at screen coordinates
 - `swipe()` — Swipe up (default)
 - `swipe(direction)` — Swipe in a direction: up, down, left, right
@@ -72,6 +89,7 @@ Available commands:
 - `list_elements` — List actionable UI elements
 - `get_value(selector)` — Get element's value by ID
 - `get_value(selector, label)` — Get element's value by label
+- `get_value(selector, --no-wait)` — Get value without waiting for element
 - `log_comment(text)` — Add a comment to the action log
 - `start_watcher` — Start screen change detection (500ms default)
 - `start_watcher(interval_ms)` — Start with custom polling interval
@@ -207,6 +225,12 @@ foreach item in ["tab1", "tab2", "tab3"] {
 for i from 1 to 5 {
     tap("next-button")
 }
+
+# Set default timeout
+set timeout 10000
+
+# Include another script
+include "shared/login.qvx"
 ```
 
 ## Architecture
@@ -222,18 +246,30 @@ for i from 1 to 5 {
        │                     │ qorvex-cli │
        │                     └────────────┘
        ▼
-┌─────────────┐        ┌──────────────┐
-│ qorvex-core │◄───────┤ qorvex-auto  │
-├─────────────┤        ├──────────────┤
-│  • simctl   │ ──►    │  .qvx parser │
-│  • axe      │  iOS   │  runtime     │
-│  • session  │  Sim   │  executor    │
-│  • ipc      │        │  converter   │
-│  • executor │        └──────────────┘
-└─────────────┘
+┌──────────────┐       ┌──────────────┐
+│ qorvex-core  │◄──────┤ qorvex-auto  │
+├──────────────┤       ├──────────────┤
+│ ActionExecutor       │  .qvx parser │
+│      │               │  runtime     │
+│ AutomationDriver     │  executor    │
+│ ┌────┴────┐          │  converter   │
+│ │AgentDrvr│          └──────────────┘
+│ └────┬────┘
+│      │
+│   TCP 8080──► qorvex-agent (Swift)
+│      │              │
+│   simctl    USB   XCUIElement
+│      │    tunnel  accessibility
+│      │  (usbmuxd)
+│      ▼      ▼
+│  iOS Sim  Physical
+│           Device
+└──────────────┘
 ```
 
 `qorvex-auto` uses core directly (not via IPC) but spawns its own IPC server so `qorvex-live` can monitor script execution.
+
+The `AutomationDriver` trait abstracts the automation backend. `AgentDriver` communicates with the Swift agent over a binary TCP protocol. For physical devices, it tunnels through usbmuxd.
 
 ### Directory Structure
 

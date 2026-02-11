@@ -3,7 +3,7 @@
 pub mod commands;
 pub mod fuzzy;
 
-use qorvex_core::axe::UIElement;
+use qorvex_core::element::UIElement;
 use qorvex_core::simctl::SimulatorDevice;
 
 use self::commands::{find_command, commands_matching, ArgCompletion, CommandDef};

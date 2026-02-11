@@ -1,6 +1,7 @@
 //! Application state and event handling.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use ratatui::text::Line;
@@ -10,7 +11,10 @@ use tokio::task::JoinHandle;
 use tui_input::Input;
 
 use qorvex_core::action::{ActionResult, ActionType};
-use qorvex_core::axe::{Axe, UIElement};
+use qorvex_core::agent_driver::AgentDriver;
+use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+use qorvex_core::driver::AutomationDriver;
+use qorvex_core::element::UIElement;
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{socket_path, IpcServer};
 use qorvex_core::session::{Session, SessionEvent};
@@ -47,6 +51,8 @@ pub struct App {
     pub simulator_udid: Option<String>,
     /// IPC server handle.
     pub ipc_server_handle: Option<JoinHandle<()>>,
+    /// Action executor for automation commands.
+    pub executor: Option<ActionExecutor>,
     /// Screen watcher handle.
     pub watcher_handle: Option<WatcherHandle>,
     /// Channel receiver for element updates from session events.
@@ -64,6 +70,9 @@ impl App {
         // Try to get booted simulator
         let simulator_udid = Simctl::get_booted_udid().ok();
 
+        // Create executor if we have a simulator
+        let executor = simulator_udid.as_ref().map(|_| ActionExecutor::with_agent("localhost".to_string(), 8080));
+
         let mut app = Self {
             input: Input::default(),
             completion: CompletionState::default(),
@@ -75,6 +84,7 @@ impl App {
             session_name,
             session: None,
             simulator_udid,
+            executor,
             ipc_server_handle: None,
             watcher_handle: None,
             element_update_rx: None,
@@ -190,18 +200,20 @@ impl App {
         }
     }
 
-    fn capture_screenshot(&self) -> Option<String> {
-        self.simulator_udid.as_ref().and_then(|udid| {
-            Simctl::screenshot(udid).ok().map(|bytes| {
+    async fn capture_screenshot(&self) -> Option<String> {
+        if let Some(ref executor) = self.executor {
+            executor.driver().screenshot().await.ok().map(|bytes| {
                 use base64::Engine;
                 base64::engine::general_purpose::STANDARD.encode(&bytes)
             })
-        })
+        } else {
+            None
+        }
     }
 
     async fn log_action(&self, action: ActionType, result: ActionResult, duration_ms: Option<u64>) {
         if let Some(session) = &self.session {
-            let screenshot = self.capture_screenshot();
+            let screenshot = self.capture_screenshot().await;
             session.log_action(action, result, screenshot, duration_ms).await;
         }
     }
@@ -251,7 +263,7 @@ impl App {
                     self.add_output(format_result(false, "Watcher already running"));
                 } else if self.session.is_none() {
                     self.add_output(format_result(false, "No active session. Run start_session first."));
-                } else if self.simulator_udid.is_none() {
+                } else if self.executor.is_none() {
                     self.add_output(format_result(false, "No simulator selected"));
                 } else {
                     let interval_ms = args.first()
@@ -265,7 +277,6 @@ impl App {
                     };
 
                     let session = self.session.as_ref().unwrap().clone();
-                    let udid = self.simulator_udid.as_ref().unwrap().clone();
 
                     // Create channel for element updates
                     let (tx, rx) = mpsc::channel::<Vec<UIElement>>(16);
@@ -284,7 +295,8 @@ impl App {
                         }
                     });
 
-                    let handle = ScreenWatcher::spawn(session, udid, config);
+                    let driver = self.executor.as_ref().unwrap().driver().clone();
+                    let handle = ScreenWatcher::spawn(session, driver, config);
                     self.watcher_handle = Some(handle);
 
                     self.add_output(format_result(true, &format!("Watcher started ({}ms interval)", interval_ms)));
@@ -324,6 +336,7 @@ impl App {
                     self.add_output(format_result(false, &format!("Invalid UDID format: {}", udid)));
                 } else {
                     self.simulator_udid = Some(udid.to_string());
+                    self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), 8080));
                     self.add_output(format_result(true, &format!("Using device {}", udid)));
                 }
             }
@@ -337,6 +350,7 @@ impl App {
                     match Simctl::boot(udid) {
                         Ok(_) => {
                             self.simulator_udid = Some(udid.to_string());
+                            self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), 8080));
                             self.add_output(format_result(true, &format!("Booted and using device {}", udid)));
                         }
                         Err(e) => {
@@ -345,29 +359,75 @@ impl App {
                     }
                 }
             }
-            "list_elements" | "get_screen_info" => {
-                match &self.simulator_udid {
-                    Some(udid) => match Axe::dump_hierarchy(udid) {
-                        Ok(hierarchy) => {
-                            let elements = Axe::list_elements(&hierarchy);
-                            self.cached_elements = elements.clone();
+            "start_agent" => {
+                if self.simulator_udid.is_none() {
+                    self.add_output(format_result(false, "No simulator selected. Use use_device or boot_device first."));
+                } else {
+                    let udid = self.simulator_udid.clone().unwrap();
+                    let app_path = args.first().map(|s| PathBuf::from(strip_quotes(s)));
+                    let has_app_path = app_path.is_some();
 
-                            for elem in &elements {
-                                self.add_output(format_element(elem));
-                            }
-                            self.add_output(format_result(true, &format!("{} elements", elements.len())));
+                    let config = AgentLifecycleConfig {
+                        agent_app_path: app_path,
+                        agent_port: 8080,
+                        ..Default::default()
+                    };
+                    let lifecycle = AgentLifecycle::new(udid, config);
 
-                            if cmd == "get_screen_info" {
-                                self.log_action(ActionType::GetScreenInfo, ActionResult::Success, None).await;
+                    self.add_output(Line::from("Starting agent..."));
+
+                    let result = if has_app_path {
+                        lifecycle.ensure_running().await
+                    } else {
+                        match lifecycle.launch_agent() {
+                            Ok(()) => lifecycle.wait_for_ready().await,
+                            Err(e) => Err(e),
+                        }
+                    };
+
+                    match result {
+                        Ok(()) => {
+                            let mut driver = AgentDriver::direct("localhost", 8080);
+                            match driver.connect().await {
+                                Ok(()) => {
+                                    self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                    self.add_output(format_result(true, "Agent started and connected"));
+                                }
+                                Err(e) => {
+                                    self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
+                                }
                             }
                         }
                         Err(e) => {
-                            self.add_output(format_result(false, &e.to_string()));
+                            self.add_output(format_result(false, &format!("Failed to start agent: {}", e)));
+                        }
+                    }
+                }
+            }
+            "list_elements" | "get_screen_info" => {
+                match &self.executor {
+                    Some(executor) => {
+                        let result = executor.execute(ActionType::GetScreenInfo).await;
+                        if result.success {
+                            if let Some(ref data) = result.data {
+                                if let Ok(elements) = serde_json::from_str::<Vec<UIElement>>(data) {
+                                    self.cached_elements = elements.clone();
+                                    for elem in &elements {
+                                        self.add_output(format_element(elem));
+                                    }
+                                    self.add_output(format_result(true, &format!("{} elements", elements.len())));
+                                }
+                            }
                             if cmd == "get_screen_info" {
-                                self.log_action(ActionType::GetScreenInfo, ActionResult::Failure(e.to_string()), None).await;
+                                self.log_action(ActionType::GetScreenInfo, ActionResult::Success, None).await;
+                            }
+                        } else {
+                            self.add_output(format_result(false, &result.message));
+                            if cmd == "get_screen_info" {
+                                self.log_action(ActionType::GetScreenInfo, ActionResult::Failure(result.message), None).await;
                             }
                         }
-                    },
+                    }
                     None => {
                         self.add_output(format_result(false, "No simulator selected"));
                     }
@@ -385,10 +445,8 @@ impl App {
                     // Third argument is element type (if present and not empty)
                     let element_type = args.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
-                    match &self.simulator_udid {
-                        Some(udid) => {
-                            let executor = ActionExecutor::new(udid.clone());
-
+                    match &self.executor {
+                        Some(executor) => {
                             // Wait for element first (default behavior, skip with --no-wait)
                             if !no_wait {
                                 let wait_result = executor.execute(ActionType::WaitFor {
@@ -453,9 +511,8 @@ impl App {
             }
             "swipe" => {
                 let direction = args.first().map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "up".to_string());
-                match &self.simulator_udid {
-                    Some(udid) => {
-                        let executor = ActionExecutor::new(udid.clone());
+                match &self.executor {
+                    Some(executor) => {
                         let result = executor.execute(ActionType::Swipe {
                             direction: direction.clone(),
                         }).await;
@@ -492,25 +549,28 @@ impl App {
 
                     match (x, y) {
                         (Ok(x), Ok(y)) if x >= 0 && y >= 0 => {
-                            match &self.simulator_udid {
-                                Some(udid) => match Axe::tap(udid, x, y) {
-                                    Ok(_) => {
-                                        self.log_action(
-                                            ActionType::TapLocation { x, y },
-                                            ActionResult::Success,
-                                            None,
-                                        ).await;
+                            match &self.executor {
+                                Some(executor) => {
+                                    let result = executor.execute(ActionType::TapLocation { x, y }).await;
+
+                                    let action_result = if result.success {
+                                        ActionResult::Success
+                                    } else {
+                                        ActionResult::Failure(result.message.clone())
+                                    };
+
+                                    self.log_action(
+                                        ActionType::TapLocation { x, y },
+                                        action_result,
+                                        None,
+                                    ).await;
+
+                                    if result.success {
                                         self.add_output(format_result(true, &format!("Tapped ({}, {})", x, y)));
+                                    } else {
+                                        self.add_output(format_result(false, &result.message));
                                     }
-                                    Err(e) => {
-                                        self.log_action(
-                                            ActionType::TapLocation { x, y },
-                                            ActionResult::Failure(e.to_string()),
-                                            None,
-                                        ).await;
-                                        self.add_output(format_result(false, &e.to_string()));
-                                    }
-                                },
+                                }
                                 None => {
                                     self.add_output(format_result(false, "No simulator selected"));
                                 }
@@ -536,9 +596,8 @@ impl App {
                     // Fourth arg is element type
                     let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
-                    match &self.simulator_udid {
-                        Some(udid) => {
-                            let executor = ActionExecutor::new(udid.clone());
+                    match &self.executor {
+                        Some(executor) => {
                             let result = executor.execute(ActionType::WaitFor {
                                 selector: selector.to_string(),
                                 by_label,
@@ -584,25 +643,28 @@ impl App {
                 if text.is_empty() {
                     self.add_output(format_result(false, "send_keys requires text: send_keys(text)"));
                 } else {
-                    match &self.simulator_udid {
-                        Some(udid) => match Simctl::send_keys(udid, &text) {
-                            Ok(_) => {
-                                self.log_action(
-                                    ActionType::SendKeys { text: text.clone() },
-                                    ActionResult::Success,
-                                    None,
-                                ).await;
+                    match &self.executor {
+                        Some(executor) => {
+                            let result = executor.execute(ActionType::SendKeys { text: text.clone() }).await;
+
+                            let action_result = if result.success {
+                                ActionResult::Success
+                            } else {
+                                ActionResult::Failure(result.message.clone())
+                            };
+
+                            self.log_action(
+                                ActionType::SendKeys { text: text.clone() },
+                                action_result,
+                                None,
+                            ).await;
+
+                            if result.success {
                                 self.add_output(format_result(true, &format!("Sent: {}", text)));
+                            } else {
+                                self.add_output(format_result(false, &result.message));
                             }
-                            Err(e) => {
-                                self.log_action(
-                                    ActionType::SendKeys { text: text.clone() },
-                                    ActionResult::Failure(e.to_string()),
-                                    None,
-                                ).await;
-                                self.add_output(format_result(false, &e.to_string()));
-                            }
-                        },
+                        }
                         None => {
                             self.add_output(format_result(false, "No simulator selected"));
                         }
@@ -621,10 +683,8 @@ impl App {
                     // Third argument is element type (if present and not empty)
                     let element_type = args.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
-                    match &self.simulator_udid {
-                        Some(udid) => {
-                            let executor = ActionExecutor::new(udid.clone());
-
+                    match &self.executor {
+                        Some(executor) => {
                             // Wait for element first (default behavior, skip with --no-wait)
                             if !no_wait {
                                 let wait_result = executor.execute(ActionType::WaitFor {
@@ -684,26 +744,30 @@ impl App {
                 }
             }
             "get_screenshot" => {
-                match &self.simulator_udid {
-                    Some(udid) => match Simctl::screenshot(udid) {
-                        Ok(bytes) => {
-                            use base64::Engine;
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                            if let Some(session) = &self.session {
-                                session.log_action(
-                                    ActionType::GetScreenshot,
-                                    ActionResult::Success,
-                                    Some(b64.clone()),
-                                    None,
-                                ).await;
+                match &self.executor {
+                    Some(executor) => {
+                        let result = executor.execute(ActionType::GetScreenshot).await;
+                        if result.success {
+                            if let Some(ref screenshot) = result.screenshot {
+                                if let Some(session) = &self.session {
+                                    session.log_action(
+                                        ActionType::GetScreenshot,
+                                        ActionResult::Success,
+                                        Some(screenshot.clone()),
+                                        None,
+                                    ).await;
+                                }
                             }
-                            self.add_output(format_result(true, &format!("{} bytes (base64 logged)", bytes.len())));
+                            // Estimate byte count from base64 data length
+                            let byte_count = result.data.as_ref()
+                                .map(|d| d.len() * 3 / 4)
+                                .unwrap_or(0);
+                            self.add_output(format_result(true, &format!("{} bytes (base64 logged)", byte_count)));
+                        } else {
+                            self.log_action(ActionType::GetScreenshot, ActionResult::Failure(result.message.clone()), None).await;
+                            self.add_output(format_result(false, &result.message));
                         }
-                        Err(e) => {
-                            self.log_action(ActionType::GetScreenshot, ActionResult::Failure(e.to_string()), None).await;
-                            self.add_output(format_result(false, &e.to_string()));
-                        }
-                    },
+                    }
                     None => {
                         self.add_output(format_result(false, "No simulator selected"));
                     }
@@ -754,6 +818,8 @@ impl App {
             "  list_devices           List available simulators",
             "  use_device(udid)       Select a simulator by UDID",
             "  boot_device(udid)      Boot a simulator",
+            "  start_agent            Launch agent (must be installed)",
+            "  start_agent(path)      Install and launch agent from .app",
             "",
             "Screen:",
             "  get_screenshot         Capture a screenshot (base64 PNG)",

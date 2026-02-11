@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use qorvex_core::action::{ActionResult, ActionType};
+use qorvex_core::driver::DriverConfig;
 use qorvex_core::executor::ActionExecutor;
 
 use qorvex_core::session::Session;
@@ -23,12 +24,13 @@ pub struct ScriptExecutor {
     default_timeout_ms: u64,
     base_dir: PathBuf,
     include_stack: HashSet<PathBuf>,
+    driver_config: DriverConfig,
 }
 
 impl ScriptExecutor {
-    pub fn new(session: Arc<Session>, simulator_udid: Option<String>, base_dir: PathBuf) -> Self {
-        let executor = simulator_udid.as_ref().map(|udid| {
-            let mut e = ActionExecutor::new(udid.clone());
+    pub fn new(session: Arc<Session>, simulator_udid: Option<String>, base_dir: PathBuf, driver_config: DriverConfig) -> Self {
+        let executor = simulator_udid.as_ref().map(|_| {
+            let mut e = ActionExecutor::from_config(driver_config.clone());
             e.set_capture_screenshots(false);
             e
         });
@@ -41,6 +43,7 @@ impl ScriptExecutor {
             default_timeout_ms: 5000,
             base_dir,
             include_stack: HashSet::new(),
+            driver_config,
         }
     }
 
@@ -236,7 +239,7 @@ impl ScriptExecutor {
                     line,
                 })?;
                 self.simulator_udid = Some(udid.clone());
-                let mut executor = ActionExecutor::new(udid.clone());
+                let mut executor = ActionExecutor::from_config(self.driver_config.clone());
                 executor.set_capture_screenshots(false);
                 self.executor = Some(executor);
                 eprintln!("[line {}] Using device {}", line, udid);
@@ -252,7 +255,7 @@ impl ScriptExecutor {
                     line,
                 })?;
                 self.simulator_udid = Some(udid.clone());
-                let mut executor = ActionExecutor::new(udid.clone());
+                let mut executor = ActionExecutor::from_config(self.driver_config.clone());
                 executor.set_capture_screenshots(false);
                 self.executor = Some(executor);
                 eprintln!("[line {}] Booted device {}", line, udid);
@@ -265,7 +268,7 @@ impl ScriptExecutor {
                         line,
                     });
                 }
-                let udid = self.simulator_udid.as_ref().ok_or_else(|| AutoError::Runtime {
+                let _udid = self.simulator_udid.as_ref().ok_or_else(|| AutoError::Runtime {
                     message: "No simulator selected".to_string(),
                     line,
                 })?;
@@ -277,7 +280,14 @@ impl ScriptExecutor {
                     capture_screenshots: true,
                     visual_change_threshold: 5,
                 };
-                let handle = ScreenWatcher::spawn(self.session.clone(), udid.clone(), config);
+                let driver = self.executor.as_ref()
+                    .ok_or_else(|| AutoError::Runtime {
+                        message: "No executor available for watcher".to_string(),
+                        line,
+                    })?
+                    .driver()
+                    .clone();
+                let handle = ScreenWatcher::spawn(self.session.clone(), driver, config);
                 self.watcher_handle = Some(handle);
                 eprintln!("[line {}] Watcher started ({}ms)", line, interval_ms);
                 Ok(Value::String("Watcher started".to_string()))
@@ -358,7 +368,7 @@ impl ScriptExecutor {
                     let wait_result = self.execute_action(wait_action, line).await?;
 
                     // Reuse frame from wait_for to tap by coordinates directly,
-                    // avoiding a second axe invocation.
+                    // avoiding a second agent invocation.
                     if let Some(coords) = Self::parse_frame_center(&wait_result.as_string()) {
                         let action = ActionType::TapLocation { x: coords.0, y: coords.1 };
                         return self.execute_action(action, line).await;

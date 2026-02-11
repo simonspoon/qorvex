@@ -7,7 +7,7 @@
 //!
 //! Actions fall into several categories:
 //!
-//! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::Swipe`], [`ActionType::SendKeys`]
+//! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::Swipe`], [`ActionType::LongPress`], [`ActionType::SendKeys`]
 //! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetValue`]
 //! - **Waiting**: [`ActionType::WaitFor`]
 //! - **Session Management**: [`ActionType::StartSession`], [`ActionType::EndSession`], [`ActionType::Quit`]
@@ -74,6 +74,16 @@ pub enum ActionType {
     Swipe {
         /// Direction to swipe: "up", "down", "left", or "right".
         direction: String,
+    },
+
+    /// Long press at specific screen coordinates.
+    LongPress {
+        /// The x-coordinate in screen points.
+        x: i32,
+        /// The y-coordinate in screen points.
+        y: i32,
+        /// How long to press in seconds.
+        duration: f64,
     },
 
     /// Log a comment (for documentation purposes).

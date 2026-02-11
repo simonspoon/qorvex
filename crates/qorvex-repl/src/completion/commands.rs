@@ -80,6 +80,14 @@ pub static COMMANDS: &[CommandDef] = &[
             completion: ArgCompletion::DeviceUdid,
         }],
     },
+    CommandDef {
+        name: "start_agent",
+        description: "Install/launch Swift agent",
+        args: &[ArgSpec {
+            name: "app_path",
+            completion: ArgCompletion::None,
+        }],
+    },
     // Screen commands
     CommandDef {
         name: "get_screenshot",

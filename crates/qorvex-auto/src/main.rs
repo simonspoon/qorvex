@@ -10,6 +10,7 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
+use qorvex_core::driver::DriverConfig;
 use qorvex_core::ipc::{qorvex_dir, IpcServer};
 use qorvex_core::session::Session;
 use qorvex_core::simctl::Simctl;
@@ -117,7 +118,7 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
     });
 
     // Execute with automatic session lifecycle
-    let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir);
+    let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir, DriverConfig::Agent { host: "localhost".to_string(), port: 8080 });
 
     session.log_action(
         qorvex_core::action::ActionType::StartSession,

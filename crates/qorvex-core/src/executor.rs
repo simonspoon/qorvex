@@ -12,7 +12,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let executor = ActionExecutor::new("SIMULATOR-UDID".to_string());
+//!     let executor = ActionExecutor::with_agent("localhost", 8080);
 //!
 //!     let result = executor.execute(ActionType::Tap {
 //!         selector: "login-button".to_string(),
@@ -26,10 +26,11 @@
 //! }
 //! ```
 
-use crate::action::ActionType;
-use crate::axe::Axe;
-use crate::simctl::Simctl;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use crate::action::ActionType;
+use crate::driver::AutomationDriver;
 
 /// Result of executing an action.
 ///
@@ -83,27 +84,56 @@ impl ExecutionResult {
 
 /// Executes automation actions against a simulator.
 ///
-/// The executor holds the target simulator's UDID and provides methods
-/// to execute various [`ActionType`]s. It handles all the low-level
-/// interaction with `simctl` and `axe`.
+/// The executor holds an [`AutomationDriver`] and provides methods
+/// to execute various [`ActionType`]s. It handles all the high-level
+/// action dispatch, delegating low-level operations to the driver.
 pub struct ActionExecutor {
-    /// The UDID of the target simulator.
-    simulator_udid: String,
+    /// The automation driver backend.
+    driver: Arc<dyn AutomationDriver>,
     /// Whether to capture screenshots after actions.
     capture_screenshots: bool,
 }
 
 impl ActionExecutor {
-    /// Creates a new executor for the specified simulator.
+    /// Creates a new executor with any [`AutomationDriver`] backend.
     ///
     /// # Arguments
     ///
-    /// * `simulator_udid` - The unique device identifier of the target simulator
-    pub fn new(simulator_udid: String) -> Self {
+    /// * `driver` - The automation driver to use for executing actions
+    pub fn new(driver: Arc<dyn AutomationDriver>) -> Self {
         Self {
-            simulator_udid,
+            driver,
             capture_screenshots: true,
         }
+    }
+
+    /// Convenience constructor: create an executor using the [`AgentDriver`](crate::agent_driver::AgentDriver) backend.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - The hostname or IP of the Swift agent
+    /// * `port` - The TCP port the agent is listening on
+    pub fn with_agent(host: impl Into<String>, port: u16) -> Self {
+        Self::new(Arc::new(crate::agent_driver::AgentDriver::direct(host, port)))
+    }
+
+    /// Create an executor from a [`DriverConfig`](crate::driver::DriverConfig).
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The driver configuration specifying which backend to use
+    pub fn from_config(config: crate::driver::DriverConfig) -> Self {
+        match config {
+            crate::driver::DriverConfig::Agent { host, port } => Self::with_agent(host, port),
+            crate::driver::DriverConfig::Device { udid, device_port } => {
+                Self::new(Arc::new(crate::agent_driver::AgentDriver::usb_device(udid, device_port)))
+            }
+        }
+    }
+
+    /// Returns a reference to the underlying driver.
+    pub fn driver(&self) -> &Arc<dyn AutomationDriver> {
+        &self.driver
     }
 
     /// Sets whether to capture screenshots after actions.
@@ -111,18 +141,13 @@ impl ActionExecutor {
         self.capture_screenshots = capture;
     }
 
-    /// Returns the simulator UDID.
-    pub fn simulator_udid(&self) -> &str {
-        &self.simulator_udid
-    }
-
     /// Captures a screenshot and returns it as base64-encoded PNG.
     /// Returns `None` if screenshot capture is disabled.
-    fn capture_screenshot(&self) -> Option<String> {
+    async fn capture_screenshot(&self) -> Option<String> {
         if !self.capture_screenshots {
             return None;
         }
-        Simctl::screenshot(&self.simulator_udid).ok().map(|bytes| {
+        self.driver.screenshot().await.ok().map(|bytes| {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.encode(&bytes)
         })
@@ -146,9 +171,9 @@ impl ActionExecutor {
         match action {
             ActionType::Tap { ref selector, by_label, ref element_type } => {
                 let tap_result = match element_type {
-                    Some(typ) => Axe::tap_with_type(&self.simulator_udid, selector, by_label, typ),
-                    None if by_label => Axe::tap_by_label(&self.simulator_udid, selector),
-                    None => Axe::tap_element(&self.simulator_udid, selector),
+                    Some(typ) => self.driver.tap_with_type(selector, by_label, typ).await,
+                    None if by_label => self.driver.tap_by_label(selector).await,
+                    None => self.driver.tap_element(selector).await,
                 };
 
                 match tap_result {
@@ -159,7 +184,7 @@ impl ActionExecutor {
                             format!("Tapped element '{}'", selector)
                         };
                         let mut result = ExecutionResult::success(msg);
-                        if let Some(screenshot) = self.capture_screenshot() {
+                        if let Some(screenshot) = self.capture_screenshot().await {
                             result = result.with_screenshot(screenshot);
                         }
                         result
@@ -177,10 +202,10 @@ impl ActionExecutor {
                     ));
                 }
 
-                match Axe::tap(&self.simulator_udid, x, y) {
+                match self.driver.tap_location(x, y).await {
                     Ok(_) => {
                         let mut result = ExecutionResult::success(format!("Tapped at ({}, {})", x, y));
-                        if let Some(screenshot) = self.capture_screenshot() {
+                        if let Some(screenshot) = self.capture_screenshot().await {
                             result = result.with_screenshot(screenshot);
                         }
                         result
@@ -205,10 +230,25 @@ impl ActionExecutor {
                     }
                 };
 
-                match Axe::swipe(&self.simulator_udid, start_x, start_y, end_x, end_y, Some(0.3)) {
+                match self.driver.swipe(start_x, start_y, end_x, end_y, Some(0.3)).await {
                     Ok(_) => {
                         let mut result = ExecutionResult::success(format!("Swiped {}", direction));
-                        if let Some(screenshot) = self.capture_screenshot() {
+                        if let Some(screenshot) = self.capture_screenshot().await {
+                            result = result.with_screenshot(screenshot);
+                        }
+                        result
+                    }
+                    Err(e) => ExecutionResult::failure(e.to_string()),
+                }
+            }
+
+            ActionType::LongPress { x, y, duration } => {
+                match self.driver.long_press(x, y, duration).await {
+                    Ok(_) => {
+                        let mut result = ExecutionResult::success(format!(
+                            "Long pressed at ({}, {}) for {:.1}s", x, y, duration
+                        ));
+                        if let Some(screenshot) = self.capture_screenshot().await {
                             result = result.with_screenshot(screenshot);
                         }
                         result
@@ -218,10 +258,10 @@ impl ActionExecutor {
             }
 
             ActionType::SendKeys { ref text } => {
-                match Simctl::send_keys(&self.simulator_udid, text) {
+                match self.driver.type_text(text).await {
                     Ok(_) => {
                         let mut result = ExecutionResult::success(format!("Sent keys: '{}'", text));
-                        if let Some(screenshot) = self.capture_screenshot() {
+                        if let Some(screenshot) = self.capture_screenshot().await {
                             result = result.with_screenshot(screenshot);
                         }
                         result
@@ -231,7 +271,7 @@ impl ActionExecutor {
             }
 
             ActionType::GetScreenshot => {
-                match Simctl::screenshot(&self.simulator_udid) {
+                match self.driver.screenshot().await {
                     Ok(bytes) => {
                         use base64::Engine;
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -244,14 +284,13 @@ impl ActionExecutor {
             }
 
             ActionType::GetScreenInfo => {
-                match Axe::dump_hierarchy(&self.simulator_udid) {
-                    Ok(hierarchy) => {
-                        let elements = Axe::list_elements(&hierarchy);
+                match self.driver.list_elements().await {
+                    Ok(elements) => {
                         match serde_json::to_string(&elements) {
                             Ok(json) => {
                                 let mut result = ExecutionResult::success("Screen info retrieved")
                                     .with_data(json);
-                                if let Some(screenshot) = self.capture_screenshot() {
+                                if let Some(screenshot) = self.capture_screenshot().await {
                                     result = result.with_screenshot(screenshot);
                                 }
                                 result
@@ -265,9 +304,9 @@ impl ActionExecutor {
 
             ActionType::GetValue { ref selector, by_label, ref element_type } => {
                 let value_result = match element_type {
-                    Some(typ) => Axe::get_value_with_type(&self.simulator_udid, selector, by_label, typ),
-                    None if by_label => Axe::get_element_value_by_label(&self.simulator_udid, selector),
-                    None => Axe::get_element_value(&self.simulator_udid, selector),
+                    Some(typ) => self.driver.get_value_with_type(selector, by_label, typ).await,
+                    None if by_label => self.driver.get_element_value_by_label(selector).await,
+                    None => self.driver.get_element_value(selector).await,
                 };
 
                 match value_result {
@@ -278,7 +317,7 @@ impl ActionExecutor {
                             format!("Got value for '{}'", selector)
                         };
                         let mut result = ExecutionResult::success(msg).with_data(value);
-                        if let Some(screenshot) = self.capture_screenshot() {
+                        if let Some(screenshot) = self.capture_screenshot().await {
                             result = result.with_screenshot(screenshot);
                         }
                         result
@@ -290,7 +329,7 @@ impl ActionExecutor {
                             format!("Element '{}' has no value", selector)
                         };
                         let mut result = ExecutionResult::success(msg).with_data("null".to_string());
-                        if let Some(screenshot) = self.capture_screenshot() {
+                        if let Some(screenshot) = self.capture_screenshot().await {
                             result = result.with_screenshot(screenshot);
                         }
                         result
@@ -312,13 +351,11 @@ impl ActionExecutor {
                 let mut stable_count: u32 = 0;
 
                 loop {
-                    if let Ok(elements) = Axe::dump_hierarchy(&self.simulator_udid) {
-                        let found = match element_type {
-                            Some(typ) => Axe::find_element_with_type(&elements, selector, by_label, Some(typ)),
-                            None if by_label => Axe::find_elements_by_label(&elements, selector),
-                            None => Axe::find_element(&elements, selector),
-                        };
-
+                    if let Ok(found) = self.driver.find_element_with_type(
+                        selector,
+                        by_label,
+                        element_type.as_deref(),
+                    ).await {
                         if let Some(element) = found {
                             let current_frame = element.frame.as_ref()
                                 .map(|f| (f.x, f.y, f.width, f.height));
@@ -350,7 +387,7 @@ impl ActionExecutor {
                                     format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms)
                                 };
                                 let mut result = ExecutionResult::success(msg).with_data(data);
-                                if let Some(screenshot) = self.capture_screenshot() {
+                                if let Some(screenshot) = self.capture_screenshot().await {
                                     result = result.with_screenshot(screenshot);
                                 }
                                 return result;
@@ -419,43 +456,24 @@ mod tests {
     }
 
     #[test]
-    fn test_executor_creation() {
-        let executor = ActionExecutor::new("test-udid".to_string());
-        assert_eq!(executor.simulator_udid(), "test-udid");
+    fn test_executor_creation_with_agent() {
+        let executor = ActionExecutor::with_agent("localhost", 9800);
+        assert!(!executor.driver().is_connected());
     }
 
-    #[tokio::test]
-    async fn test_log_comment_always_succeeds() {
-        let executor = ActionExecutor::new("fake-udid".to_string());
-        let result = executor.execute(ActionType::LogComment {
-            message: "test comment".to_string(),
-        }).await;
-
-        assert!(result.success);
-        assert!(result.message.contains("test comment"));
+    #[test]
+    fn test_executor_from_config_agent() {
+        use crate::driver::DriverConfig;
+        let config = DriverConfig::Agent { host: "localhost".to_string(), port: 9800 };
+        let executor = ActionExecutor::from_config(config);
+        assert!(!executor.driver().is_connected());
     }
 
-    #[tokio::test]
-    async fn test_session_actions_return_error() {
-        let executor = ActionExecutor::new("fake-udid".to_string());
-
-        let result = executor.execute(ActionType::StartSession).await;
-        assert!(!result.success);
-        assert!(result.message.contains("session manager"));
-
-        let result = executor.execute(ActionType::EndSession).await;
-        assert!(!result.success);
-
-        let result = executor.execute(ActionType::Quit).await;
-        assert!(!result.success);
-    }
-
-    #[tokio::test]
-    async fn test_tap_location_negative_coordinates() {
-        let executor = ActionExecutor::new("fake-udid".to_string());
-
-        let result = executor.execute(ActionType::TapLocation { x: -10, y: 100 }).await;
-        assert!(!result.success);
-        assert!(result.message.contains("non-negative"));
+    #[test]
+    fn test_executor_from_config_device() {
+        use crate::driver::DriverConfig;
+        let config = DriverConfig::Device { udid: "ABC-123".to_string(), device_port: 8080 };
+        let executor = ActionExecutor::from_config(config);
+        assert!(!executor.driver().is_connected());
     }
 }

@@ -1,7 +1,7 @@
 //! Interface to Apple's `xcrun simctl` command-line tool.
 //!
 //! This module provides a Rust wrapper around the iOS Simulator control tool,
-//! enabling device listing, screenshot capture, simulator boot, and keyboard input.
+//! enabling device listing, screenshot capture, and simulator boot.
 //!
 //! # Requirements
 //!
@@ -198,37 +198,6 @@ impl Simctl {
             if !stderr.contains("current state: Booted") {
                 return Err(SimctlError::CommandFailed(stderr.to_string()));
             }
-        }
-        Ok(())
-    }
-
-    /// Sends keyboard input to the simulator.
-    ///
-    /// Uses the `axe type` command to simulate keyboard input on the
-    /// specified simulator. The text is sent as a sequence of keystrokes.
-    ///
-    /// # Arguments
-    ///
-    /// * `udid` - The unique device identifier of the target simulator
-    /// * `text` - The text to type into the simulator
-    ///
-    /// # Errors
-    ///
-    /// - [`SimctlError::Io`] if the command fails to execute
-    /// - [`SimctlError::CommandFailed`] if the axe command fails
-    ///
-    /// # Note
-    ///
-    /// This method requires the `axe` tool to be installed.
-    pub fn send_keys(udid: &str, text: &str) -> Result<(), SimctlError> {
-        let output = Command::new("axe")
-            .args(["type", text, "--udid", udid])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(SimctlError::CommandFailed(
-                String::from_utf8_lossy(&output.stderr).to_string()
-            ));
         }
         Ok(())
     }

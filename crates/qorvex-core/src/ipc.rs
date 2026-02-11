@@ -171,6 +171,8 @@ pub struct IpcServer {
     session: Arc<Session>,
     /// Path to the Unix socket file.
     socket_path: PathBuf,
+    /// The driver backend configuration for creating executors.
+    driver_config: crate::driver::DriverConfig,
 }
 
 impl IpcServer {
@@ -188,6 +190,26 @@ impl IpcServer {
         Self {
             session,
             socket_path: socket_path(session_name),
+            driver_config: crate::driver::DriverConfig::Agent { host: "localhost".to_string(), port: 8080 },
+        }
+    }
+
+    /// Creates a new IPC server with a specific driver backend configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session to manage
+    /// * `session_name` - The name used to determine the socket path
+    /// * `config` - The driver backend configuration for creating executors
+    ///
+    /// # Returns
+    ///
+    /// A new `IpcServer` instance (not yet running).
+    pub fn with_config(session: Arc<Session>, session_name: &str, config: crate::driver::DriverConfig) -> Self {
+        Self {
+            session,
+            socket_path: socket_path(session_name),
+            driver_config: config,
         }
     }
 
@@ -215,14 +237,15 @@ impl IpcServer {
         loop {
             let (stream, _) = listener.accept().await?;
             let session = self.session.clone();
+            let config = self.driver_config.clone();
 
             tokio::spawn(async move {
-                let _ = Self::handle_client(stream, session).await;
+                let _ = Self::handle_client(stream, session, config).await;
             });
         }
     }
 
-    async fn handle_client(stream: UnixStream, session: Arc<Session>) -> Result<(), IpcError> {
+    async fn handle_client(stream: UnixStream, session: Arc<Session>, driver_config: crate::driver::DriverConfig) -> Result<(), IpcError> {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
@@ -242,7 +265,7 @@ impl IpcServer {
                     // LogComment doesn't require a simulator, handle it specially
                     let response = if matches!(action, ActionType::LogComment { .. }) {
                         // LogComment can run without a simulator
-                        let executor = ActionExecutor::new(String::new());
+                        let executor = ActionExecutor::from_config(driver_config.clone());
                         let result = executor.execute(action.clone()).await;
 
                         session.log_action(action, ActionResult::Success, None, None).await;
@@ -255,8 +278,8 @@ impl IpcServer {
                         }
                     } else {
                         match &session.simulator_udid {
-                            Some(udid) => {
-                                let executor = ActionExecutor::new(udid.clone());
+                            Some(_udid) => {
+                                let executor = ActionExecutor::from_config(driver_config.clone());
                                 let result = executor.execute(action.clone()).await;
 
                                 // Log to session

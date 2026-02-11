@@ -1,7 +1,7 @@
 //! Pretty formatters for output display.
 
 use ratatui::text::{Line, Span};
-use qorvex_core::axe::UIElement;
+use qorvex_core::element::UIElement;
 use qorvex_core::simctl::SimulatorDevice;
 
 use crate::ui::theme::Theme;

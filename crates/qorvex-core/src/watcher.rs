@@ -7,17 +7,20 @@
 //!
 //! ```no_run
 //! use std::sync::Arc;
+//! use qorvex_core::agent_driver::AgentDriver;
+//! use qorvex_core::driver::AutomationDriver;
 //! use qorvex_core::session::Session;
 //! use qorvex_core::watcher::{ScreenWatcher, WatcherConfig};
 //!
 //! #[tokio::main]
 //! async fn main() {
 //!     let session = Session::new(Some("SIMULATOR-UDID".to_string()), "default");
+//!     let driver: Arc<dyn AutomationDriver> = Arc::new(AgentDriver::direct("localhost", 8080));
 //!     let config = WatcherConfig::default();
 //!
 //!     let handle = ScreenWatcher::spawn(
 //!         session,
-//!         "SIMULATOR-UDID".to_string(),
+//!         driver,
 //!         config,
 //!     );
 //!
@@ -33,9 +36,9 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::axe::{Axe, UIElement};
+use crate::element::UIElement;
+use crate::driver::AutomationDriver;
 use crate::session::Session;
-use crate::simctl::Simctl;
 
 /// Configuration for the screen watcher.
 #[derive(Debug, Clone)]
@@ -99,7 +102,7 @@ impl ScreenWatcher {
     /// # Arguments
     ///
     /// * `session` - The session to broadcast events to
-    /// * `simulator_udid` - The UDID of the simulator to watch
+    /// * `driver` - The automation driver to use for polling
     /// * `config` - Watcher configuration
     ///
     /// # Returns
@@ -107,14 +110,14 @@ impl ScreenWatcher {
     /// A `WatcherHandle` that can be used to stop the watcher.
     pub fn spawn(
         session: Arc<Session>,
-        simulator_udid: String,
+        driver: Arc<dyn AutomationDriver>,
         config: WatcherConfig,
     ) -> WatcherHandle {
         let cancel_token = CancellationToken::new();
         let token_clone = cancel_token.clone();
 
         let join_handle = tokio::spawn(async move {
-            Self::run_loop(session, simulator_udid, config, token_clone).await;
+            Self::run_loop(session, driver, config, token_clone).await;
         });
 
         WatcherHandle {
@@ -125,7 +128,7 @@ impl ScreenWatcher {
 
     async fn run_loop(
         session: Arc<Session>,
-        simulator_udid: String,
+        driver: Arc<dyn AutomationDriver>,
         config: WatcherConfig,
         cancel_token: CancellationToken,
     ) {
@@ -137,7 +140,7 @@ impl ScreenWatcher {
                     break;
                 }
                 _ = tokio::time::sleep(interval) => {
-                    Self::check_for_changes(&session, &simulator_udid, &config).await;
+                    Self::check_for_changes(&session, &driver, &config).await;
                 }
             }
         }
@@ -145,43 +148,29 @@ impl ScreenWatcher {
 
     async fn check_for_changes(
         session: &Arc<Session>,
-        simulator_udid: &str,
+        driver: &Arc<dyn AutomationDriver>,
         config: &WatcherConfig,
     ) {
-        // Run axe in a blocking task since it's a subprocess call
-        let udid = simulator_udid.to_string();
-        let hierarchy_result = tokio::task::spawn_blocking(move || {
-            Axe::dump_hierarchy(&udid)
-        }).await;
-
-        let hierarchy = match hierarchy_result {
-            Ok(Ok(h)) => h,
-            Ok(Err(_)) | Err(_) => return, // Skip this poll on error
+        let hierarchy = match driver.dump_tree().await {
+            Ok(h) => h,
+            Err(_) => return, // Skip this poll on error
         };
 
-        let elements = Axe::list_elements(&hierarchy);
+        let elements = crate::driver::flatten_elements(&hierarchy);
 
         // Compute hash of elements
         let element_hash = Self::hash_elements(&elements);
 
         // Capture screenshot and compute visual hash
         let (screenshot, screenshot_hash) = if config.capture_screenshots {
-            let udid = simulator_udid.to_string();
-            let result = tokio::task::spawn_blocking(move || {
-                Simctl::screenshot(&udid).ok().map(|bytes| {
+            match driver.screenshot().await {
+                Ok(bytes) => {
                     let dhash = Self::dhash_screenshot(&bytes);
                     use base64::Engine;
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    (b64, dhash)
-                })
-            })
-            .await
-            .ok()
-            .flatten();
-
-            match result {
-                Some((b64, dhash)) => (Some(b64), dhash),
-                None => (None, None),
+                    (Some(b64), dhash)
+                }
+                Err(_) => (None, None),
             }
         } else {
             (None, None)

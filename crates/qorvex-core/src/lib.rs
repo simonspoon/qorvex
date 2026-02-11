@@ -1,49 +1,55 @@
 //! # qorvex-core
 //!
-//! Core library for iOS Simulator automation on macOS.
+//! Core library for iOS Simulator and device automation on macOS.
 //!
-//! This crate provides the foundational components for interacting with iOS simulators,
-//! including device management, accessibility-based UI automation, session tracking,
-//! and inter-process communication.
+//! This crate provides the foundational components for interacting with iOS simulators
+//! and physical devices, including a backend-agnostic driver abstraction, binary protocol
+//! codec, session tracking, and inter-process communication.
 //!
 //! ## Modules
 //!
+//! ### Driver abstraction
+//! - [`driver`] - `AutomationDriver` trait, `DriverConfig`, glob matching for element selectors
+//! - [`element`] - Shared `UIElement` and `ElementFrame` types
+//! - [`protocol`] - Binary wire protocol codec for Rust ↔ Swift agent communication
+//! - [`executor`] - Backend-agnostic action execution engine
+//!
+//! ### Backends
+//! - [`agent_client`] - Low-level async TCP client for the Swift agent
+//! - [`agent_driver`] - `AgentDriver` backend (simulators via TCP, devices via USB tunnel)
+//! - [`agent_lifecycle`] - Swift agent install/launch/health-check via `xcrun simctl`
+//! - [`usb_tunnel`] - Physical device discovery and port forwarding via usbmuxd
+//!
+//! ### Infrastructure
 //! - [`simctl`] - Wrapper around Apple's `xcrun simctl` CLI for simulator control
-//! - [`axe`] - Wrapper around the `axe` accessibility tool for UI inspection and interaction
 //! - [`session`] - Session state management with event broadcasting
 //! - [`ipc`] - Unix socket-based IPC for REPL and watcher communication
 //! - [`action`] - Action types and logging for automation operations
-//! - [`executor`] - Action execution engine with result handling
+//! - [`watcher`] - Screen change detection via accessibility tree polling
 //!
 //! ## External Dependencies
 //!
-//! This crate requires the following external tools to be installed:
-//!
 //! - **Xcode** (for `xcrun simctl`) - Provides simulator control functionality
-//! - **axe** - Third-party accessibility tool (`brew install cameroncooke/axe/axe`)
 //!
 //! ## Example
 //!
 //! ```no_run
 //! use qorvex_core::simctl::Simctl;
-//! use qorvex_core::axe::Axe;
 //!
 //! // Get the booted simulator
 //! let udid = Simctl::get_booted_udid().expect("No booted simulator");
-//!
-//! // Dump the UI hierarchy
-//! let hierarchy = Axe::dump_hierarchy(&udid).expect("Failed to dump UI");
-//!
-//! // Find and tap a button
-//! if let Some(button) = Axe::find_element(&hierarchy, "login-button") {
-//!     Axe::tap_element(&udid, "login-button").expect("Failed to tap");
-//! }
 //! ```
 
 pub mod action;
-pub mod axe;
+pub mod agent_client;
+pub mod agent_lifecycle;
+pub mod agent_driver;
+pub mod element;
+pub mod driver;
 pub mod executor;
 pub mod ipc;
+pub mod protocol;
 pub mod session;
 pub mod simctl;
+pub mod usb_tunnel;
 pub mod watcher;

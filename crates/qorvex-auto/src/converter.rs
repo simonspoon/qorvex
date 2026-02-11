@@ -96,6 +96,9 @@ impl LogConverter {
                 }
                 Some(format!("wait_for({})", args.join(", ")))
             }
+            ActionType::LongPress { x, y, duration } => {
+                Some(format!("long_press({}, {}, {})", x, y, duration))
+            }
             ActionType::LogComment { message } => {
                 Some(format!("# {}", message))
             }
