@@ -10,6 +10,8 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
+use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+use qorvex_core::config::QorvexConfig;
 use qorvex_core::driver::DriverConfig;
 use qorvex_core::ipc::{qorvex_dir, IpcServer};
 use qorvex_core::session::Session;
@@ -116,6 +118,25 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
         let server = IpcServer::new(ipc_session, &ipc_name);
         let _ = server.run().await;
     });
+
+    // Auto-start agent if not already running
+    let mut _agent_lifecycle = None;
+    if let Some(ref udid) = simulator_udid {
+        let config = QorvexConfig::load();
+        if let Some(agent_dir) = config.agent_source_dir {
+            let lc_config = AgentLifecycleConfig::new(agent_dir);
+            let lifecycle = AgentLifecycle::new(udid.clone(), lc_config);
+            match lifecycle.ensure_agent_ready().await {
+                Ok(()) => {
+                    eprintln!("Agent ready");
+                    _agent_lifecycle = Some(lifecycle);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to start agent: {}", e);
+                }
+            }
+        }
+    }
 
     // Execute with automatic session lifecycle
     let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir, DriverConfig::Agent { host: "localhost".to_string(), port: 8080 });

@@ -79,10 +79,11 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 #### Backends
 - **agent_client.rs** - Low-level async TCP client (`AgentClient`) for Swift agent communication with timeouts and reconnection
 - **agent_driver.rs** - `AgentDriver`: implements `AutomationDriver` using Swift agent TCP connection. Supports `Direct` (simulator) and `UsbDevice` (physical) connection targets. Includes `set_target()` to switch target app bundle ID
-- **agent_lifecycle.rs** - `AgentLifecycle` struct managing full agent process lifecycle: build (`xcodebuild build-for-testing`), spawn (`test-without-building`), terminate, health-check via TCP heartbeat, and retry logic. Auto-cleanup via `Drop`. Configured via `AgentLifecycleConfig` (port, timeout, retries)
+- **agent_lifecycle.rs** - `AgentLifecycle` struct managing full agent process lifecycle: build (`xcodebuild build-for-testing`), spawn (`test-without-building`), terminate, health-check via TCP heartbeat, and retry logic. Auto-cleanup via `Drop`. Configured via `AgentLifecycleConfig` (port, timeout, retries). `ensure_agent_ready()` skips rebuild if agent is already reachable
 - **usb_tunnel.rs** - Physical device discovery and port forwarding via usbmuxd (`idevice` crate). Provides `list_devices()` and `connect(udid, port)`
 
 #### Infrastructure
+- **config.rs** - Persistent configuration stored in `~/.qorvex/config.json`. `QorvexConfig` with `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent
 - **simctl.rs** - Wrapper around `xcrun simctl` for device listing, screenshots, and boot
 - **session.rs** - Async session state with broadcast channels for events (uses `tokio::sync`)
 - **ipc.rs** - Unix socket server/client for REPL↔Watcher/CLI communication (JSON-over-newlines protocol)
@@ -96,14 +97,14 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 ### qorvex-repl modules
 
 - **main.rs** - Entry point, event loop, command dispatch, and mouse event handling (drag-to-select, scroll, Ctrl+C copy)
-- **app.rs** - Application state (input, completion, output history, session references, text selection/clipboard, `AgentLifecycle` management). Supports `stop_agent` and `set_target` commands
+- **app.rs** - Application state (input, completion, output history, session references, text selection/clipboard, `AgentLifecycle` management). Supports `stop_agent` and `set_target` commands. `start_session` and `start_agent` auto-start the agent via `QorvexConfig` when `agent_source_dir` is set
 - **completion/** - Tab completion engine with command definitions, fuzzy matching, and context-aware suggestions
 - **format.rs** - Output formatting for commands, results, and elements
 - **ui/** - TUI rendering with ratatui (theme, completion popup, layout, selection overlay highlighting, scrollbar)
 
 ### qorvex-auto modules
 
-- **main.rs** - CLI entry point with `run` and `convert` subcommands (clap)
+- **main.rs** - CLI entry point with `run` and `convert` subcommands (clap). `run` auto-starts the agent via `QorvexConfig` if configured
 - **ast.rs** - AST types: Script, Statement (Command, Assignment, Foreach, For, If, Set, Include), Expression, BinOp
 - **parser.rs** - Two-phase parser: tokenizer + recursive descent producing AST
 - **runtime.rs** - Variable environment with Value types (String, Number, List)

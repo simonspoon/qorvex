@@ -32,7 +32,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 ## Installation
 
 ```bash
-# Install all Rust binaries
+# Install all Rust binaries (also records agent source dir in ~/.qorvex/config.json)
 ./install.sh
 
 # Or install individually
@@ -71,11 +71,11 @@ Available commands:
 - `list_devices` — List all available simulators
 - `use_device(udid)` — Select a simulator to use
 - `boot_device(udid)` — Boot and select a simulator
-- `start_agent` — Connect to externally-started Swift agent
+- `start_agent` — Start agent using configured source dir, or connect to external agent
 - `start_agent(path)` — Build and launch Swift agent from project directory
 - `stop_agent` — Stop a managed agent process
 - `set_target(bundle_id)` — Set target app bundle ID
-- `start_session` — Begin a new automation session
+- `start_session` — Begin a new session (auto-starts agent if configured)
 - `end_session` — End the current session
 - `get_session_info` — Get session status info
 - `tap(selector)` — Tap element by accessibility ID
@@ -89,6 +89,7 @@ Available commands:
 - `wait_for(selector)` — Wait for element by ID (5s default timeout)
 - `wait_for(selector, timeout_ms)` — Wait with custom timeout
 - `wait_for(selector, timeout_ms, label)` — Wait for element by label
+- `wait_for(selector, timeout_ms, label, type)` — Wait for element by label with type filter
 - `get_screenshot` — Capture current screen
 - `get_screen_info` — Get UI hierarchy information
 - `list_elements` — List actionable UI elements
@@ -282,8 +283,9 @@ Qorvex stores runtime files in `~/.qorvex/`:
 
 ```
 ~/.qorvex/
-├── qorvex_default.sock      # Unix socket for "default" session
-├── qorvex_my-session.sock   # Unix socket for "my-session"
+├── config.json                  # Persistent config (agent_source_dir, etc.)
+├── qorvex_default.sock          # Unix socket for "default" session
+├── qorvex_my-session.sock       # Unix socket for "my-session"
 ├── logs/
 │   ├── default_20250101_120000.jsonl
 │   └── my-session_20250101_130000.jsonl
@@ -292,6 +294,7 @@ Qorvex stores runtime files in `~/.qorvex/`:
     └── scripts/             # Converted .qvx scripts
 ```
 
+- **Config** (`~/.qorvex/config.json`) — Persistent settings. Currently stores `agent_source_dir` so that `start_session`, `start_agent`, and `qorvex-auto run` can auto-build the Swift agent. Written by `install.sh`.
 - **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL and auto sessions. The CLI, Live TUI, and auto runner all use these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format.
 - **Automation** (`~/.qorvex/automation/`) — Separate log and script directories for `qorvex-auto`. The `convert` command saves output scripts here by default.

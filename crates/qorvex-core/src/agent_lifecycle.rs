@@ -347,6 +347,18 @@ impl AgentLifecycle {
             .await
             .is_ok_and(|inner| inner.is_some())
     }
+
+    /// Ensure the agent is running, starting it only if not already reachable.
+    ///
+    /// Unlike [`ensure_running`](Self::ensure_running) which always rebuilds,
+    /// this method first checks whether the agent is already listening and
+    /// skips the build/spawn cycle if it is.
+    pub async fn ensure_agent_ready(&self) -> Result<(), AgentLifecycleError> {
+        if self.is_agent_reachable().await {
+            return Ok(());
+        }
+        self.ensure_running().await
+    }
 }
 
 // ---------------------------------------------------------------------------

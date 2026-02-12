@@ -13,6 +13,7 @@ use tui_input::Input;
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+use qorvex_core::config::QorvexConfig;
 use qorvex_core::driver::AutomationDriver;
 use qorvex_core::element::UIElement;
 use qorvex_core::executor::ActionExecutor;
@@ -341,6 +342,45 @@ impl App {
                 self.ipc_server_handle = Some(handle);
 
                 self.add_output(format_result(true, "Session started"));
+
+                // Auto-start agent if no executor or agent not reachable
+                let needs_agent = match &self.executor {
+                    Some(executor) => executor.driver().screenshot().await.is_err(),
+                    None => true,
+                };
+
+                if needs_agent {
+                    let udid_clone = self.simulator_udid.clone();
+                    if let Some(udid) = udid_clone {
+                        let config = QorvexConfig::load();
+                        if let Some(agent_source_dir) = config.agent_source_dir {
+                            self.add_output(Line::from("Starting agent..."));
+                            let lc_config = AgentLifecycleConfig::new(agent_source_dir);
+                            let lifecycle = AgentLifecycle::new(udid, lc_config);
+
+                            match lifecycle.ensure_agent_ready().await {
+                                Ok(()) => {
+                                    self.agent_lifecycle = Some(lifecycle);
+                                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
+                                    match driver.connect().await {
+                                        Ok(()) => {
+                                            self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                            self.add_output(format_result(true, "Agent started and connected"));
+                                        }
+                                        Err(e) => {
+                                            self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    self.add_output(format_result(false, &format!("Auto-start agent failed: {} (use start_agent manually)", e)));
+                                }
+                            }
+                        } else {
+                            self.add_output(Line::from("Tip: run install.sh from the qorvex repo to enable auto-agent startup"));
+                        }
+                    }
+                }
             }
             "end_session" => {
                 // Stop watcher first
@@ -504,26 +544,55 @@ impl App {
                             }
                         }
                     } else {
-                        // No path: connect to externally-started agent
-                        self.add_output(Line::from("Connecting to agent..."));
-                        let config = AgentLifecycleConfig::new(PathBuf::new());
-                        let lifecycle = AgentLifecycle::new(udid, config);
+                        // No path argument: try config, then fall back to external agent
+                        let config = QorvexConfig::load();
+                        if let Some(project_dir) = config.agent_source_dir {
+                            // Use configured agent source dir
+                            let lc_config = AgentLifecycleConfig::new(project_dir);
+                            let lifecycle = AgentLifecycle::new(udid, lc_config);
 
-                        match lifecycle.wait_for_ready().await {
-                            Ok(()) => {
-                                let mut driver = AgentDriver::direct("127.0.0.1", 8080);
-                                match driver.connect().await {
-                                    Ok(()) => {
-                                        self.executor = Some(ActionExecutor::new(Arc::new(driver)));
-                                        self.add_output(format_result(true, "Agent connected"));
-                                    }
-                                    Err(e) => {
-                                        self.add_output(format_result(false, &format!("Connection failed: {}", e)));
+                            self.add_output(Line::from("Building and starting agent..."));
+
+                            match lifecycle.ensure_agent_ready().await {
+                                Ok(()) => {
+                                    self.agent_lifecycle = Some(lifecycle);
+                                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
+                                    match driver.connect().await {
+                                        Ok(()) => {
+                                            self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                            self.add_output(format_result(true, "Agent started and connected"));
+                                        }
+                                        Err(e) => {
+                                            self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
+                                        }
                                     }
                                 }
+                                Err(e) => {
+                                    self.add_output(format_result(false, &format!("Failed to start agent: {}", e)));
+                                }
                             }
-                            Err(e) => {
-                                self.add_output(format_result(false, &format!("Agent not reachable: {}", e)));
+                        } else {
+                            // No config: connect to externally-started agent
+                            self.add_output(Line::from("Connecting to agent..."));
+                            let lc_config = AgentLifecycleConfig::new(PathBuf::new());
+                            let lifecycle = AgentLifecycle::new(udid, lc_config);
+
+                            match lifecycle.wait_for_ready().await {
+                                Ok(()) => {
+                                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
+                                    match driver.connect().await {
+                                        Ok(()) => {
+                                            self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                            self.add_output(format_result(true, "Agent connected"));
+                                        }
+                                        Err(e) => {
+                                            self.add_output(format_result(false, &format!("Connection failed: {}", e)));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    self.add_output(format_result(false, &format!("Agent not reachable: {}", e)));
+                                }
                             }
                         }
                     }

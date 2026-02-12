@@ -44,6 +44,7 @@ pub mod action;
 pub mod agent_client;
 pub mod agent_lifecycle;
 pub mod agent_driver;
+pub mod config;
 pub mod element;
 pub mod driver;
 pub mod executor;
