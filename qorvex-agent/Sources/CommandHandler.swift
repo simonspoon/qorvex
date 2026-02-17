@@ -283,7 +283,8 @@ final class CommandHandler {
                 )
                 return
             }
-            let value = element.value as? String ?? element.label
+            let rawValue = element.value as? String ?? ""
+            let value = rawValue.isEmpty ? element.label : rawValue
             if value.isEmpty {
                 result = .value(nil)
             } else {
