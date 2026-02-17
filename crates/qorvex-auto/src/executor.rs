@@ -304,6 +304,19 @@ impl ScriptExecutor {
                     })
                 }
             }
+            "set_target" => {
+                let bundle_id = args.first().ok_or_else(|| AutoError::Runtime {
+                    message: "set_target requires 1 argument: set_target(bundle_id)".to_string(),
+                    line,
+                })?;
+                let executor = self.require_executor(line)?;
+                executor.driver().set_target(bundle_id).await.map_err(|e| AutoError::ActionFailed {
+                    message: e.to_string(),
+                    line,
+                })?;
+                info!(line, bundle_id = %bundle_id, "target set");
+                Ok(Value::String(format!("Target set to {}", bundle_id)))
+            }
             "list_devices" => {
                 let devices = Simctl::list_devices().map_err(|e| AutoError::ActionFailed {
                     message: e.to_string(),
@@ -345,7 +358,7 @@ impl ScriptExecutor {
                 Ok(Value::String(info))
             }
             "help" => {
-                info!("available commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
+                info!("available commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, set_target, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
                 Ok(Value::String("help".to_string()))
             }
             "tap" => {

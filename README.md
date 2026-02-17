@@ -207,7 +207,8 @@ The `.qvx` script language uses REPL-compatible commands with control flow:
 
 ```
 # Variables and commands
-start_session
+use_device("UDID-HERE")
+set_target("com.example.myapp")
 tap("login-button")
 send_keys("user@example.com")
 swipe("down")
