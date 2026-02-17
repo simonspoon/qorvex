@@ -31,6 +31,8 @@
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
+use tracing::{debug, instrument};
+
 use crate::agent_client::{AgentClient, AgentClientError};
 use crate::element::UIElement;
 use crate::driver::{AutomationDriver, DriverError};
@@ -171,6 +173,7 @@ impl AgentDriver {
 
 #[async_trait]
 impl AutomationDriver for AgentDriver {
+    #[instrument(skip(self), level = "debug")]
     async fn connect(&mut self) -> Result<(), DriverError> {
         let mut client = match &self.target {
             ConnectionTarget::Direct { host, port } => {
@@ -201,6 +204,7 @@ impl AutomationDriver for AgentDriver {
         expect_ok(response)
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn tap_element(&self, identifier: &str) -> Result<(), DriverError> {
         let response = self
             .send(&Request::TapElement {
@@ -210,6 +214,7 @@ impl AutomationDriver for AgentDriver {
         expect_ok(response)
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn tap_by_label(&self, label: &str) -> Result<(), DriverError> {
         let response = self
             .send(&Request::TapByLabel {
@@ -219,6 +224,7 @@ impl AutomationDriver for AgentDriver {
         expect_ok(response)
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn tap_with_type(
         &self,
         selector: &str,
@@ -235,6 +241,7 @@ impl AutomationDriver for AgentDriver {
         expect_ok(response)
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn swipe(
         &self,
         start_x: i32,
@@ -260,6 +267,7 @@ impl AutomationDriver for AgentDriver {
         expect_ok(response)
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn type_text(&self, text: &str) -> Result<(), DriverError> {
         let response = self
             .send(&Request::TypeText {
@@ -269,12 +277,14 @@ impl AutomationDriver for AgentDriver {
         expect_ok(response)
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn dump_tree(&self) -> Result<Vec<UIElement>, DriverError> {
         let response = self.send(&Request::DumpTree).await?;
         match response {
             Response::Tree { json } => {
                 let elements: Vec<UIElement> = serde_json::from_str(&json)
                     .map_err(|e| DriverError::JsonParse(e.to_string()))?;
+                debug!(element_count = elements.len(), "tree dumped");
                 Ok(elements)
             }
             other => Err(DriverError::CommandFailed(format!(
@@ -342,16 +352,21 @@ impl AutomationDriver for AgentDriver {
         }
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn screenshot(&self) -> Result<Vec<u8>, DriverError> {
         let response = self.send(&Request::Screenshot).await?;
         match response {
-            Response::Screenshot { data } => Ok(data),
+            Response::Screenshot { data } => {
+                debug!(bytes = data.len(), "screenshot captured");
+                Ok(data)
+            }
             other => Err(DriverError::CommandFailed(format!(
                 "unexpected response: {other:?}"
             ))),
         }
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
         let response = self.send(&Request::SetTarget {
             bundle_id: bundle_id.to_string(),

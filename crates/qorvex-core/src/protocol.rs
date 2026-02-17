@@ -170,6 +170,27 @@ pub enum Request {
     SetTarget { bundle_id: String },
 }
 
+impl Request {
+    /// Returns a short, static name for this request type suitable for use in
+    /// tracing span metadata. Avoids Debug-formatting large enum payloads.
+    pub fn opcode_name(&self) -> &'static str {
+        match self {
+            Request::Heartbeat => "heartbeat",
+            Request::TapCoord { .. } => "tap_coord",
+            Request::TapElement { .. } => "tap_element",
+            Request::TapByLabel { .. } => "tap_by_label",
+            Request::TapWithType { .. } => "tap_with_type",
+            Request::TypeText { .. } => "type_text",
+            Request::Swipe { .. } => "swipe",
+            Request::GetValue { .. } => "get_value",
+            Request::LongPress { .. } => "long_press",
+            Request::DumpTree => "dump_tree",
+            Request::Screenshot => "screenshot",
+            Request::SetTarget { .. } => "set_target",
+        }
+    }
+}
+
 /// Response sub-type byte used inside the `Response` opcode payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

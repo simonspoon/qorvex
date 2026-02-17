@@ -29,6 +29,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tracing::{info_span, debug_span, debug, Instrument};
+
 use crate::action::ActionType;
 use crate::driver::AutomationDriver;
 
@@ -103,7 +105,7 @@ impl ActionExecutor {
     pub fn new(driver: Arc<dyn AutomationDriver>) -> Self {
         Self {
             driver,
-            capture_screenshots: true,
+            capture_screenshots: false,
         }
     }
 
@@ -144,6 +146,11 @@ impl ActionExecutor {
     /// Captures a screenshot and returns it as base64-encoded PNG.
     /// Returns `None` if screenshot capture is disabled.
     async fn capture_screenshot(&self) -> Option<String> {
+        let span = debug_span!("capture_screenshot");
+        self.capture_screenshot_inner().instrument(span).await
+    }
+
+    async fn capture_screenshot_inner(&self) -> Option<String> {
         if !self.capture_screenshots {
             return None;
         }
@@ -168,6 +175,18 @@ impl ActionExecutor {
     /// An [`ExecutionResult`] containing success/failure status, a message,
     /// and optionally a screenshot or additional data.
     pub async fn execute(&self, action: ActionType) -> ExecutionResult {
+        let action_name = action.name();
+        let span = info_span!("execute_action", action = action_name);
+        async {
+            let start = Instant::now();
+            let result = self.execute_inner(action).await;
+            let elapsed = start.elapsed();
+            debug!(elapsed_ms = elapsed.as_millis() as u64, success = result.success, "action complete");
+            result
+        }.instrument(span).await
+    }
+
+    async fn execute_inner(&self, action: ActionType) -> ExecutionResult {
         match action {
             ActionType::Tap { ref selector, by_label, ref element_type } => {
                 let tap_result = match element_type {

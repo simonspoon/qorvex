@@ -138,6 +138,28 @@ pub enum ActionType {
     Quit,
 }
 
+impl ActionType {
+    /// Returns a short, static name for this action type suitable for use in
+    /// tracing span metadata. Avoids Debug-formatting large enum payloads.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ActionType::Tap { .. } => "tap",
+            ActionType::TapLocation { .. } => "tap_location",
+            ActionType::Swipe { .. } => "swipe",
+            ActionType::LongPress { .. } => "long_press",
+            ActionType::LogComment { .. } => "log_comment",
+            ActionType::GetScreenshot => "get_screenshot",
+            ActionType::GetScreenInfo => "get_screen_info",
+            ActionType::GetValue { .. } => "get_value",
+            ActionType::SendKeys { .. } => "send_keys",
+            ActionType::WaitFor { .. } => "wait_for",
+            ActionType::StartSession => "start_session",
+            ActionType::EndSession => "end_session",
+            ActionType::Quit => "quit",
+        }
+    }
+}
+
 /// A logged action with metadata.
 ///
 /// Each action executed through the REPL is logged with a unique identifier,

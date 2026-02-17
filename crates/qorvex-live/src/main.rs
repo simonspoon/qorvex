@@ -18,6 +18,8 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use tracing_subscriber::EnvFilter;
+
 use qorvex_core::action::ActionLog;
 use qorvex_core::ipc::{IpcClient, IpcResponse};
 use qorvex_core::session::SessionEvent;
@@ -112,6 +114,21 @@ fn spawn_screenshot_task(udid: String, tx: mpsc::Sender<AppEvent>) {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let log_dir = dirs::home_dir()
+        .expect("Could not determine home directory")
+        .join(".qorvex")
+        .join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "qorvex-live.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
+
     let args = Args::parse();
 
     // Setup terminal

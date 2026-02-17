@@ -19,6 +19,7 @@ use ratatui::{
     Terminal,
 };
 use tui_input::backend::crossterm::EventHandler;
+use tracing_subscriber::EnvFilter;
 
 use app::App;
 
@@ -33,6 +34,21 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let log_dir = dirs::home_dir()
+        .expect("Could not determine home directory")
+        .join(".qorvex")
+        .join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "qorvex-repl.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
+
     let args = Args::parse();
 
     // Setup terminal

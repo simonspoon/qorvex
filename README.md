@@ -8,7 +8,7 @@ Qorvex provides programmatic control over iOS Simulators and physical devices th
 
 - **qorvex-core** — Core library with driver abstraction, protocol, session, IPC, and execution engine
 - **qorvex-repl** — Interactive command-line interface for manual testing
-- **qorvex-live** — TUI client for live screenshot and action log monitoring
+- **qorvex-live** — TUI client with inline screenshot rendering and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines
 - **qorvex-auto** — Script runner for `.qvx` automation scripts and JSONL log converter
 - **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
@@ -105,7 +105,7 @@ Available commands:
 
 ### Live TUI
 
-Monitor a session in real-time with a terminal UI:
+Monitor a session in real-time with inline screenshot rendering and an action log:
 
 ```bash
 qorvex-live

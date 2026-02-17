@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use tracing::{info, debug};
+
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::driver::DriverConfig;
 use qorvex_core::executor::ActionExecutor;
@@ -30,9 +32,7 @@ pub struct ScriptExecutor {
 impl ScriptExecutor {
     pub fn new(session: Arc<Session>, simulator_udid: Option<String>, base_dir: PathBuf, driver_config: DriverConfig) -> Self {
         let executor = simulator_udid.as_ref().map(|_| {
-            let mut e = ActionExecutor::from_config(driver_config.clone());
-            e.set_capture_screenshots(false);
-            e
+            ActionExecutor::from_config(driver_config.clone())
         });
         Self {
             runtime: Runtime::new(),
@@ -126,7 +126,7 @@ impl ScriptExecutor {
                                 line: *line,
                             })?;
                             self.default_timeout_ms = ms;
-                            eprintln!("[line {}] Default timeout set to {}ms", line, ms);
+                            info!(line, ms, "default timeout set");
                         }
                         _ => {
                             return Err(AutoError::Runtime {
@@ -168,7 +168,7 @@ impl ScriptExecutor {
                     }
                     self.include_stack.insert(canonical.clone());
 
-                    eprintln!("[line {}] Including {}", line, canonical.display());
+                    info!(line, path = %canonical.display(), "including file");
                     let result = self.execute_script(&included_script).await;
 
                     self.include_stack.remove(&canonical);
@@ -226,11 +226,11 @@ impl ScriptExecutor {
 
         match call.name.as_str() {
             "start_session" => {
-                eprintln!("[line {}] start_session is handled automatically and can be removed from scripts", line);
+                debug!(line, "start_session is handled automatically");
                 Ok(Value::String("Session started".to_string()))
             }
             "end_session" => {
-                eprintln!("[line {}] end_session is handled automatically and can be removed from scripts", line);
+                debug!(line, "end_session is handled automatically");
                 Ok(Value::String("Session ended".to_string()))
             }
             "use_device" => {
@@ -242,7 +242,7 @@ impl ScriptExecutor {
                 let mut executor = ActionExecutor::from_config(self.driver_config.clone());
                 executor.set_capture_screenshots(false);
                 self.executor = Some(executor);
-                eprintln!("[line {}] Using device {}", line, udid);
+                info!(line, udid = %udid, "using device");
                 Ok(Value::String(format!("Using device {}", udid)))
             }
             "boot_device" => {
@@ -258,7 +258,7 @@ impl ScriptExecutor {
                 let mut executor = ActionExecutor::from_config(self.driver_config.clone());
                 executor.set_capture_screenshots(false);
                 self.executor = Some(executor);
-                eprintln!("[line {}] Booted device {}", line, udid);
+                info!(line, udid = %udid, "booted device");
                 Ok(Value::String(format!("Booted device {}", udid)))
             }
             "start_watcher" => {
@@ -289,13 +289,13 @@ impl ScriptExecutor {
                     .clone();
                 let handle = ScreenWatcher::spawn(self.session.clone(), driver, config);
                 self.watcher_handle = Some(handle);
-                eprintln!("[line {}] Watcher started ({}ms)", line, interval_ms);
+                info!(line, interval_ms, "watcher started");
                 Ok(Value::String("Watcher started".to_string()))
             }
             "stop_watcher" => {
                 if let Some(handle) = self.watcher_handle.take() {
                     handle.cancel();
-                    eprintln!("[line {}] Watcher stopped", line);
+                    info!(line, "watcher stopped");
                     Ok(Value::String("Watcher stopped".to_string()))
                 } else {
                     Err(AutoError::Runtime {
@@ -310,9 +310,9 @@ impl ScriptExecutor {
                     line,
                 })?;
                 for d in &devices {
-                    eprintln!("  {} {} ({})", d.name, d.udid, d.state);
+                    debug!(name = %d.name, udid = %d.udid, state = %d.state, "device");
                 }
-                eprintln!("[line {}] {} devices", line, devices.len());
+                info!(line, count = devices.len(), "listed devices");
                 Ok(Value::String(format!("{} devices", devices.len())))
             }
             "list_elements" | "get_screen_info" => {
@@ -329,7 +329,7 @@ impl ScriptExecutor {
 
                 if result.success {
                     if let Some(ref data) = result.data {
-                        eprintln!("[line {}] {}", line, result.message);
+                        info!(line, msg = %result.message, "screen info");
                         Ok(Value::String(data.clone()))
                     } else {
                         Ok(Value::String(result.message))
@@ -341,11 +341,11 @@ impl ScriptExecutor {
             "get_session_info" => {
                 let action_log = self.session.get_action_log().await;
                 let info = format!("Session: {} actions", action_log.len());
-                eprintln!("[line {}] {}", line, info);
+                info!(line, msg = %info, "session info");
                 Ok(Value::String(info))
             }
             "help" => {
-                eprintln!("Commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
+                info!("available commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
                 Ok(Value::String("help".to_string()))
             }
             "tap" => {
@@ -456,7 +456,7 @@ impl ScriptExecutor {
 
                 if result.success {
                     let data = result.data.unwrap_or_else(|| "null".to_string());
-                    eprintln!("[line {}] Value: {}", line, data);
+                    info!(line, value = %data, "got value");
                     Ok(Value::String(data))
                 } else {
                     Err(AutoError::ActionFailed { message: result.message, line })
@@ -473,7 +473,7 @@ impl ScriptExecutor {
                 })?.clone();
                 let action = ActionType::LogComment { message: message.clone() };
                 self.session.log_action(action, ActionResult::Success, None, None).await;
-                eprintln!("[line {}] Logged: {}", line, message);
+                info!(line, msg = %message, "logged comment");
                 Ok(Value::String(message))
             }
             _ => Err(AutoError::Runtime {
@@ -531,7 +531,7 @@ impl ScriptExecutor {
         self.session.log_action(action, action_result, result.screenshot.clone(), duration_ms).await;
 
         if result.success {
-            eprintln!("[line {}] {}", line, result.message);
+            info!(line, msg = %result.message, "action executed");
             Ok(Value::String(result.data.unwrap_or(result.message)))
         } else {
             Err(AutoError::ActionFailed { message: result.message, line })

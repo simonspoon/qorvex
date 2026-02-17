@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
+use tracing_subscriber::EnvFilter;
 
 use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
 use qorvex_core::config::QorvexConfig;
@@ -65,6 +66,13 @@ fn automation_scripts_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = Cli::parse();
 
     let result = match cli.command {
@@ -73,7 +81,7 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        tracing::error!("{}", e);
         process::exit(e.exit_code());
     }
 }
@@ -128,11 +136,11 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
             let lifecycle = AgentLifecycle::new(udid.clone(), lc_config);
             match lifecycle.ensure_agent_ready().await {
                 Ok(()) => {
-                    eprintln!("Agent ready");
+                    tracing::info!("agent ready");
                     _agent_lifecycle = Some(lifecycle);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to start agent: {}", e);
+                    tracing::warn!("failed to start agent: {}", e);
                 }
             }
         }
@@ -190,7 +198,7 @@ fn convert_log(
         });
         let output_path = automation_scripts_dir().join(format!("{}.qvx", script_name));
         std::fs::write(&output_path, &script_text)?;
-        eprintln!("Saved to {}", output_path.display());
+        tracing::info!("saved to {}", output_path.display());
     }
 
     Ok(())

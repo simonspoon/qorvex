@@ -15,3 +15,8 @@ license = "MIT"
 repository = "https://github.com/simonspoon/qorvex"
 keywords = ["ios", "simulator", "automation", "testing", "macos"]
 categories = ["development-tools::testing"]
+
+[workspace.dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"

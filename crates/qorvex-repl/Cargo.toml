@@ -18,3 +18,7 @@ ratatui = { version = "0.30", features = ["crossterm"] }
 tui-input = "0.15"
 fuzzy-matcher = "0.3"
 arboard = "3"
+dirs = "5"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }

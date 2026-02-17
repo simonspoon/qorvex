@@ -55,7 +55,7 @@ Rust workspace with five crates plus a Swift agent for iOS Simulator and device 
 ```
 qorvex-core    - Core library (driver abstraction, protocol, session, ipc, action, executor, watcher)
 qorvex-repl    - TUI REPL with tab completion, uses core directly
-qorvex-live    - TUI client that connects via IPC to monitor sessions
+qorvex-live    - TUI client with screenshot rendering (ratatui-image) and IPC reconnection
 qorvex-cli     - Scriptable CLI client for automation pipelines
 qorvex-auto    - Script runner (.qvx files) and JSONL log-to-script converter
 qorvex-agent   - Swift XCTest agent for native iOS accessibility (not a Cargo crate)
@@ -72,32 +72,32 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 ### qorvex-core modules
 
 #### Driver abstraction layer
-- **driver.rs** - `AutomationDriver` trait (18 async + 1 sync method) and `DriverConfig` enum (`Agent`, `Device`). Includes glob matching (`*`/`?`) for element selectors, element search helpers, and `set_target()` for switching target app
-- **element.rs** - Shared `UIElement` and `ElementFrame` types used by all backends
+- **driver.rs** - `AutomationDriver` trait (18 async + 1 sync method) and `DriverConfig` enum (`Agent`, `Device`). Includes glob matching (`*`/`?`) for element selectors, default-impl search helpers (`find_element`, `find_element_by_label`, `find_element_with_type`), `set_target()` for switching target app, and pub `flatten_elements()` utility
+- **element.rs** - Shared `UIElement` (with `identifier`, `label`, `value`, `element_type`, `role`, `frame`, `children`) and `ElementFrame` types used by all backends
 - **protocol.rs** - Binary wire protocol codec (little-endian, 4-byte length header) for Rust ↔ Swift agent communication. Defines `OpCode` (including `SetTarget` for app switching), `Request`, and `Response` enums
 
 #### Backends
 - **agent_client.rs** - Low-level async TCP client (`AgentClient`) for Swift agent communication with timeouts and reconnection
 - **agent_driver.rs** - `AgentDriver`: implements `AutomationDriver` using Swift agent TCP connection. Supports `Direct` (simulator) and `UsbDevice` (physical) connection targets. Includes `set_target()` to switch target app bundle ID
-- **agent_lifecycle.rs** - `AgentLifecycle` struct managing full agent process lifecycle: build (`xcodebuild build-for-testing`), spawn (`test-without-building`), terminate, health-check via TCP heartbeat, and retry logic. Auto-cleanup via `Drop`. Configured via `AgentLifecycleConfig` (port, timeout, retries). `ensure_agent_ready()` skips rebuild if agent is already reachable
+- **agent_lifecycle.rs** - `AgentLifecycle` struct managing full agent process lifecycle: build (`xcodebuild build-for-testing`), spawn (`test-without-building`), terminate, health-check via TCP heartbeat, and retry logic. Auto-cleanup via `Drop`. Configured via `AgentLifecycleConfig` (port, timeout, retries). Two orchestration methods: `ensure_running()` (always rebuilds) and `ensure_agent_ready()` (skips rebuild if agent is already reachable)
 - **usb_tunnel.rs** - Physical device discovery and port forwarding via usbmuxd (`idevice` crate). Provides `list_devices()` and `connect(udid, port)`
 
 #### Infrastructure
 - **config.rs** - Persistent configuration stored in `~/.qorvex/config.json`. `QorvexConfig` with `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent
 - **simctl.rs** - Wrapper around `xcrun simctl` for device listing, screenshots, and boot
-- **session.rs** - Async session state with broadcast channels for events (uses `tokio::sync`)
-- **ipc.rs** - Unix socket server/client for REPL↔Watcher/CLI communication (JSON-over-newlines protocol)
+- **session.rs** - Async session state with broadcast channels for `SessionEvent`s (`ActionLogged`, `ScreenshotUpdated`, `ScreenInfoUpdated`, `Started`, `Ended`). Ring buffer (1000 max entries), persistent JSONL log file in `~/.qorvex/logs/`, cached `current_elements` and dual hashes (`screen_hash`, `screenshot_hash`) for change detection. Constructors: `new(name)` and `new_with_log_dir(name, dir)`
+- **ipc.rs** - Unix socket server/client for REPL↔Watcher/CLI communication (JSON-over-newlines protocol). Server constructors: `IpcServer::new(session, name)` (defaults to localhost:8080) and `IpcServer::with_config(session, name, config)`. Also exports `qorvex_dir()` for `~/.qorvex/` path resolution
   - Socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
   - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
-- **action.rs** - Unified action types (`Tap`, `TapLocation`, `Swipe`, `LongPress`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, session management) with selector/by_label/element_type pattern for element lookup. `ActionLog` includes optional `duration_ms` for timed actions
-- **executor.rs** - Backend-agnostic action execution engine. Takes `Arc<dyn AutomationDriver>` with convenience constructors: `with_agent(host, port)`, `from_config(config)`
-- **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash) with configurable `visual_change_threshold` (hamming distance 0-64). Includes exponential backoff on errors
+- **action.rs** - `ActionType` enum (`Tap`, `TapLocation`, `Swipe`, `LongPress`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, `StartSession`, `EndSession`, `Quit`) with selector/by_label/element_type pattern for element lookup. `ActionLog` includes optional `duration_ms` for timed actions
+- **executor.rs** - Backend-agnostic action execution engine. Constructors: `new(driver)`, `with_agent(host, port)`, `from_config(config)`. `set_capture_screenshots(bool)` to toggle post-action screenshots. `driver()` accessor. WaitFor polls every 100ms and requires 3 consecutive stable frames before success
+- **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash) with configurable `visual_change_threshold` (hamming distance 0-64). Returns `WatcherHandle` with `stop()`, `cancel()`, `is_running()` methods. Includes exponential backoff on errors
 
 ### qorvex-repl modules
 
 - **main.rs** - Entry point, event loop, command dispatch, and mouse event handling (drag-to-select, scroll, Ctrl+C copy)
-- **app.rs** - Application state (input, completion, output history, session references, text selection/clipboard, `AgentLifecycle` management). Supports `stop_agent` and `set_target` commands. `start_session` and `start_agent` auto-start the agent via `QorvexConfig` when `agent_source_dir` is set
+- **app.rs** - Application state (input, completion, output history, session references, text selection/clipboard via `SelectionState`/`TextPosition`, `AgentLifecycle` management). Full command set: `list_devices`, `use_device`, `boot_device`, `start_agent`, `stop_agent`, `set_target`, `start_session`, `end_session`, `start_watcher`, `stop_watcher`, `get_session_info`, `help`, `quit`, plus all action commands. `start_session` and `start_agent` auto-start the agent via `QorvexConfig` when `agent_source_dir` is set
 - **completion/** - Tab completion engine with command definitions, fuzzy matching, and context-aware suggestions
 - **format.rs** - Output formatting for commands, results, and elements
 - **ui/** - TUI rendering with ratatui (theme, completion popup, layout, selection overlay highlighting, scrollbar)
@@ -105,12 +105,12 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 ### qorvex-auto modules
 
 - **main.rs** - CLI entry point with `run` and `convert` subcommands (clap). `run` auto-starts the agent via `QorvexConfig` if configured
-- **ast.rs** - AST types: Script, Statement (Command, Assignment, Foreach, For, If, Set, Include), Expression, BinOp
+- **ast.rs** - AST types: Script, Statement (Command, Assignment, Foreach, For, If, Set, Include), Expression (including `CommandCapture` for `var = get_value(...)` syntax), BinOp (Add, Eq, NotEq)
 - **parser.rs** - Two-phase parser: tokenizer + recursive descent producing AST
 - **runtime.rs** - Variable environment with Value types (String, Number, List)
-- **executor.rs** - Script execution engine: walks AST, dispatches commands to `ActionExecutor`, manages session/watcher lifecycle
+- **executor.rs** - `ScriptExecutor` walks AST, dispatches commands to `ActionExecutor`, manages session/watcher lifecycle. Tracks `base_dir` for include resolution, `include_stack` to prevent circular includes, `default_timeout_ms` (via `set` command). Handles device commands (`list_devices`, `boot_device`, `set_target`) and watcher commands in addition to all action types
 - **converter.rs** - Converts JSONL action logs to `.qvx` scripts (record-and-replay)
-- **error.rs** - Error types with distinct exit codes (parse=2, runtime=3, action=1, io=4, session=5)
+- **error.rs** - `AutoError` enum with distinct exit codes: `ActionFailed`=1, `Parse`=2, `Runtime`=3, `Io`=4
 
 ### qorvex-agent (Swift)
 
@@ -118,7 +118,7 @@ Not a Cargo crate — a Swift XCTest UI Testing project generated via xcodegen f
 
 - **AgentServer.swift** - NWListener TCP server (Network framework), accepts connections and dispatches to CommandHandler on main thread
 - **Protocol.swift** - Binary protocol codec matching the Rust side (12 request opcodes including SetTarget, 5 response types)
-- **CommandHandler.swift** - Executes XCUIElement accessibility actions (tap, swipe, type, getValue, dumpTree, screenshot, setTarget) with ObjC exception catching via `QVXTryCatch()`
+- **CommandHandler.swift** - Executes XCUIElement accessibility actions (tap, tapByLabel, tapWithType, tapCoord, swipe, longPress, type, getValue, dumpTree, screenshot, setTarget) with ObjC exception catching via `QVXTryCatch()`
 - **UITreeSerializer.swift** - Serializes XCUIApplication accessibility hierarchy to JSON matching `UIElement`
 - **ObjCExceptionCatcher.{h,m}** - Objective-C `@try/@catch` bridge preventing XCUIElement NSExceptions from crashing the agent
 - **BridgingHeader.h** - Swift-ObjC bridging header for exception catcher

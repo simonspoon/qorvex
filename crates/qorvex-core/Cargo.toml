@@ -21,6 +21,7 @@ base64 = "0.22"
 dirs = "5"
 image = "0.25"
 idevice = { version = "0.1", default-features = false, features = ["usbmuxd", "rustls", "ring"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "io-util", "macros", "net", "test-util", "time"] }

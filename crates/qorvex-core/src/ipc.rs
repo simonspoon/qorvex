@@ -39,6 +39,8 @@ use tokio::net::{UnixListener, UnixStream};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use tracing::{debug, info_span, Instrument};
+
 use crate::action::{ActionResult, ActionType};
 use crate::executor::ActionExecutor;
 use crate::session::{Session, SessionEvent};
@@ -240,7 +242,8 @@ impl IpcServer {
             let config = self.driver_config.clone();
 
             tokio::spawn(async move {
-                let _ = Self::handle_client(stream, session, config).await;
+                let span = info_span!("ipc_client");
+                let _ = Self::handle_client(stream, session, config).instrument(span).await;
             });
         }
     }
@@ -261,6 +264,7 @@ impl IpcServer {
 
             match request {
                 IpcRequest::Execute { action } => {
+                    debug!(action = %action.name(), "executing action via IPC");
                     // Execute the action using the ActionExecutor
                     // LogComment doesn't require a simulator, handle it specially
                     let response = if matches!(action, ActionType::LogComment { .. }) {
@@ -313,6 +317,7 @@ impl IpcServer {
                     writer.flush().await?;
                 }
                 IpcRequest::Subscribe => {
+                    debug!("client subscribing to events");
                     // Send events as they occur
                     let mut rx = session.subscribe();
                     while let Ok(event) = rx.recv().await {
@@ -327,6 +332,7 @@ impl IpcServer {
                     }
                 }
                 IpcRequest::GetState => {
+                    debug!("client requesting state");
                     let response = IpcResponse::State {
                         session_id: session.id.to_string(),
                         screenshot: session.get_screenshot().await,
@@ -336,6 +342,7 @@ impl IpcServer {
                     writer.flush().await?;
                 }
                 IpcRequest::GetLog => {
+                    debug!("client requesting log");
                     let response = IpcResponse::Log {
                         entries: session.get_action_log().await,
                     };

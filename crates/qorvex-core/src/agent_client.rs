@@ -33,6 +33,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+use tracing::{debug, debug_span, trace, Instrument};
+
 use crate::protocol::{
     ProtocolError, Request, Response, decode_response, encode_request, read_frame_length,
 };
@@ -137,12 +139,15 @@ impl AgentClient {
             .addr
             .ok_or_else(|| AgentClientError::ConnectionFailed("no address configured".into()))?;
 
+        debug!(%addr, "connecting to agent");
+
         let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
             .await
             .map_err(|_| AgentClientError::Timeout)?
             .map_err(|e| AgentClientError::ConnectionFailed(e.to_string()))?;
 
         self.stream = Some(Box::new(stream));
+        debug!("connected to agent");
         Ok(())
     }
 
@@ -162,16 +167,20 @@ impl AgentClient {
     /// an [`AgentClientError::AgentError`] so callers can treat all failures
     /// uniformly via the error type.
     pub async fn send(&mut self, request: &Request) -> Result<Response, AgentClientError> {
-        let frame = encode_request(request);
-        self.write_frame(&frame).await?;
+        let opcode = request.opcode_name();
+        let span = debug_span!("agent_send", opcode);
+        async {
+            let frame = encode_request(request);
+            self.write_frame(&frame).await?;
 
-        let payload = self.read_frame().await?;
-        let response = decode_response(&payload)?;
+            let payload = self.read_frame().await?;
+            let response = decode_response(&payload)?;
 
-        match response {
-            Response::Error { message } => Err(AgentClientError::AgentError(message)),
-            other => Ok(other),
-        }
+            match response {
+                Response::Error { message } => Err(AgentClientError::AgentError(message)),
+                other => Ok(other),
+            }
+        }.instrument(span).await
     }
 
     /// Convenience method to send a heartbeat and verify the agent is alive.
@@ -190,6 +199,7 @@ impl AgentClient {
     /// (as produced by [`encode_request`]).
     async fn write_frame(&mut self, data: &[u8]) -> Result<(), AgentClientError> {
         let stream = self.stream.as_mut().ok_or(AgentClientError::NotConnected)?;
+        trace!(frame_bytes = data.len(), "writing frame");
         stream.write_all(data).await?;
         stream.flush().await?;
         Ok(())
@@ -212,6 +222,7 @@ impl AgentClient {
 
             // Read the payload.
             let mut payload = vec![0u8; len];
+            trace!(payload_bytes = len, "reading frame");
             stream.read_exact(&mut payload).await?;
 
             Ok::<Vec<u8>, std::io::Error>(payload)

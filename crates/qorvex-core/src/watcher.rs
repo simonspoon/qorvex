@@ -36,6 +36,8 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use tracing::{debug, debug_span, Instrument};
+
 use crate::element::UIElement;
 use crate::driver::AutomationDriver;
 use crate::session::Session;
@@ -143,11 +145,20 @@ impl ScreenWatcher {
                     break;
                 }
                 _ = tokio::time::sleep(sleep_duration) => {
-                    let ok = Self::check_for_changes(&session, &driver, &config).await;
+                    let ok = {
+                        let span = debug_span!("watcher_poll");
+                        Self::check_for_changes(&session, &driver, &config).instrument(span).await
+                    };
+                    let prev_errors = consecutive_errors;
                     if ok {
                         consecutive_errors = 0;
                     } else {
                         consecutive_errors = consecutive_errors.saturating_add(1);
+                    }
+                    if prev_errors == 0 && consecutive_errors > 0 {
+                        debug!(consecutive_errors, "watcher entering backoff");
+                    } else if prev_errors > 0 && consecutive_errors == 0 {
+                        debug!("watcher recovered from backoff");
                     }
                 }
             }
@@ -174,7 +185,10 @@ impl ScreenWatcher {
         let (screenshot, screenshot_hash) = if config.capture_screenshots {
             match driver.screenshot().await {
                 Ok(bytes) => {
-                    let dhash = Self::dhash_screenshot(&bytes);
+                    let dhash = {
+                        let span = debug_span!("dhash");
+                        span.in_scope(|| Self::dhash_screenshot(&bytes))
+                    };
                     use base64::Engine;
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     (Some(b64), dhash)

@@ -36,6 +36,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use tracing::{info, debug, instrument};
+
 use crate::agent_client::AgentClient;
 
 // ---------------------------------------------------------------------------
@@ -165,6 +167,7 @@ impl AgentLifecycle {
     /// - [`AgentLifecycleError::ProjectNotFound`] if the project dir or xcodeproj does not exist
     /// - [`AgentLifecycleError::BuildFailed`] if xcodebuild returns a non-zero exit code
     /// - [`AgentLifecycleError::Io`] if the command fails to execute
+    #[instrument(skip(self))]
     pub fn build_agent(&self) -> Result<(), AgentLifecycleError> {
         if !self.config.project_dir.exists() {
             return Err(AgentLifecycleError::ProjectNotFound(
@@ -201,6 +204,7 @@ impl AgentLifecycle {
             return Err(AgentLifecycleError::BuildFailed(stderr.to_string()));
         }
 
+        info!("agent build complete");
         Ok(())
     }
 
@@ -212,6 +216,7 @@ impl AgentLifecycle {
     /// # Errors
     ///
     /// - [`AgentLifecycleError::LaunchFailed`] if the command fails to spawn
+    #[instrument(skip(self))]
     pub fn spawn_agent(&self) -> Result<(), AgentLifecycleError> {
         let xcodeproj = self.config.project_dir.join(XCODEPROJ);
 
@@ -240,6 +245,7 @@ impl AgentLifecycle {
         let mut guard = self.child.lock().unwrap();
         *guard = Some(child);
 
+        info!("agent process spawned");
         Ok(())
     }
 
@@ -278,6 +284,7 @@ impl AgentLifecycle {
     /// # Errors
     ///
     /// - [`AgentLifecycleError::StartupTimeout`] if the agent does not respond within the timeout
+    #[instrument(skip(self))]
     pub async fn wait_for_ready(&self) -> Result<(), AgentLifecycleError> {
         let deadline = tokio::time::Instant::now() + self.config.startup_timeout;
         let addr = self.agent_addr();
@@ -287,6 +294,7 @@ impl AgentLifecycle {
             if client.connect().await.is_ok() {
                 if client.heartbeat().await.is_ok() {
                     client.disconnect();
+                    info!("agent ready");
                     return Ok(());
                 }
                 client.disconnect();
@@ -310,13 +318,17 @@ impl AgentLifecycle {
     /// - Any error from [`build_agent`](Self::build_agent)
     /// - Any error from [`spawn_agent`](Self::spawn_agent)
     /// - [`AgentLifecycleError::StartupTimeout`] if all retries are exhausted
+    #[instrument(skip(self))]
     pub async fn ensure_running(&self) -> Result<(), AgentLifecycleError> {
         self.build_agent()?;
         self.spawn_agent()?;
 
         for attempt in 0..=self.config.max_retries {
             match self.wait_for_ready().await {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    info!("agent running after attempt {}", attempt);
+                    return Ok(());
+                }
                 Err(AgentLifecycleError::StartupTimeout) if attempt < self.config.max_retries => {
                     // Terminate and respawn for the next attempt.
                     let _ = self.terminate_agent();
@@ -353,8 +365,10 @@ impl AgentLifecycle {
     /// Unlike [`ensure_running`](Self::ensure_running) which always rebuilds,
     /// this method first checks whether the agent is already listening and
     /// skips the build/spawn cycle if it is.
+    #[instrument(skip(self))]
     pub async fn ensure_agent_ready(&self) -> Result<(), AgentLifecycleError> {
         if self.is_agent_reachable().await {
+            debug!("agent already reachable, skipping build");
             return Ok(());
         }
         self.ensure_running().await

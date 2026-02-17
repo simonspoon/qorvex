@@ -309,20 +309,9 @@ impl App {
         }
     }
 
-    async fn capture_screenshot(&self) -> Option<String> {
-        if let Some(ref executor) = self.executor {
-            executor.driver().screenshot().await.ok().map(|bytes| {
-                use base64::Engine;
-                base64::engine::general_purpose::STANDARD.encode(&bytes)
-            })
-        } else {
-            None
-        }
-    }
-
     async fn log_action(&self, action: ActionType, result: ActionResult, duration_ms: Option<u64>) {
         if let Some(session) = &self.session {
-            let screenshot = self.capture_screenshot().await;
+            let screenshot = None;
             session.log_action(action, result, screenshot, duration_ms).await;
         }
     }

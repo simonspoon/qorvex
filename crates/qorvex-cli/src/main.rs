@@ -48,6 +48,7 @@ use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
 use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse};
 use std::process::ExitCode;
+use tracing_subscriber::EnvFilter;
 
 /// CLI client for iOS Simulator automation via qorvex IPC.
 #[derive(Parser)]
@@ -168,6 +169,13 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = Cli::parse();
 
     match run(cli).await {
