@@ -41,6 +41,10 @@ pub struct UIElement {
     /// The accessibility role of this element.
     #[serde(default)]
     pub role: Option<String>,
+
+    /// Whether this element is hittable (tappable) as reported by the automation backend.
+    #[serde(default)]
+    pub hittable: Option<bool>,
 }
 
 /// The frame (position and dimensions) of a UI element.

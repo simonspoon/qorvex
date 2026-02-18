@@ -22,6 +22,7 @@ struct UIElementJSON: Codable {
     let frame: FrameJSON?
     let children: [UIElementJSON]
     let role: String?
+    let hittable: Bool?
 }
 
 /// JSON representation of an element's frame (position and size in screen points).

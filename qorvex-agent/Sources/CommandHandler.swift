@@ -386,7 +386,8 @@ final class CommandHandler {
             type: elementTypeName(snapshot.elementType),
             frame: frameJSON,
             children: children,
-            role: nil // XCUIElement doesn't directly expose role
+            role: nil, // XCUIElement doesn't directly expose role
+            hittable: snapshot.isHittable
         )
     }
 

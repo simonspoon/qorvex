@@ -320,6 +320,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
+            hittable: None,
         };
 
         let hash1 = ScreenWatcher::hash_elements(&[element.clone()]);
@@ -338,6 +339,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
+            hittable: None,
         };
 
         let element2 = UIElement {
@@ -348,6 +350,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
+            hittable: None,
         };
 
         let hash1 = ScreenWatcher::hash_elements(&[element1]);

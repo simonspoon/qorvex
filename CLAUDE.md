@@ -73,7 +73,7 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 
 #### Driver abstraction layer
 - **driver.rs** - `AutomationDriver` trait (18 async + 1 sync method) and `DriverConfig` enum (`Agent`, `Device`). Includes glob matching (`*`/`?`) for element selectors, default-impl search helpers (`find_element`, `find_element_by_label`, `find_element_with_type`), `set_target()` for switching target app, and pub `flatten_elements()` utility
-- **element.rs** - Shared `UIElement` (with `identifier`, `label`, `value`, `element_type`, `role`, `frame`, `children`) and `ElementFrame` types used by all backends
+- **element.rs** - Shared `UIElement` (with `identifier`, `label`, `value`, `element_type`, `role`, `frame`, `children`, `hittable`) and `ElementFrame` types used by all backends
 - **protocol.rs** - Binary wire protocol codec (little-endian, 4-byte length header) for Rust ↔ Swift agent communication. Defines `OpCode` (including `SetTarget` for app switching), `Request`, and `Response` enums
 
 #### Backends
@@ -91,7 +91,7 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
   - Request types: `Execute`, `Subscribe`, `GetState`, `GetLog`
   - Response types: `ActionResult`, `State`, `Log`, `Event`, `Error`
 - **action.rs** - `ActionType` enum (`Tap`, `TapLocation`, `Swipe`, `LongPress`, `SendKeys`, `GetScreenshot`, `GetScreenInfo`, `GetValue`, `WaitFor`, `LogComment`, `StartSession`, `EndSession`, `Quit`) with selector/by_label/element_type pattern for element lookup. `ActionLog` includes optional `duration_ms` for timed actions
-- **executor.rs** - Backend-agnostic action execution engine. Constructors: `new(driver)`, `with_agent(host, port)`, `from_config(config)`. `set_capture_screenshots(bool)` to toggle post-action screenshots. `driver()` accessor. WaitFor polls every 100ms and requires 3 consecutive stable frames before success
+- **executor.rs** - Backend-agnostic action execution engine. Constructors: `new(driver)`, `with_agent(host, port)`, `from_config(config)`. `set_capture_screenshots(bool)` to toggle post-action screenshots. `driver()` accessor. WaitFor polls every 100ms, requires element to be hittable, and requires 3 consecutive stable frames before success
 - **watcher.rs** - Screen change detection via accessibility tree polling and perceptual image hashing (dHash) with configurable `visual_change_threshold` (hamming distance 0-64). Returns `WatcherHandle` with `stop()`, `cancel()`, `is_running()` methods. Includes exponential backoff on errors
 
 ### qorvex-repl modules

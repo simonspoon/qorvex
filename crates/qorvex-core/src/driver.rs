@@ -560,6 +560,7 @@ mod tests {
                     frame: None,
                     children: vec![],
                     role: None,
+                    hittable: None,
                 },
                 UIElement {
                     identifier: None,
@@ -569,9 +570,11 @@ mod tests {
                     frame: None,
                     children: vec![],
                     role: None,
+                    hittable: None,
                 },
             ],
             role: None,
+                    hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -597,8 +600,10 @@ mod tests {
                 frame: None,
                 children: vec![],
                 role: None,
+                    hittable: None,
             }],
             role: None,
+                    hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -646,12 +651,16 @@ mod tests {
                         }),
                         children: vec![],
                         role: None,
+                    hittable: None,
                     }],
                     role: None,
+                    hittable: None,
                 }],
                 role: None,
+                    hittable: None,
             }],
             role: None,
+                    hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -681,6 +690,7 @@ mod tests {
                     frame: None,
                     children: vec![],
                     role: None,
+                    hittable: None,
                 },
                 UIElement {
                     identifier: None,
@@ -696,11 +706,14 @@ mod tests {
                         frame: None,
                         children: vec![],
                         role: None,
+                    hittable: None,
                     }],
                     role: None,
+                    hittable: None,
                 },
             ],
             role: None,
+                    hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -729,8 +742,10 @@ mod tests {
                 frame: None,
                 children: vec![],
                 role: None,
+                    hittable: None,
             }],
             role: None,
+                    hittable: None,
         }];
 
         let found = search_by_identifier(&elements, "child-btn");
@@ -757,8 +772,10 @@ mod tests {
                 frame: None,
                 children: vec![],
                 role: None,
+                    hittable: None,
             }],
             role: None,
+                    hittable: None,
         }];
 
         let found = search_by_identifier(&elements, "login-*");
@@ -780,6 +797,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
+                    hittable: None,
         }];
 
         let found = search_by_label(&elements, "Submit");
@@ -799,6 +817,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
+                    hittable: None,
         }];
 
         let found = search_by_label(&elements, "Log*");
@@ -816,6 +835,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
+                    hittable: None,
         }];
 
         // Match by ID with correct type

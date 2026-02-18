@@ -519,9 +519,9 @@ impl ScriptExecutor {
         })
     }
 
-    /// Polls until the element exists, without requiring frame stability.
-    /// Returns as soon as the element is found once, letting XCUIElement's
-    /// native tap handle hittability and animations.
+    /// Polls until the element exists and is hittable, without requiring
+    /// frame stability. Returns as soon as the element is found and hittable,
+    /// letting XCUIElement's native tap handle animations.
     async fn wait_for_element_exists(
         &self,
         selector: &str,
@@ -533,13 +533,25 @@ impl ScriptExecutor {
         let timeout = Duration::from_millis(self.default_timeout_ms);
         let poll_interval = Duration::from_millis(100);
         let start = Instant::now();
+        let mut found_not_hittable = false;
 
         loop {
-            if let Ok(Some(_)) = driver.find_element_with_type(selector, by_label, element_type).await {
-                return Ok(());
+            if let Ok(Some(element)) = driver.find_element_with_type(selector, by_label, element_type).await {
+                // Keep polling if the element exists but isn't hittable yet.
+                if element.hittable == Some(false) {
+                    found_not_hittable = true;
+                } else {
+                    return Ok(());
+                }
             }
             if start.elapsed() >= timeout {
-                let msg = if by_label {
+                let msg = if found_not_hittable {
+                    if by_label {
+                        format!("Timeout after {}ms: element with label '{}' exists but is not hittable", self.default_timeout_ms, selector)
+                    } else {
+                        format!("Timeout after {}ms: element '{}' exists but is not hittable", self.default_timeout_ms, selector)
+                    }
+                } else if by_label {
                     format!("Timeout after {}ms waiting for element with label '{}'", self.default_timeout_ms, selector)
                 } else {
                     format!("Timeout after {}ms waiting for element '{}'", self.default_timeout_ms, selector)
