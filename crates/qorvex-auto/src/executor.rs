@@ -30,10 +30,12 @@ pub struct ScriptExecutor {
 }
 
 impl ScriptExecutor {
-    pub fn new(session: Arc<Session>, simulator_udid: Option<String>, base_dir: PathBuf, driver_config: DriverConfig) -> Self {
-        let executor = simulator_udid.as_ref().map(|_| {
-            ActionExecutor::from_config(driver_config.clone())
-        });
+    pub async fn new(session: Arc<Session>, simulator_udid: Option<String>, base_dir: PathBuf, driver_config: DriverConfig) -> Self {
+        let executor = if simulator_udid.is_some() {
+            ActionExecutor::from_config_connected(driver_config.clone()).await.ok()
+        } else {
+            None
+        };
         Self {
             runtime: Runtime::new(),
             session,
@@ -239,7 +241,12 @@ impl ScriptExecutor {
                     line,
                 })?;
                 self.simulator_udid = Some(udid.clone());
-                let mut executor = ActionExecutor::from_config(self.driver_config.clone());
+                let mut executor = ActionExecutor::from_config_connected(self.driver_config.clone())
+                    .await
+                    .map_err(|e| AutoError::ActionFailed {
+                        message: format!("Failed to connect to automation backend: {}", e),
+                        line,
+                    })?;
                 executor.set_capture_screenshots(false);
                 self.executor = Some(executor);
                 info!(line, udid = %udid, "using device");
@@ -255,7 +262,12 @@ impl ScriptExecutor {
                     line,
                 })?;
                 self.simulator_udid = Some(udid.clone());
-                let mut executor = ActionExecutor::from_config(self.driver_config.clone());
+                let mut executor = ActionExecutor::from_config_connected(self.driver_config.clone())
+                    .await
+                    .map_err(|e| AutoError::ActionFailed {
+                        message: format!("Failed to connect to automation backend: {}", e),
+                        line,
+                    })?;
                 executor.set_capture_screenshots(false);
                 self.executor = Some(executor);
                 info!(line, udid = %udid, "booted device");

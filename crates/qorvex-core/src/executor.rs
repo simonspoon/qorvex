@@ -111,6 +111,9 @@ impl ActionExecutor {
 
     /// Convenience constructor: create an executor using the [`AgentDriver`](crate::agent_driver::AgentDriver) backend.
     ///
+    /// The driver is **not** connected yet. Call [`connect`](Self::connect) before
+    /// executing actions, or use [`with_agent_connected`](Self::with_agent_connected).
+    ///
     /// # Arguments
     ///
     /// * `host` - The hostname or IP of the Swift agent
@@ -119,7 +122,17 @@ impl ActionExecutor {
         Self::new(Arc::new(crate::agent_driver::AgentDriver::direct(host, port)))
     }
 
+    /// Like [`with_agent`](Self::with_agent) but connects immediately.
+    pub async fn with_agent_connected(host: impl Into<String>, port: u16) -> Result<Self, crate::driver::DriverError> {
+        let mut driver = crate::agent_driver::AgentDriver::direct(host, port);
+        driver.connect().await?;
+        Ok(Self::new(Arc::new(driver)))
+    }
+
     /// Create an executor from a [`DriverConfig`](crate::driver::DriverConfig).
+    ///
+    /// The driver is **not** connected yet. Call [`connect`](Self::connect) before
+    /// executing actions, or use [`from_config_connected`](Self::from_config_connected).
     ///
     /// # Arguments
     ///
@@ -129,6 +142,18 @@ impl ActionExecutor {
             crate::driver::DriverConfig::Agent { host, port } => Self::with_agent(host, port),
             crate::driver::DriverConfig::Device { udid, device_port } => {
                 Self::new(Arc::new(crate::agent_driver::AgentDriver::usb_device(udid, device_port)))
+            }
+        }
+    }
+
+    /// Like [`from_config`](Self::from_config) but connects immediately.
+    pub async fn from_config_connected(config: crate::driver::DriverConfig) -> Result<Self, crate::driver::DriverError> {
+        match config {
+            crate::driver::DriverConfig::Agent { host, port } => Self::with_agent_connected(host, port).await,
+            crate::driver::DriverConfig::Device { udid, device_port } => {
+                let mut driver = crate::agent_driver::AgentDriver::usb_device(udid, device_port);
+                driver.connect().await?;
+                Ok(Self::new(Arc::new(driver)))
             }
         }
     }

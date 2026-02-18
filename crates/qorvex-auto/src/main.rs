@@ -147,7 +147,7 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
     }
 
     // Execute with automatic session lifecycle
-    let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir, DriverConfig::Agent { host: "localhost".to_string(), port: 8080 });
+    let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir, DriverConfig::Agent { host: "localhost".to_string(), port: 8080 }).await;
 
     session.log_action(
         qorvex_core::action::ActionType::StartSession,
