@@ -370,6 +370,42 @@ impl AutomationDriver for AgentDriver {
     }
 
     #[instrument(skip(self), level = "debug")]
+    async fn find_element(&self, identifier: &str) -> Result<Option<UIElement>, DriverError> {
+        self.find_element_with_type(identifier, false, None).await
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    async fn find_element_by_label(&self, label: &str) -> Result<Option<UIElement>, DriverError> {
+        self.find_element_with_type(label, true, None).await
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    async fn find_element_with_type(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+    ) -> Result<Option<UIElement>, DriverError> {
+        let response = self
+            .send(&Request::FindElement {
+                selector: selector.to_string(),
+                by_label,
+                element_type: element_type.map(|s| s.to_string()),
+            })
+            .await?;
+        match response {
+            Response::Element { json } => {
+                let element: Option<UIElement> = serde_json::from_str(&json)
+                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
+                Ok(element)
+            }
+            other => Err(DriverError::CommandFailed(format!(
+                "unexpected response: {other:?}"
+            ))),
+        }
+    }
+
+    #[instrument(skip(self), level = "debug")]
     async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
         let response = self.send(&Request::SetTarget {
             bundle_id: bundle_id.to_string(),

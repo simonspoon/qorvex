@@ -94,6 +94,8 @@ pub enum OpCode {
     Screenshot = 0x11,
     /// Set the target application for accessibility queries (length-prefixed string).
     SetTarget = 0x12,
+    /// Find a single element matching the selector (selector + by_label + optional type).
+    FindElement = 0x13,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -116,6 +118,7 @@ impl OpCode {
             0x10 => Ok(OpCode::DumpTree),
             0x11 => Ok(OpCode::Screenshot),
             0x12 => Ok(OpCode::SetTarget),
+            0x13 => Ok(OpCode::FindElement),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -168,6 +171,12 @@ pub enum Request {
     Screenshot,
     /// Set the target application bundle ID for accessibility queries.
     SetTarget { bundle_id: String },
+    /// Find a single element matching the selector.
+    FindElement {
+        selector: String,
+        by_label: bool,
+        element_type: Option<String>,
+    },
 }
 
 impl Request {
@@ -187,6 +196,7 @@ impl Request {
             Request::DumpTree => "dump_tree",
             Request::Screenshot => "screenshot",
             Request::SetTarget { .. } => "set_target",
+            Request::FindElement { .. } => "find_element",
         }
     }
 }
@@ -200,6 +210,7 @@ enum ResponseType {
     Tree = 0x02,
     Screenshot = 0x03,
     Value = 0x04,
+    Element = 0x05,
 }
 
 impl ResponseType {
@@ -210,6 +221,7 @@ impl ResponseType {
             0x02 => Ok(ResponseType::Tree),
             0x03 => Ok(ResponseType::Screenshot),
             0x04 => Ok(ResponseType::Value),
+            0x05 => Ok(ResponseType::Element),
             other => Err(ProtocolError::InvalidPayload(format!(
                 "unknown response type: 0x{other:02X}"
             ))),
@@ -230,6 +242,8 @@ pub enum Response {
     Screenshot { data: Vec<u8> },
     /// The current value of a UI element, if available.
     Value { value: Option<String> },
+    /// A JSON-encoded single element result.
+    Element { json: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +486,16 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
             payload.push(OpCode::SetTarget as u8);
             write_string(&mut payload, bundle_id);
         }
+        Request::FindElement {
+            selector,
+            by_label,
+            element_type,
+        } => {
+            payload.push(OpCode::FindElement as u8);
+            write_string(&mut payload, selector);
+            write_bool(&mut payload, *by_label);
+            write_optional_string(&mut payload, element_type);
+        }
     }
 
     encode_frame(&payload)
@@ -571,6 +595,17 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
             Ok(Request::SetTarget { bundle_id })
         }
 
+        OpCode::FindElement => {
+            let selector = cur.read_string()?;
+            let by_label = cur.read_bool()?;
+            let element_type = cur.read_optional_string()?;
+            Ok(Request::FindElement {
+                selector,
+                by_label,
+                element_type,
+            })
+        }
+
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
             opcode as u8
@@ -606,6 +641,10 @@ pub fn encode_response(resp: &Response) -> Vec<u8> {
         Response::Value { value } => {
             payload.push(ResponseType::Value as u8);
             write_optional_string(&mut payload, value);
+        }
+        Response::Element { json } => {
+            payload.push(ResponseType::Element as u8);
+            write_string(&mut payload, json);
         }
     }
 
@@ -645,6 +684,10 @@ pub fn decode_response(data: &[u8]) -> Result<Response, ProtocolError> {
                 ResponseType::Value => {
                     let value = cur.read_optional_string()?;
                     Ok(Response::Value { value })
+                }
+                ResponseType::Element => {
+                    let json = cur.read_string()?;
+                    Ok(Response::Element { json })
                 }
             }
         }
@@ -956,7 +999,7 @@ mod tests {
     #[test]
     fn opcode_round_trip() {
         let codes: Vec<u8> = vec![
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x99, 0xA0,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x99, 0xA0,
         ];
         for &code in &codes {
             let op = OpCode::from_u8(code).unwrap();

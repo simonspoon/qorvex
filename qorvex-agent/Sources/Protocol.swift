@@ -22,6 +22,7 @@ enum OpCode: UInt8 {
     case dumpTree   = 0x10
     case screenshot  = 0x11
     case setTarget   = 0x12
+    case findElement = 0x13
     case error      = 0x99
     case response   = 0xA0
 }
@@ -35,6 +36,7 @@ enum ResponseType: UInt8 {
     case tree       = 0x02
     case screenshot = 0x03
     case value      = 0x04
+    case element    = 0x05
 }
 
 // MARK: - Request
@@ -53,6 +55,7 @@ enum AgentRequest {
     case dumpTree
     case screenshot
     case setTarget(bundleId: String)
+    case findElement(selector: String, byLabel: Bool, elementType: String?)
 }
 
 // MARK: - Response
@@ -64,6 +67,7 @@ enum AgentResponse {
     case tree(json: String)
     case screenshot(data: Data)
     case value(String?)
+    case element(json: String)
 }
 
 // MARK: - Protocol errors
@@ -227,6 +231,12 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
         let bundleId = try cursor.readString()
         return .setTarget(bundleId: bundleId)
 
+    case .findElement:
+        let selector = try cursor.readString()
+        let byLabel = try cursor.readBool()
+        let elementType = try cursor.readOptionalString()
+        return .findElement(selector: selector, byLabel: byLabel, elementType: elementType)
+
     case .error, .response:
         throw ProtocolError.invalidPayload(
             String(format: "opcode 0x%02X is not a valid request opcode", rawOpCode)
@@ -261,6 +271,10 @@ func encodeResponse(_ response: AgentResponse) -> Data {
     case .value(let optValue):
         payload.append(ResponseType.value.rawValue)
         writeOptionalString(&payload, optValue)
+
+    case .element(let json):
+        payload.append(ResponseType.element.rawValue)
+        writeString(&payload, json)
     }
 
     return encodeFrame(payload)

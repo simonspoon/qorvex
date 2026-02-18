@@ -74,11 +74,11 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 #### Driver abstraction layer
 - **driver.rs** - `AutomationDriver` trait (18 async + 1 sync method) and `DriverConfig` enum (`Agent`, `Device`). Includes glob matching (`*`/`?`) for element selectors, default-impl search helpers (`find_element`, `find_element_by_label`, `find_element_with_type`), `set_target()` for switching target app, and pub `flatten_elements()` utility
 - **element.rs** - Shared `UIElement` (with `identifier`, `label`, `value`, `element_type`, `role`, `frame`, `children`, `hittable`) and `ElementFrame` types used by all backends
-- **protocol.rs** - Binary wire protocol codec (little-endian, 4-byte length header) for Rust ↔ Swift agent communication. Defines `OpCode` (including `SetTarget` for app switching), `Request`, and `Response` enums
+- **protocol.rs** - Binary wire protocol codec (little-endian, 4-byte length header) for Rust ↔ Swift agent communication. Defines `OpCode` (including `SetTarget` for app switching and `FindElement` for single-element lookup with live hittability), `Request`, and `Response` enums
 
 #### Backends
 - **agent_client.rs** - Low-level async TCP client (`AgentClient`) for Swift agent communication with timeouts and reconnection
-- **agent_driver.rs** - `AgentDriver`: implements `AutomationDriver` using Swift agent TCP connection. Supports `Direct` (simulator) and `UsbDevice` (physical) connection targets. Includes `set_target()` to switch target app bundle ID
+- **agent_driver.rs** - `AgentDriver`: implements `AutomationDriver` using Swift agent TCP connection. Supports `Direct` (simulator) and `UsbDevice` (physical) connection targets. Includes `set_target()` to switch target app bundle ID. Overrides `find_element`, `find_element_by_label`, and `find_element_with_type` to use the `FindElement` protocol command for accurate live hittability instead of the default dump-tree-and-search
 - **agent_lifecycle.rs** - `AgentLifecycle` struct managing full agent process lifecycle: build (`xcodebuild build-for-testing`), spawn (`test-without-building`), terminate, health-check via TCP heartbeat, and retry logic. Auto-cleanup via `Drop`. Configured via `AgentLifecycleConfig` (port, timeout, retries). Two orchestration methods: `ensure_running()` (always rebuilds) and `ensure_agent_ready()` (skips rebuild if agent is already reachable)
 - **usb_tunnel.rs** - Physical device discovery and port forwarding via usbmuxd (`idevice` crate). Provides `list_devices()` and `connect(udid, port)`
 
@@ -117,8 +117,8 @@ Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary pr
 Not a Cargo crate — a Swift XCTest UI Testing project generated via xcodegen from `project.yml`.
 
 - **AgentServer.swift** - NWListener TCP server (Network framework), accepts connections and dispatches to CommandHandler on main thread
-- **Protocol.swift** - Binary protocol codec matching the Rust side (12 request opcodes including SetTarget, 5 response types)
-- **CommandHandler.swift** - Executes XCUIElement accessibility actions (tap, tapByLabel, tapWithType, tapCoord, swipe, longPress, type, getValue, dumpTree, screenshot, setTarget) with ObjC exception catching via `QVXTryCatch()`
+- **Protocol.swift** - Binary protocol codec matching the Rust side (13 request opcodes including SetTarget and FindElement, 6 response types)
+- **CommandHandler.swift** - Executes XCUIElement accessibility actions (tap, tapByLabel, tapWithType, tapCoord, swipe, longPress, type, getValue, findElement, dumpTree, screenshot, setTarget) with ObjC exception catching via `QVXTryCatch()`. `findElement` queries the live `XCUIElement` for `isHittable` (unavailable from snapshots) and returns a single-element JSON response
 - **UITreeSerializer.swift** - Serializes XCUIApplication accessibility hierarchy to JSON matching `UIElement`
 - **ObjCExceptionCatcher.{h,m}** - Objective-C `@try/@catch` bridge preventing XCUIElement NSExceptions from crashing the agent
 - **BridgingHeader.h** - Swift-ObjC bridging header for exception catcher

@@ -52,6 +52,9 @@ final class CommandHandler {
 
         case .setTarget(let bundleId):
             return handleSetTarget(bundleId: bundleId)
+
+        case .findElement(let selector, let byLabel, let elementType):
+            return handleFindElement(selector: selector, byLabel: byLabel, elementType: elementType)
         }
     }
 
@@ -363,6 +366,101 @@ final class CommandHandler {
         return .ok
     }
 
+    // MARK: - Find element
+
+    private func handleFindElement(selector: String, byLabel: Bool, elementType: String?) -> AgentResponse {
+        let element: XCUIElement
+
+        if let typeName = elementType, let xcType = xcuiElementType(from: typeName) {
+            let field = byLabel ? "label" : "identifier"
+            element = app.descendants(matching: xcType).matching(
+                NSPredicate(format: "%K == %@", field, selector)
+            ).firstMatch
+        } else {
+            let field = byLabel ? "label" : "identifier"
+            element = app.descendants(matching: .any).matching(
+                NSPredicate(format: "%K == %@", field, selector)
+            ).firstMatch
+        }
+
+        var result: AgentResponse?
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            guard element.exists else {
+                result = .element(json: "null")
+                return
+            }
+
+            let isHittable = element.isHittable
+
+            var snapshot: (any XCUIElementSnapshot)?
+            do {
+                snapshot = try element.snapshot()
+            } catch {
+                snapshot = nil
+            }
+
+            if let snap = snapshot {
+                var serialized = self.serializeElement(snap)
+                serialized = UIElementJSON(
+                    AXUniqueId: serialized.AXUniqueId,
+                    AXLabel: serialized.AXLabel,
+                    AXValue: serialized.AXValue,
+                    type: serialized.type,
+                    frame: serialized.frame,
+                    children: serialized.children,
+                    role: serialized.role,
+                    hittable: isHittable
+                )
+                do {
+                    let jsonData = try JSONEncoder().encode(serialized)
+                    if let json = String(data: jsonData, encoding: .utf8) {
+                        result = .element(json: json)
+                    } else {
+                        result = .error(message: "FindElement: failed to encode as UTF-8")
+                    }
+                } catch {
+                    result = .error(message: "FindElement: JSON encoding failed: \(error)")
+                }
+            } else {
+                // Snapshot failed but element exists — return minimal info
+                let frame = element.frame
+                let frameJSON = FrameJSON(
+                    x: Double(frame.origin.x),
+                    y: Double(frame.origin.y),
+                    width: Double(frame.size.width),
+                    height: Double(frame.size.height)
+                )
+                let minimal = UIElementJSON(
+                    AXUniqueId: nil,
+                    AXLabel: nil,
+                    AXValue: nil,
+                    type: self.elementTypeName(element.elementType),
+                    frame: frameJSON,
+                    children: [],
+                    role: nil,
+                    hittable: isHittable
+                )
+                do {
+                    let jsonData = try JSONEncoder().encode(minimal)
+                    if let json = String(data: jsonData, encoding: .utf8) {
+                        result = .element(json: json)
+                    } else {
+                        result = .error(message: "FindElement: failed to encode as UTF-8")
+                    }
+                } catch {
+                    result = .error(message: "FindElement: JSON encoding failed: \(error)")
+                }
+            }
+        }, &objcError)
+
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "FindElement failed: \(msg)")
+        }
+        return result ?? .error(message: "FindElement produced no result")
+    }
+
     // MARK: - Helpers
 
     /// Recursively serialize an XCUIElementSnapshot into our Codable tree structure.
@@ -387,7 +485,7 @@ final class CommandHandler {
             frame: frameJSON,
             children: children,
             role: nil, // XCUIElement doesn't directly expose role
-            hittable: snapshot.isHittable
+            hittable: nil
         )
     }
 
