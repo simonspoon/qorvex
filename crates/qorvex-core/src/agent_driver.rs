@@ -177,9 +177,12 @@ impl AutomationDriver for AgentDriver {
     async fn connect(&mut self) -> Result<(), DriverError> {
         let mut client = match &self.target {
             ConnectionTarget::Direct { host, port } => {
-                let addr = format!("{host}:{port}").parse().map_err(
-                    |e: std::net::AddrParseError| DriverError::ConnectionLost(e.to_string()),
-                )?;
+                let host_port = format!("{host}:{port}");
+                let addr = tokio::net::lookup_host(&host_port)
+                    .await
+                    .map_err(|e| DriverError::ConnectionLost(e.to_string()))?
+                    .next()
+                    .ok_or_else(|| DriverError::ConnectionLost(format!("could not resolve {host_port}")))?;
                 let mut c = AgentClient::new(addr);
                 c.connect().await.map_err(map_client_error)?;
                 c
