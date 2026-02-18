@@ -243,15 +243,34 @@ impl Session {
     /// is reached, the oldest entry is removed. Actions are also persisted to
     /// the JSON Lines log file at `~/.qorvex/logs/`.
     pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>, duration_ms: Option<u64>) -> ActionLog {
-        // Wrap screenshot in Arc for cheap clones in hot path
         let screenshot_arc = screenshot.map(Arc::new);
         let log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms);
+        self.persist_action_log(log, screenshot_arc).await
+    }
 
+    /// Like `log_action`, but also records per-phase timing for tap actions.
+    pub async fn log_action_timed(
+        &self,
+        action: ActionType,
+        result: ActionResult,
+        screenshot: Option<String>,
+        duration_ms: Option<u64>,
+        wait_ms: Option<u64>,
+        tap_ms: Option<u64>,
+    ) -> ActionLog {
+        let screenshot_arc = screenshot.map(Arc::new);
+        let mut log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms);
+        log.wait_ms = wait_ms;
+        log.tap_ms = tap_ms;
+        self.persist_action_log(log, screenshot_arc).await
+    }
+
+    async fn persist_action_log(&self, log: ActionLog, screenshot_arc: Option<Arc<String>>) -> ActionLog {
         // Update action log with ring buffer behavior
         {
             let mut action_log = self.action_log.write().await;
             if action_log.len() >= MAX_ACTION_LOG_SIZE {
-                action_log.pop_front(); // Remove oldest entry
+                action_log.pop_front();
             }
             action_log.push_back(log.clone());
         }
@@ -260,7 +279,6 @@ impl Session {
         {
             let mut writer_guard = self.log_writer.lock().await;
             if let Some(ref mut writer) = *writer_guard {
-                // Create a copy without screenshot for file logging
                 let file_log = ActionLog {
                     id: log.id,
                     timestamp: log.timestamp,
@@ -268,6 +286,8 @@ impl Session {
                     result: log.result.clone(),
                     screenshot: None,
                     duration_ms: log.duration_ms,
+                    wait_ms: log.wait_ms,
+                    tap_ms: log.tap_ms,
                 };
                 if let Ok(json) = serde_json::to_string(&file_log) {
                     let _ = writeln!(writer, "{}", json);
@@ -279,7 +299,6 @@ impl Session {
         // Update screenshot if provided
         if let Some(ref ss) = screenshot_arc {
             *self.current_screenshot.write().await = Some(ss.clone());
-            // Ignore send errors - no subscribers is expected
             let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(ss.clone()));
         }
 

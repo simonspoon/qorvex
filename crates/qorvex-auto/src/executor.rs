@@ -384,12 +384,40 @@ impl ScriptExecutor {
                 let by_label = args.get(1).map(|s| s.to_lowercase() == "label").unwrap_or(false);
                 let element_type = args.get(2).cloned().filter(|s| !s.is_empty());
 
-                if !no_wait {
-                    self.wait_for_element_exists(&selector, by_label, element_type.as_deref(), line).await?;
-                }
+                let tap_start = Instant::now();
 
-                let action = ActionType::Tap { selector, by_label, element_type };
-                self.execute_action(action, line).await
+                let wait_ms = if !no_wait {
+                    let wait_start = Instant::now();
+                    self.wait_for_element_exists(&selector, by_label, element_type.as_deref(), line).await?;
+                    Some(wait_start.elapsed().as_millis() as u64)
+                } else {
+                    None
+                };
+
+                let action = ActionType::Tap { selector: selector.clone(), by_label, element_type };
+                let executor = self.require_executor(line)?;
+                let exec_start = Instant::now();
+                let result = executor.execute(action.clone()).await;
+                let tap_ms = exec_start.elapsed().as_millis() as u64;
+                let total_ms = tap_start.elapsed().as_millis() as u64;
+
+                let action_result = if result.success {
+                    ActionResult::Success
+                } else {
+                    ActionResult::Failure(result.message.clone())
+                };
+
+                self.session.log_action_timed(
+                    action, action_result, result.screenshot.clone(),
+                    Some(total_ms), wait_ms, Some(tap_ms),
+                ).await;
+
+                if result.success {
+                    info!(line, selector = %selector, wait_ms = wait_ms.unwrap_or(0), tap_ms = tap_ms, total_ms = total_ms, "tap");
+                    Ok(Value::String(result.data.unwrap_or(result.message)))
+                } else {
+                    Err(AutoError::ActionFailed { message: result.message, line })
+                }
             }
             "swipe" => {
                 let direction = args.first().cloned().unwrap_or_else(|| "up".to_string());

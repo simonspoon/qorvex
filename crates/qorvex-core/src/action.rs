@@ -186,6 +186,14 @@ pub struct ActionLog {
     /// How long the action took in milliseconds (e.g., for `WaitFor`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+
+    /// Time spent waiting for the element to appear and become hittable (milliseconds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_ms: Option<u64>,
+
+    /// Time spent executing the tap via the automation agent (milliseconds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tap_ms: Option<u64>,
 }
 
 impl ActionLog {
@@ -210,6 +218,8 @@ impl ActionLog {
             result,
             screenshot,
             duration_ms,
+            wait_ms: None,
+            tap_ms: None,
         }
     }
 }
