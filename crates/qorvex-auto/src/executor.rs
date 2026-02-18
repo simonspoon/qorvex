@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tracing::{info, debug};
 
@@ -384,20 +385,7 @@ impl ScriptExecutor {
                 let element_type = args.get(2).cloned().filter(|s| !s.is_empty());
 
                 if !no_wait {
-                    let wait_action = ActionType::WaitFor {
-                        selector: selector.clone(),
-                        by_label,
-                        element_type: element_type.clone(),
-                        timeout_ms: self.default_timeout_ms,
-                    };
-                    let wait_result = self.execute_action(wait_action, line).await?;
-
-                    // Reuse frame from wait_for to tap by coordinates directly,
-                    // avoiding a second agent invocation.
-                    if let Some(coords) = Self::parse_frame_center(&wait_result.as_string()) {
-                        let action = ActionType::TapLocation { x: coords.0, y: coords.1 };
-                        return self.execute_action(action, line).await;
-                    }
+                    self.wait_for_element_exists(&selector, by_label, element_type.as_deref(), line).await?;
                 }
 
                 let action = ActionType::Tap { selector, by_label, element_type };
@@ -515,18 +503,6 @@ impl ScriptExecutor {
         parsed.get("elapsed_ms").and_then(|v| v.as_u64())
     }
 
-    /// Parse the center coordinates from a WaitFor result's JSON data.
-    /// Expected format: `{"elapsed_ms":123,"frame":{"x":10,"y":20,"width":100,"height":50}}`
-    fn parse_frame_center(data: &str) -> Option<(i32, i32)> {
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-        let frame = parsed.get("frame")?;
-        let x = frame.get("x")?.as_f64()?;
-        let y = frame.get("y")?.as_f64()?;
-        let w = frame.get("width")?.as_f64()?;
-        let h = frame.get("height")?.as_f64()?;
-        Some(((x + w / 2.0) as i32, (y + h / 2.0) as i32))
-    }
-
     fn resolve_include_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
         if p.is_absolute() {
@@ -541,6 +517,37 @@ impl ScriptExecutor {
             message: "No simulator selected. Use use_device(udid) or boot_device(udid) first.".to_string(),
             line,
         })
+    }
+
+    /// Polls until the element exists, without requiring frame stability.
+    /// Returns as soon as the element is found once, letting XCUIElement's
+    /// native tap handle hittability and animations.
+    async fn wait_for_element_exists(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        line: usize,
+    ) -> Result<(), AutoError> {
+        let driver = self.require_executor(line)?.driver();
+        let timeout = Duration::from_millis(self.default_timeout_ms);
+        let poll_interval = Duration::from_millis(100);
+        let start = Instant::now();
+
+        loop {
+            if let Ok(Some(_)) = driver.find_element_with_type(selector, by_label, element_type).await {
+                return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                let msg = if by_label {
+                    format!("Timeout after {}ms waiting for element with label '{}'", self.default_timeout_ms, selector)
+                } else {
+                    format!("Timeout after {}ms waiting for element '{}'", self.default_timeout_ms, selector)
+                };
+                return Err(AutoError::ActionFailed { message: msg, line });
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     async fn execute_action(&mut self, action: ActionType, line: usize) -> Result<Value, AutoError> {
