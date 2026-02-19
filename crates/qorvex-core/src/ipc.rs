@@ -173,12 +173,17 @@ pub struct IpcServer {
     session: Arc<Session>,
     /// Path to the Unix socket file.
     socket_path: PathBuf,
-    /// The driver backend configuration for creating executors.
-    driver_config: crate::driver::DriverConfig,
+    /// Shared driver slot, populated when the automation backend connects.
+    /// IPC Execute requests use this driver instead of creating new connections.
+    shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>>,
 }
 
 impl IpcServer {
     /// Creates a new IPC server for the given session.
+    ///
+    /// The server starts without a connected driver. Call [`set_driver`](Self::set_driver)
+    /// or use the returned [`shared_driver`](Self::shared_driver) handle to provide
+    /// a connected driver before Execute requests will work.
     ///
     /// # Arguments
     ///
@@ -192,27 +197,21 @@ impl IpcServer {
         Self {
             session,
             socket_path: socket_path(session_name),
-            driver_config: crate::driver::DriverConfig::Agent { host: "localhost".to_string(), port: 8080 },
+            shared_driver: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    /// Creates a new IPC server with a specific driver backend configuration.
+    /// Returns the shared driver slot.
     ///
-    /// # Arguments
-    ///
-    /// * `session` - The session to manage
-    /// * `session_name` - The name used to determine the socket path
-    /// * `config` - The driver backend configuration for creating executors
-    ///
-    /// # Returns
-    ///
-    /// A new `IpcServer` instance (not yet running).
-    pub fn with_config(session: Arc<Session>, session_name: &str, config: crate::driver::DriverConfig) -> Self {
-        Self {
-            session,
-            socket_path: socket_path(session_name),
-            driver_config: config,
-        }
+    /// Callers can clone this handle and populate it with a connected driver
+    /// so that IPC Execute requests use the same backend connection.
+    pub fn shared_driver(&self) -> Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>> {
+        self.shared_driver.clone()
+    }
+
+    /// Sets the automation driver used by IPC Execute requests.
+    pub async fn set_driver(&self, driver: Arc<dyn crate::driver::AutomationDriver>) {
+        *self.shared_driver.lock().await = Some(driver);
     }
 
     /// Starts the IPC server and begins accepting connections.
@@ -239,16 +238,16 @@ impl IpcServer {
         loop {
             let (stream, _) = listener.accept().await?;
             let session = self.session.clone();
-            let config = self.driver_config.clone();
+            let shared_driver = self.shared_driver.clone();
 
             tokio::spawn(async move {
                 let span = info_span!("ipc_client");
-                let _ = Self::handle_client(stream, session, config).instrument(span).await;
+                let _ = Self::handle_client(stream, session, shared_driver).instrument(span).await;
             });
         }
     }
 
-    async fn handle_client(stream: UnixStream, session: Arc<Session>, driver_config: crate::driver::DriverConfig) -> Result<(), IpcError> {
+    async fn handle_client(stream: UnixStream, session: Arc<Session>, shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>>) -> Result<(), IpcError> {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
@@ -266,24 +265,23 @@ impl IpcServer {
                 IpcRequest::Execute { action } => {
                     debug!(action = %action.name(), "executing action via IPC");
                     // Execute the action using the ActionExecutor
-                    // LogComment doesn't require a simulator, handle it specially
-                    let response = if matches!(action, ActionType::LogComment { .. }) {
-                        // LogComment can run without a simulator
-                        let executor = ActionExecutor::from_config(driver_config.clone());
-                        let result = executor.execute(action.clone()).await;
-
+                    // LogComment doesn't require a driver
+                    let response = if let ActionType::LogComment { ref message } = action {
+                        let msg = format!("Logged: {}", message);
                         session.log_action(action, ActionResult::Success, None, None).await;
 
                         IpcResponse::ActionResult {
-                            success: result.success,
-                            message: result.message,
+                            success: true,
+                            message: msg,
                             screenshot: None,
-                            data: result.data,
+                            data: None,
                         }
                     } else {
-                        match &session.simulator_udid {
-                            Some(_udid) => {
-                                let executor = ActionExecutor::from_config(driver_config.clone());
+                        let driver_guard = shared_driver.lock().await;
+                        match driver_guard.as_ref() {
+                            Some(driver) => {
+                                let executor = ActionExecutor::new(driver.clone());
+                                drop(driver_guard); // release lock before executing
                                 let result = executor.execute(action.clone()).await;
 
                                 // Log to session
@@ -306,7 +304,7 @@ impl IpcServer {
                             }
                             None => {
                                 IpcResponse::Error {
-                                    message: "No simulator selected for this session".to_string(),
+                                    message: "No automation backend connected for this session".to_string(),
                                 }
                             }
                         }

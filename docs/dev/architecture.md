@@ -152,8 +152,8 @@ The IPC layer uses Unix sockets with a JSON-over-newlines protocol.
 | `Error` | Error message |
 
 Server constructors:
-- `IpcServer::new(session, name)` -- defaults to localhost:8080
-- `IpcServer::with_config(session, name, config)` -- custom configuration
+- `IpcServer::new(session, name)` -- starts with empty driver slot; call `set_driver()` after the agent connects
+- `shared_driver()` / `set_driver(driver)` -- wire the server to an already-connected driver so `Execute` requests reuse the existing TCP connection
 
 ## External Dependencies
 

@@ -86,18 +86,15 @@ enum IpcResponse {
 
 ### `IpcServer::new(session, session_name)`
 
-Creates an IPC server with default driver configuration:
+Creates an IPC server with an empty shared driver slot. The server starts without a connected driver; call `set_driver()` (or wire up the `shared_driver()` handle) before Execute requests will work.
 
-```rust
-DriverConfig::Agent {
-    host: "localhost".to_string(),
-    port: 8080,
-}
-```
+### `shared_driver() -> Arc<Mutex<Option<Arc<dyn AutomationDriver>>>>`
 
-### `IpcServer::with_config(session, session_name, config)`
+Returns the shared driver slot. Callers clone this handle and populate it with a connected driver so that IPC `Execute` requests reuse the same backend connection rather than opening a new one.
 
-Creates an IPC server with a custom `DriverConfig`. Use this when connecting to agents on non-default hosts/ports or when using USB device tunneling.
+### `set_driver(driver: Arc<dyn AutomationDriver>)`
+
+Convenience async method to populate the shared driver slot.
 
 ### Lifecycle
 
@@ -120,9 +117,9 @@ This function is used throughout the codebase for socket paths, log directories,
 
 The IPC server exists so that `qorvex-live` can monitor any running session in real-time, regardless of how that session was started.
 
-- **`qorvex-repl`** runs its `ActionExecutor` in-process and spawns an `IpcServer` so that `qorvex-live` can connect and display live screenshots and action logs.
-- **`qorvex-auto`** also runs its `ActionExecutor` directly (not via IPC) but spawns its own `IpcServer` for the same reason -- so `qorvex-live` can monitor script execution.
-- **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` requests.
+- **`qorvex-repl`** runs its `ActionExecutor` in-process and spawns an `IpcServer`. After the agent connects, it calls `set_executor_with_driver()` which populates both the local executor and the IPC server's shared driver slot — so `qorvex-cli` Execute requests reuse the same TCP connection to the agent rather than opening a competing one.
+- **`qorvex-auto`** similarly creates its `ScriptExecutor` and then populates the IPC server's shared driver slot with the connected driver.
+- **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` requests; the REPL's connected driver is used to fulfill them.
 - **`qorvex-live`** is an IPC client. It connects, sends `Subscribe`, and renders incoming `Event` responses in a TUI.
 
 ```

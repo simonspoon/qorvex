@@ -92,6 +92,8 @@ Wait behavior: polls every 100ms, requires element to be hittable, requires 3 co
 | Screen info | `get_screen_info` | `qorvex screen-info` | `get_screen_info` |
 | List elements | `list_elements` | — | `list_elements` |
 
+`qorvex screen-info` prints JSON to stdout (pipe to `jq` for filtering). `qorvex get-value` prints the element value to stdout. Status messages go to stderr.
+
 ## Values
 
 | Syntax | Description |

@@ -631,7 +631,7 @@ async fn test_ipc_execute_action_without_simulator_returns_error() {
 
     match response {
         IpcResponse::Error { message } => {
-            assert!(message.contains("No simulator"));
+            assert!(message.contains("No automation backend connected"));
         }
         _ => panic!("Expected Error response, got {:?}", response),
     }

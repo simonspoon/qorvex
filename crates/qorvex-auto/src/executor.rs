@@ -610,6 +610,11 @@ impl ScriptExecutor {
         }
     }
 
+    /// Returns a reference to the executor's driver, if connected.
+    pub fn driver(&self) -> Option<&std::sync::Arc<dyn qorvex_core::driver::AutomationDriver>> {
+        self.executor.as_ref().map(|e| e.driver())
+    }
+
     pub fn cleanup(&mut self) {
         if let Some(handle) = self.watcher_handle.take() {
             handle.cancel();

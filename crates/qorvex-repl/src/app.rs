@@ -116,6 +116,8 @@ pub struct App {
     pub simulator_udid: Option<String>,
     /// IPC server handle.
     pub ipc_server_handle: Option<JoinHandle<()>>,
+    /// Shared driver slot for the IPC server to reuse the REPL's connected driver.
+    pub ipc_shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn AutomationDriver>>>>,
     /// Action executor for automation commands.
     pub executor: Option<ActionExecutor>,
     /// Managed agent lifecycle (set when agent is started via start_agent with a path).
@@ -155,6 +157,7 @@ impl App {
             executor,
             agent_lifecycle: None,
             ipc_server_handle: None,
+            ipc_shared_driver: Arc::new(tokio::sync::Mutex::new(None)),
             watcher_handle: None,
             element_update_rx: None,
             should_quit: false,
@@ -309,6 +312,12 @@ impl App {
         }
     }
 
+    /// Set the executor and update the IPC shared driver so CLI clients reuse the same connection.
+    async fn set_executor_with_driver(&mut self, driver: Arc<dyn AutomationDriver>) {
+        self.executor = Some(ActionExecutor::new(driver.clone()));
+        *self.ipc_shared_driver.lock().await = Some(driver);
+    }
+
     async fn log_action(&self, action: ActionType, result: ActionResult, duration_ms: Option<u64>) {
         if let Some(session) = &self.session {
             let screenshot = None;
@@ -325,6 +334,7 @@ impl App {
                 self.session = Some(session.clone());
 
                 let server = IpcServer::new(session, &self.session_name);
+                self.ipc_shared_driver = server.shared_driver();
                 let handle = tokio::spawn(async move {
                     let _ = server.run().await;
                 });
@@ -353,7 +363,7 @@ impl App {
                                     let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                                     match driver.connect().await {
                                         Ok(()) => {
-                                            self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                            self.set_executor_with_driver(Arc::new(driver)).await;
                                             self.add_output(format_result(true, "Agent started and connected"));
                                         }
                                         Err(e) => {
@@ -520,7 +530,7 @@ impl App {
                                 let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                                 match driver.connect().await {
                                     Ok(()) => {
-                                        self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                        self.set_executor_with_driver(Arc::new(driver)).await;
                                         self.add_output(format_result(true, "Agent started and connected"));
                                     }
                                     Err(e) => {
@@ -548,7 +558,7 @@ impl App {
                                     let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                                     match driver.connect().await {
                                         Ok(()) => {
-                                            self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                            self.set_executor_with_driver(Arc::new(driver)).await;
                                             self.add_output(format_result(true, "Agent started and connected"));
                                         }
                                         Err(e) => {
@@ -571,7 +581,7 @@ impl App {
                                     let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                                     match driver.connect().await {
                                         Ok(()) => {
-                                            self.executor = Some(ActionExecutor::new(Arc::new(driver)));
+                                            self.set_executor_with_driver(Arc::new(driver)).await;
                                             self.add_output(format_result(true, "Agent connected"));
                                         }
                                         Err(e) => {

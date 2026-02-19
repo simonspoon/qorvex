@@ -119,11 +119,12 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
         automation_log_dir(),
     );
 
-    // Spawn IPC server so qorvex-live can connect
+    // Spawn IPC server so qorvex-live and qorvex-cli can connect
     let ipc_session = session.clone();
     let ipc_name = session_name.to_string();
+    let server = IpcServer::new(ipc_session, &ipc_name);
+    let ipc_shared_driver = server.shared_driver();
     let ipc_handle = tokio::spawn(async move {
-        let server = IpcServer::new(ipc_session, &ipc_name);
         let _ = server.run().await;
     });
 
@@ -148,6 +149,11 @@ async fn run_script(script_path: Option<PathBuf>, session_name: &str) -> Result<
 
     // Execute with automatic session lifecycle
     let mut script_executor = ScriptExecutor::new(session.clone(), simulator_udid, base_dir, DriverConfig::Agent { host: "localhost".to_string(), port: 8080 }).await;
+
+    // Share the connected driver with the IPC server so CLI clients can use it
+    if let Some(driver) = script_executor.driver() {
+        *ipc_shared_driver.lock().await = Some(driver.clone());
+    }
 
     session.log_action(
         qorvex_core::action::ActionType::StartSession,

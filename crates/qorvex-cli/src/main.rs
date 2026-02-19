@@ -320,6 +320,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 
 async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -> Result<(), CliError> {
     let is_screenshot_action = matches!(action, ActionType::GetScreenshot);
+    let is_data_action = matches!(action, ActionType::GetScreenInfo | ActionType::GetValue { .. });
     let request = IpcRequest::Execute { action };
     let response = client
         .send(&request)
@@ -343,6 +344,12 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -
                     if is_screenshot_action {
                         if let Some(ref ss) = screenshot {
                             println!("{}", ss);
+                        }
+                    }
+                    // Output data payload for data-returning commands
+                    if is_data_action {
+                        if let Some(ref d) = data {
+                            println!("{}", d);
                         }
                     }
                     if !cli.quiet {
