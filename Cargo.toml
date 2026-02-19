@@ -5,7 +5,6 @@ members = [
     "crates/qorvex-repl",
     "crates/qorvex-live",
     "crates/qorvex-cli",
-    "crates/qorvex-auto",
 ]
 
 [workspace.package]

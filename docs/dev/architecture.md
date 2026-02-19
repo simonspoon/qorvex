@@ -1,6 +1,6 @@
 # Architecture Guide
 
-This document describes the high-level architecture of the qorvex project: a Rust workspace with five crates plus a Swift agent for iOS Simulator and physical device automation on macOS.
+This document describes the high-level architecture of the qorvex project: a Rust workspace with four crates plus a Swift agent for iOS Simulator and physical device automation on macOS.
 
 ## Crate Dependency Graph
 
@@ -8,7 +8,6 @@ This document describes the high-level architecture of the qorvex project: a Rus
 qorvex-repl  ──► qorvex-core
 qorvex-live  ──► qorvex-core (via IPC)
 qorvex-cli   ──► qorvex-core (via IPC)
-qorvex-auto  ──► qorvex-core (direct)
 qorvex-core  ──► qorvex-agent (TCP binary protocol)
 ```
 
@@ -17,8 +16,7 @@ qorvex-core  ──► qorvex-agent (TCP binary protocol)
 | `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor, watcher |
 | `qorvex-repl` | TUI REPL with tab completion, uses core directly |
 | `qorvex-live` | TUI client with screenshot rendering (ratatui-image) and IPC reconnection |
-| `qorvex-cli` | Scriptable CLI client for automation pipelines |
-| `qorvex-auto` | Script runner (`.qvx` files) and JSONL log-to-script converter |
+| `qorvex-cli` | Scriptable CLI client for automation pipelines, includes JSONL log-to-script converter |
 | `qorvex-agent` | Swift XCTest agent for native iOS accessibility (not a Cargo crate) |
 
 ## Data Flow
@@ -27,9 +25,8 @@ qorvex-core  ──► qorvex-agent (TCP binary protocol)
 2. **Session** broadcasts `SessionEvent`s to subscribers (broadcast channel, capacity 100).
 3. **Live TUI** connects via `IpcClient`, subscribes to events, renders TUI with ratatui.
 4. **CLI** connects via `IpcClient`, sends `Execute` requests.
-5. **Auto runner** parses `.qvx` scripts, creates its own session with IPC server, executes commands directly via `ActionExecutor`.
-6. **Screenshots** are base64-encoded PNGs passed through the event system.
-7. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
+5. **Screenshots** are base64-encoded PNGs passed through the event system.
+6. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
 
 ```
 ┌────────────┐   stdin    ┌────────────────┐              ┌─────────┐
@@ -117,11 +114,8 @@ For physical devices, the `usb_tunnel` module provides:
 ~/.qorvex/
 ├── config.json                  # Persistent config (agent_source_dir)
 ├── qorvex_<session>.sock        # Unix socket per session
-├── logs/
-│   └── <session>_<timestamp>.jsonl
-└── automation/
-    ├── logs/
-    └── scripts/
+└── logs/
+    └── <session>_<timestamp>.jsonl
 ```
 
 - `config.json` stores `QorvexConfig` with the `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent.

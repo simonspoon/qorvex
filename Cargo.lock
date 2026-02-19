@@ -1999,19 +1999,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "qorvex-auto"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "qorvex-core",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "qorvex-cli"
 version = "0.1.0"
 dependencies = [

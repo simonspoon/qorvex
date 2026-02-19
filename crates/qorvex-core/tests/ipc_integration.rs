@@ -273,6 +273,7 @@ fn test_all_action_types_serialization() {
             by_label: false,
             element_type: None,
             timeout_ms: 5000,
+            require_stable: true,
         },
         ActionType::StartSession,
         ActionType::EndSession,

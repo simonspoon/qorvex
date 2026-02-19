@@ -50,10 +50,14 @@
 //! qorvex -s my-session tap button
 //! ```
 
+mod converter;
+
 use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
 use qorvex_core::element::{UIElement, ElementFrame};
 use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse};
+use qorvex_core::simctl::Simctl;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
@@ -186,6 +190,33 @@ enum Command {
         timeout: u64,
     },
 
+    /// Swipe the screen in a direction
+    Swipe {
+        /// Direction: up, down, left, right
+        direction: String,
+    },
+
+    /// Set the target application bundle ID
+    SetTarget {
+        /// Bundle identifier (e.g., com.example.MyApp)
+        bundle_id: String,
+    },
+
+    /// Boot a simulator device
+    BootDevice {
+        /// Device UDID
+        udid: String,
+    },
+
+    /// List available simulator devices
+    ListDevices,
+
+    /// Convert a JSONL action log to a shell script
+    Convert {
+        /// Path to the JSONL log file (reads from stdin if omitted)
+        log: Option<PathBuf>,
+    },
+
     /// Get current session state
     Status,
 
@@ -260,21 +291,73 @@ fn discover_sessions() -> Vec<String> {
 }
 
 async fn run(cli: Cli) -> Result<(), CliError> {
-    // Handle ListSessions separately since it doesn't need IPC connection
-    if let Command::ListSessions = cli.command {
-        let sessions = discover_sessions();
-        if cli.format == OutputFormat::Json {
-            println!("{}", serde_json::json!({ "sessions": sessions }));
-        } else {
-            if sessions.is_empty() {
-                eprintln!("No running sessions found");
+    // Handle commands that don't need an IPC connection
+    match cli.command {
+        Command::ListSessions => {
+            let sessions = discover_sessions();
+            if cli.format == OutputFormat::Json {
+                println!("{}", serde_json::json!({ "sessions": sessions }));
             } else {
-                for session in sessions {
-                    println!("{}", session);
+                if sessions.is_empty() {
+                    eprintln!("No running sessions found");
+                } else {
+                    for session in sessions {
+                        println!("{}", session);
+                    }
                 }
             }
+            return Ok(());
         }
-        return Ok(());
+        Command::ListDevices => {
+            match Simctl::list_devices() {
+                Ok(devices) => {
+                    if cli.format == OutputFormat::Json {
+                        println!("{}", serde_json::to_string_pretty(&devices)
+                            .map_err(|e| CliError::Protocol(e.to_string()))?);
+                    } else {
+                        if devices.is_empty() {
+                            eprintln!("No simulator devices found");
+                        } else {
+                            for device in &devices {
+                                let state = if device.state == "Booted" { " (Booted)" } else { "" };
+                                println!("{} -- {}{}", device.udid, device.name, state);
+                            }
+                        }
+                    }
+                }
+                Err(e) => return Err(CliError::ActionFailed(format!("Failed to list devices: {}", e))),
+            }
+            return Ok(());
+        }
+        Command::BootDevice { ref udid } => {
+            match Simctl::boot(udid) {
+                Ok(()) => {
+                    if cli.format == OutputFormat::Json {
+                        println!("{}", serde_json::json!({ "success": true, "udid": udid }));
+                    } else {
+                        eprintln!("Booted device {}", udid);
+                    }
+                }
+                Err(e) => return Err(CliError::ActionFailed(format!("Failed to boot device: {}", e))),
+            }
+            return Ok(());
+        }
+        Command::Convert { ref log } => {
+            let result = match log {
+                Some(path) => converter::LogConverter::convert_file(path)
+                    .map_err(|e| CliError::ActionFailed(format!("Failed to convert log: {}", e))),
+                None => converter::LogConverter::convert_stdin()
+                    .map_err(|e| CliError::ActionFailed(format!("Failed to convert from stdin: {}", e))),
+            };
+            match result {
+                Ok(script) => {
+                    print!("{}", script);
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        _ => {} // Fall through to IPC-connected commands
     }
 
     // Connect to the IPC server
@@ -290,6 +373,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     by_label: label,
                     element_type: element_type.clone(),
                     timeout_ms: timeout,
+                    require_stable: false,
                 }, &cli).await?;
             }
             execute_action(&mut client, ActionType::Tap {
@@ -317,6 +401,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     by_label: label,
                     element_type: element_type.clone(),
                     timeout_ms: timeout,
+                    require_stable: false,
                 }, &cli).await?;
             }
             execute_action(&mut client, ActionType::GetValue {
@@ -324,6 +409,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 by_label: label,
                 element_type: element_type.clone(),
             }, &cli).await
+        }
+        Command::Swipe { ref direction } => {
+            execute_action(&mut client, ActionType::Swipe { direction: direction.clone() }, &cli).await
+        }
+        Command::SetTarget { ref bundle_id } => {
+            execute_action(&mut client, ActionType::SetTarget { bundle_id: bundle_id.clone() }, &cli).await
         }
         Command::Comment { ref message } => {
             execute_action(&mut client, ActionType::LogComment { message: message.clone() }, &cli).await
@@ -334,6 +425,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 by_label: label,
                 element_type: element_type.clone(),
                 timeout_ms: timeout,
+                require_stable: true,
             }, &cli).await
         }
         Command::WaitForNot { ref selector, label, ref element_type, timeout } => {
@@ -350,8 +442,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Log => {
             get_log(&mut client, &cli).await
         }
-        // ListSessions is handled before IPC connection above
-        Command::ListSessions => unreachable!(),
+        // These commands are handled before IPC connection above
+        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } => unreachable!(),
     }
 }
 

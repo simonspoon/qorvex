@@ -4,13 +4,12 @@ iOS Simulator and device automation toolkit for macOS.
 
 ## Overview
 
-Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with five crates and a Swift agent:
+Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with four crates and a Swift agent:
 
 - **qorvex-core** — Core library with driver abstraction, protocol, session, IPC, and execution engine
 - **qorvex-repl** — Interactive command-line interface for manual testing
 - **qorvex-live** — TUI client with inline screenshot rendering and action log monitoring
-- **qorvex-cli** — Scriptable CLI client for automation pipelines
-- **qorvex-auto** — Script runner for `.qvx` automation scripts and JSONL log converter
+- **qorvex-cli** — Scriptable CLI client for automation pipelines, including JSONL log-to-script conversion
 - **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
 
 ### Automation backend
@@ -39,7 +38,6 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
-cargo install --path crates/qorvex-auto
 ```
 
 ## Usage
@@ -193,59 +191,59 @@ Command-specific options:
 - `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip auto-wait for element; `-o, --timeout <ms>` — Wait timeout (default: 5000)
 - `wait-for`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-o, --timeout <ms>` — Wait timeout (default: 5000)
 
-### Auto
-
-Run `.qvx` automation scripts or convert action logs to scripts:
+Additional CLI commands (no running session required):
 
 ```bash
-# Run a script against a booted simulator
-qorvex-auto run test-login.qvx
+# List simulator devices
+qorvex list-devices
 
-# Run against a specific session
-qorvex-auto -s my-session run test-login.qvx
+# Boot a simulator
+qorvex boot-device <udid>
 
-# Convert an action log to a replayable script
-qorvex-auto convert ~/.qorvex/logs/default_20250101_120000.jsonl --stdout
+# Set target app
+qorvex set-target com.example.MyApp
 
-# Convert and save to file
-qorvex-auto convert session.jsonl --name login-flow
+# Swipe
+qorvex swipe up
+
+# Convert action log to shell script
+qorvex convert ~/.qorvex/logs/default_20250101_120000.jsonl > replay.sh
+
+# Convert from stdin
+qorvex log -f json | qorvex convert > replay.sh
 ```
 
-The `.qvx` script language uses REPL-compatible commands with control flow:
+### Shell Scripting
 
-```
-# Variables and commands
-use_device("UDID-HERE")
-set_target("com.example.myapp")
-tap("login-button")
-send_keys("user@example.com")
-swipe("down")
+Automation scripts are plain bash that call `qorvex` CLI commands:
 
-# Capture command output into variables
-value = get_value("status-label")
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Control flow
-if value == "Success" {
-    log_comment("Login passed")
-} else {
-    tap("retry-button")
-}
+qorvex boot-device "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+qorvex set-target com.example.myapp
 
-# Loops
-foreach item in ["tab1", "tab2", "tab3"] {
-    tap(item)
-    get_screenshot
-}
+qorvex tap login-button
+qorvex send-keys 'user@example.com'
+qorvex tap password-field
+qorvex send-keys 'password123'
+qorvex tap submit-button
 
-for i from 1 to 5 {
-    tap("next-button")
-}
+qorvex wait-for welcome-label -o 10000
+value=$(qorvex get-value welcome-label)
 
-# Set default timeout
-set timeout 10000
+if [ "$value" = "Welcome!" ]; then
+    qorvex comment "Login test passed"
+else
+    echo "Failed: got $value" >&2
+    exit 1
+fi
 
-# Include another script
-include "shared/login.qvx"
+for tab in home settings profile; do
+    qorvex tap "$tab"
+    qorvex screenshot > "/tmp/${tab}.b64"
+done
 ```
 
 ## Architecture
@@ -261,14 +259,14 @@ include "shared/login.qvx"
        │                     │ qorvex-cli │
        │                     └────────────┘
        ▼
-┌──────────────┐       ┌──────────────┐
-│ qorvex-core  │◄──────┤ qorvex-auto  │
-├──────────────┤       ├──────────────┤
-│ ActionExecutor       │  .qvx parser │
-│      │               │  runtime     │
-│ AutomationDriver     │  executor    │
-│ ┌────┴────┐          │  converter   │
-│ │AgentDrvr│          └──────────────┘
+┌──────────────┐
+│ qorvex-core  │
+├──────────────┤
+│ ActionExecutor
+│      │
+│ AutomationDriver
+│ ┌────┴────┐
+│ │AgentDrvr│
 │ └────┬────┘
 │      │
 │   TCP 8080──► qorvex-agent (Swift)
@@ -282,8 +280,6 @@ include "shared/login.qvx"
 └──────────────┘
 ```
 
-`qorvex-auto` uses core directly (not via IPC) but spawns its own IPC server so `qorvex-live` can monitor script execution.
-
 The `AutomationDriver` trait abstracts the automation backend. `AgentDriver` communicates with the Swift agent over a binary TCP protocol. For physical devices, it tunnels through usbmuxd.
 
 ### Directory Structure
@@ -295,18 +291,14 @@ Qorvex stores runtime files in `~/.qorvex/`:
 ├── config.json                  # Persistent config (agent_source_dir, etc.)
 ├── qorvex_default.sock          # Unix socket for "default" session
 ├── qorvex_my-session.sock       # Unix socket for "my-session"
-├── logs/
-│   ├── default_20250101_120000.jsonl
-│   └── my-session_20250101_130000.jsonl
-└── automation/
-    ├── logs/                # Action logs from qorvex-auto runs
-    └── scripts/             # Converted .qvx scripts
+└── logs/
+    ├── default_20250101_120000.jsonl
+    └── my-session_20250101_130000.jsonl
 ```
 
-- **Config** (`~/.qorvex/config.json`) — Persistent settings. Currently stores `agent_source_dir` so that `start_session`, `start_agent`, and `qorvex-auto run` can auto-build the Swift agent. Written by `install.sh`.
-- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL and auto sessions. The CLI, Live TUI, and auto runner all use these to communicate.
-- **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format.
-- **Automation** (`~/.qorvex/automation/`) — Separate log and script directories for `qorvex-auto`. The `convert` command saves output scripts here by default.
+- **Config** (`~/.qorvex/config.json`) — Persistent settings. Currently stores `agent_source_dir` so that `start_session` and `start_agent` can auto-build the Swift agent. Written by `install.sh`.
+- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Live TUI use these to communicate.
+- **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.
 
 Use `qorvex list-sessions` to discover running sessions by scanning for active socket files.
 

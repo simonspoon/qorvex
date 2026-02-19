@@ -27,7 +27,6 @@ cd qorvex
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
-cargo install --path crates/qorvex-auto
 ```
 
 ### Build the Swift Agent

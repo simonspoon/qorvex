@@ -21,10 +21,10 @@ Adding a new action type touches approximately 10 files across Rust and Swift. F
 | 7 | `crates/qorvex-core/src/executor.rs` | Add execution branch in `execute_inner` for the new `ActionType` |
 | 8 | `crates/qorvex-repl/src/app.rs` | Add command parsing and dispatch |
 | 9 | `crates/qorvex-repl/src/completion/` | Add tab completion definition for the new command |
-| 10 | `crates/qorvex-auto/src/executor.rs` | Add command dispatch in `execute_command` |
-| 11 | `crates/qorvex-auto/src/converter.rs` | Add `action_to_command` mapping for JSONL log conversion |
+| 10 | `crates/qorvex-cli/src/main.rs` | Add CLI subcommand and dispatch |
+| 11 | `crates/qorvex-cli/src/converter.rs` | Add `action_to_command` mapping for JSONL log conversion |
 
-Steps 1-4 define the action from protocol to agent. Steps 5-7 wire it through the Rust driver and executor. Steps 8-9 make it available in the REPL. Steps 10-11 enable it in scripts and log conversion.
+Steps 1-4 define the action from protocol to agent. Steps 5-7 wire it through the Rust driver and executor. Steps 8-9 make it available in the REPL. Steps 10-11 expose it in the CLI and log converter.
 
 ---
 
@@ -55,7 +55,7 @@ Protocol changes must be symmetric between Rust and Swift. Both sides must agree
 ```bash
 cargo test                              # all crates
 cargo test -p qorvex-core               # core only
-cargo test -p qorvex-auto               # auto only
+cargo test -p qorvex-cli                # cli only
 ```
 
 ### Integration Tests
@@ -107,15 +107,17 @@ Sessions are always `Arc`-wrapped and shared by reference across the executor, I
 
 ### Auto-Wait and `--no-wait`
 
-By default, `tap` and `get_value` wait for the target element to appear and be hittable before acting. This uses the same polling mechanism as `wait_for`.
+By default, `tap` and `get_value` wait for the target element to appear before acting. This sends `ActionType::WaitFor` with `require_stable: false` — it returns as soon as the element exists, letting XCUIElement's native tap handle hittability and animations. This saves at least 200ms compared to the stable-frames path.
 
-The `--no-wait` flag (CLI/REPL) or `no_wait` parameter (scripts) skips this wait and attempts the action immediately. Use this when you are certain the element is already present, or when testing error handling for missing elements.
+The `--no-wait` flag (CLI/REPL) skips the wait entirely and attempts the action immediately. Use this when you are certain the element is already present, or when testing error handling for missing elements.
 
 ### WaitFor Stability
 
-`wait_for` does not return success as soon as an element is found. It requires **3 consecutive polls** (at 100ms intervals) where the element's frame coordinates are identical before reporting success.
+`ActionType::WaitFor` has a `require_stable: bool` field that controls wait behavior:
 
-This prevents tapping elements that are still animating into position. Without this stability check, taps could land on the wrong screen coordinates.
+- **`require_stable: true`** (used by explicit `wait_for` / `qorvex wait-for`): requires the element to be hittable and requires **3 consecutive polls** (at 100ms intervals) where the frame coordinates are identical before reporting success. Prevents tapping elements still animating into position.
+
+- **`require_stable: false`** (used by `tap` and `get_value` auto-wait): returns as soon as the element exists once. Faster; relies on XCUIElement's native tap to handle animations.
 
 ### Error Handling in the Agent
 

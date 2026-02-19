@@ -118,12 +118,10 @@ This function is used throughout the codebase for socket paths, log directories,
 The IPC server exists so that `qorvex-live` can monitor any running session in real-time, regardless of how that session was started.
 
 - **`qorvex-repl`** runs its `ActionExecutor` in-process and spawns an `IpcServer`. After the agent connects, it calls `set_executor_with_driver()` which populates both the local executor and the IPC server's shared driver slot — so `qorvex-cli` Execute requests reuse the same TCP connection to the agent rather than opening a competing one.
-- **`qorvex-auto`** similarly creates its `ScriptExecutor` and then populates the IPC server's shared driver slot with the connected driver.
 - **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` requests; the REPL's connected driver is used to fulfill them.
 - **`qorvex-live`** is an IPC client. It connects, sends `Subscribe`, and renders incoming `Event` responses in a TUI.
 
 ```
-qorvex-repl ──┐
-              ├── IpcServer (Unix socket) ──> qorvex-live (Subscribe)
-qorvex-auto ──┘                           ──> qorvex-cli  (Execute)
+qorvex-repl ──── IpcServer (Unix socket) ──> qorvex-live (Subscribe)
+                                         ──> qorvex-cli  (Execute)
 ```

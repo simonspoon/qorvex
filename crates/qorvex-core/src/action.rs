@@ -35,6 +35,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn default_true() -> bool { true }
+
 /// The result of executing an action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionResult {
@@ -126,6 +128,11 @@ pub enum ActionType {
         element_type: Option<String>,
         /// Maximum time to wait in milliseconds.
         timeout_ms: u64,
+        /// If true, require 3 consecutive stable frames before returning success.
+        /// If false, return as soon as the element exists (faster, lets XCUIElement
+        /// handle hittability and animations natively).
+        #[serde(default = "default_true")]
+        require_stable: bool,
     },
 
     /// Wait for an element to disappear from screen by ID or label.
@@ -145,6 +152,12 @@ pub enum ActionType {
 
     /// End the current session but keep the REPL running.
     EndSession,
+
+    /// Set the target application bundle ID.
+    SetTarget {
+        /// The bundle identifier of the app to target (e.g., "com.example.MyApp").
+        bundle_id: String,
+    },
 
     /// Quit the REPL entirely.
     Quit,
@@ -166,6 +179,7 @@ impl ActionType {
             ActionType::SendKeys { .. } => "send_keys",
             ActionType::WaitFor { .. } => "wait_for",
             ActionType::WaitForNot { .. } => "wait_for_not",
+            ActionType::SetTarget { .. } => "set_target",
             ActionType::StartSession => "start_session",
             ActionType::EndSession => "end_session",
             ActionType::Quit => "quit",

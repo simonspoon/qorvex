@@ -1,175 +1,109 @@
-# Scripting Guide (.qvx)
+# Scripting Guide
 
-Qorvex automation scripts use the `.qvx` format -- a simple scripting language for recording and replaying UI interactions.
-
-## Running Scripts
-
-```bash
-# Run a script
-qorvex-auto run test-login.qvx
-
-# Run against a named session
-qorvex-auto -s my-session run test-login.qvx
-```
-
-The runner auto-starts the Swift agent if `install.sh` was used to install qorvex.
+Qorvex automation scripts are plain shell scripts that call `qorvex` CLI commands. This gives you the full power of bash (variables, loops, conditionals, functions) without learning a custom language.
 
 ## Converting Action Logs to Scripts
 
-Record actions in the REPL, then convert the log:
+Record actions in the REPL, then convert the JSONL log to a shell script:
 
 ```bash
-# Print to stdout
-qorvex-auto convert ~/.qorvex/logs/default_20250101_120000.jsonl --stdout
+# From a log file
+qorvex convert ~/.qorvex/logs/default_20250101_120000.jsonl > test-login.sh
 
-# Save to file
-qorvex-auto convert session.jsonl --name login-flow
+# From the current session log (piped)
+qorvex log -f json | qorvex convert > test-login.sh
+
+# From stdin
+qorvex convert < session.jsonl
 ```
 
-## Basic Syntax
+The output is a valid bash script with `#!/usr/bin/env bash` and `set -euo pipefail`.
 
-Commands use REPL-compatible syntax:
+## Running Scripts
 
-```
-# Comments start with #
-use_device("UDID-HERE")
-set_target("com.example.myapp")
-tap("login-button")
-send_keys("user@example.com")
-swipe("down")
-get_screenshot
-```
+Scripts are standard bash — run them directly:
 
-Note: string arguments must be quoted. Commands without arguments don't need parentheses.
+```bash
+chmod +x test-login.sh
+./test-login.sh
 
-## Variables
-
-```
-# Assign a value
-username = "testuser"
-
-# Use in commands
-send_keys(username)
-
-# Capture command output
-value = get_value("status-label")
+# Or target a specific session
+QORVEX_SESSION=my-session ./test-login.sh
 ```
 
-## String Interpolation
+## Writing Scripts by Hand
 
-Double-quoted strings support `$variable` interpolation:
+Use `qorvex` CLI commands in a bash script:
 
-```
-name = "world"
-log_comment("Hello $name")    # logs "Hello world"
-```
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-Single-quoted strings have no interpolation:
-
-```
-log_comment('literal $name')  # logs "literal $name"
-```
-
-Escapes in double-quoted strings: `\n`, `\t`, `\\`, `\$`
-
-## Control Flow
-
-### If/Else
-
-```
-value = get_value("status-label")
-if value == "Success" {
-    log_comment("Test passed")
-} else {
-    tap("retry-button")
-}
-```
-
-### Foreach
-
-```
-foreach item in ["tab1", "tab2", "tab3"] {
-    tap(item)
-    get_screenshot
-}
-```
-
-### For (numeric range)
-
-```
-for i from 1 to 5 {
-    tap("next-button")
-    log_comment("Page $i")
-}
-```
-
-## Settings
-
-```
-# Set default timeout for wait_for (milliseconds)
-set timeout 10000
-```
-
-Currently `timeout` is the only recognized setting.
-
-## Including Other Scripts
-
-```
-include "shared/login.qvx"
-include "helpers/setup.qvx"
-```
-
-Paths are relative to the current script's directory. Circular includes are detected and produce a runtime error.
-
-## Operators
-
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `+` | Addition (numbers) or concatenation (strings) | `"hello" + " world"` |
-| `==` | Equality | `value == "done"` |
-| `!=` | Inequality | `status != "error"` |
-
-Cross-type comparison: a string is compared to a number's string representation (`"42" == 42` is true).
-
-## Complete Example
-
-```
-# Login test script
-use_device("XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")
-set_target("com.example.myapp")
-
-set timeout 10000
+# Boot a simulator and set the target app
+qorvex boot-device "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+qorvex set-target com.example.myapp
 
 # Login
-tap("username-field")
-send_keys("test@example.com")
-tap("password-field")
-send_keys("password123")
-tap("login-button")
+qorvex tap username-field
+qorvex send-keys 'test@example.com'
+qorvex tap password-field
+qorvex send-keys 'password123'
+qorvex tap login-button
 
-# Verify
-wait_for("welcome-label")
-value = get_value("welcome-label")
+# Wait and verify
+qorvex wait-for welcome-label -o 10000
+value=$(qorvex get-value welcome-label)
 
-if value == "Welcome!" {
-    log_comment("Login test passed")
-} else {
-    log_comment("Login test failed: got $value")
-}
+if [ "$value" = "Welcome!" ]; then
+    qorvex comment "Login test passed"
+else
+    echo "Login test failed: got $value" >&2
+    exit 1
+fi
 
 # Navigate tabs
-foreach tab in ["home", "settings", "profile"] {
-    tap(tab)
-    get_screenshot
-}
+for tab in home settings profile; do
+    qorvex tap "$tab"
+    qorvex screenshot > "/tmp/${tab}.b64"
+done
 ```
+
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `qorvex tap <selector>` | Tap by accessibility ID |
+| `qorvex tap <selector> --label` | Tap by label |
+| `qorvex tap <selector> -T Button` | Tap with type filter |
+| `qorvex tap-location <x> <y>` | Tap at coordinates |
+| `qorvex swipe <direction>` | Swipe up/down/left/right |
+| `qorvex send-keys 'text'` | Type text |
+| `qorvex screenshot` | Capture screenshot (base64) |
+| `qorvex screen-info` | Get UI elements |
+| `qorvex get-value <selector>` | Get element value |
+| `qorvex wait-for <selector> -o <ms>` | Wait for element |
+| `qorvex wait-for-not <selector> -o <ms>` | Wait for element to disappear |
+| `qorvex set-target <bundle_id>` | Set target app |
+| `qorvex comment 'text'` | Log a comment |
+| `qorvex boot-device <udid>` | Boot a simulator |
+| `qorvex list-devices` | List simulator devices |
+| `qorvex convert <log.jsonl>` | Convert log to script |
+
+See [commands.md](commands.md) for full option details.
+
+## Tips
+
+- Use `set -euo pipefail` so the script stops on the first failed command.
+- Use `QORVEX_SESSION` environment variable to target a specific session.
+- Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
+- Use `qorvex -f json` for machine-readable output in pipelines.
+- Status messages go to stderr; data goes to stdout. Use `-q` to suppress status messages.
 
 ## Exit Codes
 
-| Code | Meaning | When |
-|------|---------|------|
-| 0 | Success | Script completed normally |
-| 1 | Action failed | A UI action failed (element not found, tap failed, etc.) |
-| 2 | Parse error | Script syntax is invalid |
-| 3 | Runtime error | Variable undefined, circular include, unknown setting, etc. |
-| 4 | I/O error | File not found, permission denied, etc. |
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Action failed (element not found, tap failed, etc.) |
+| 2 | Connection error (no running REPL session) |
+| 3 | Protocol error |

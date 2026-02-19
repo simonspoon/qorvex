@@ -5,7 +5,6 @@ CRATES=(
     qorvex-repl
     qorvex-live
     qorvex-cli
-    qorvex-auto
 )
 
 for crate in "${CRATES[@]}"; do

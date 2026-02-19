@@ -677,6 +677,7 @@ impl App {
                                     by_label,
                                     element_type: element_type.clone(),
                                     timeout_ms: 5000,
+                                    require_stable: false,
                                 }).await;
                                 if !wait_result.success {
                                     self.log_action(
@@ -826,6 +827,7 @@ impl App {
                                 by_label,
                                 element_type: element_type.clone(),
                                 timeout_ms,
+                                require_stable: true,
                             }).await;
 
                             let action_result = if result.success {
@@ -844,6 +846,7 @@ impl App {
                                     by_label,
                                     element_type,
                                     timeout_ms,
+                                    require_stable: true,
                                 },
                                 action_result,
                                 duration_ms,
@@ -968,6 +971,7 @@ impl App {
                                     by_label,
                                     element_type: element_type.clone(),
                                     timeout_ms: 5000,
+                                    require_stable: false,
                                 }).await;
                                 if !wait_result.success {
                                     self.log_action(

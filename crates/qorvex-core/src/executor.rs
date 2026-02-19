@@ -386,7 +386,7 @@ impl ActionExecutor {
                 ExecutionResult::success(format!("Logged: {}", message))
             }
 
-            ActionType::WaitFor { ref selector, by_label, ref element_type, timeout_ms } => {
+            ActionType::WaitFor { ref selector, by_label, ref element_type, timeout_ms, require_stable } => {
                 let start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
@@ -401,55 +401,72 @@ impl ActionExecutor {
                         element_type.as_deref(),
                     ).await {
                         if let Some(element) = found {
-                            // Skip elements that exist but aren't hittable yet
-                            // (e.g. behind another view or mid-animation).
-                            if element.hittable == Some(false) {
-                                last_frame = None;
-                                stable_count = 0;
-                                if start.elapsed() >= timeout {
+                            if require_stable {
+                                // Skip elements that exist but aren't hittable yet
+                                // (e.g. behind another view or mid-animation).
+                                if element.hittable == Some(false) {
+                                    last_frame = None;
+                                    stable_count = 0;
+                                    if start.elapsed() >= timeout {
+                                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                                        let msg = if by_label {
+                                            format!("Timeout after {}ms: element with label '{}' exists but is not hittable", elapsed_ms, selector)
+                                        } else {
+                                            format!("Timeout after {}ms: element '{}' exists but is not hittable", elapsed_ms, selector)
+                                        };
+                                        return ExecutionResult::failure(msg)
+                                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                                    }
+                                    tokio::time::sleep(poll_interval).await;
+                                    continue;
+                                }
+
+                                let current_frame = element.frame.as_ref()
+                                    .map(|f| (f.x, f.y, f.width, f.height));
+
+                                // Require the frame to be stable across multiple consecutive
+                                // polls to avoid tapping during iOS animations.
+                                if current_frame.is_none() {
+                                    stable_count = stable_polls_required;
+                                } else if current_frame == last_frame {
+                                    stable_count += 1;
+                                } else {
+                                    stable_count = 1;
+                                    last_frame = current_frame;
+                                }
+
+                                if stable_count >= stable_polls_required {
                                     let elapsed_ms = start.elapsed().as_millis() as u64;
                                     let msg = if by_label {
-                                        format!("Timeout after {}ms: element with label '{}' exists but is not hittable", elapsed_ms, selector)
+                                        format!("Element with label '{}' found", selector)
                                     } else {
-                                        format!("Timeout after {}ms: element '{}' exists but is not hittable", elapsed_ms, selector)
+                                        format!("Element '{}' found", selector)
                                     };
-                                    return ExecutionResult::failure(msg)
-                                        .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                                    let data = if let Some(ref frame) = element.frame {
+                                        format!(
+                                            r#"{{"elapsed_ms":{},"frame":{{"x":{},"y":{},"width":{},"height":{}}}}}"#,
+                                            elapsed_ms, frame.x, frame.y, frame.width, frame.height
+                                        )
+                                    } else {
+                                        format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms)
+                                    };
+                                    let mut result = ExecutionResult::success(msg).with_data(data);
+                                    if let Some(screenshot) = self.capture_screenshot().await {
+                                        result = result.with_screenshot(screenshot);
+                                    }
+                                    return result;
                                 }
-                                tokio::time::sleep(poll_interval).await;
-                                continue;
-                            }
-
-                            let current_frame = element.frame.as_ref()
-                                .map(|f| (f.x, f.y, f.width, f.height));
-
-                            // Require the frame to be stable across multiple consecutive
-                            // polls to avoid tapping during iOS animations.
-                            if current_frame.is_none() {
-                                stable_count = stable_polls_required;
-                            } else if current_frame == last_frame {
-                                stable_count += 1;
                             } else {
-                                stable_count = 1;
-                                last_frame = current_frame;
-                            }
-
-                            if stable_count >= stable_polls_required {
+                                // Fast path: element exists, return immediately.
+                                // XCUIElement's native tap handles hittability and animations.
                                 let elapsed_ms = start.elapsed().as_millis() as u64;
                                 let msg = if by_label {
                                     format!("Element with label '{}' found", selector)
                                 } else {
                                     format!("Element '{}' found", selector)
                                 };
-                                let data = if let Some(ref frame) = element.frame {
-                                    format!(
-                                        r#"{{"elapsed_ms":{},"frame":{{"x":{},"y":{},"width":{},"height":{}}}}}"#,
-                                        elapsed_ms, frame.x, frame.y, frame.width, frame.height
-                                    )
-                                } else {
-                                    format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms)
-                                };
-                                let mut result = ExecutionResult::success(msg).with_data(data);
+                                let mut result = ExecutionResult::success(msg)
+                                    .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
                                 if let Some(screenshot) = self.capture_screenshot().await {
                                     result = result.with_screenshot(screenshot);
                                 }
@@ -514,6 +531,15 @@ impl ActionExecutor {
                             .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
                     }
                     tokio::time::sleep(poll_interval).await;
+                }
+            }
+
+            ActionType::SetTarget { ref bundle_id } => {
+                match self.driver.set_target(bundle_id).await {
+                    Ok(_) => {
+                        ExecutionResult::success(format!("Target set to '{}'", bundle_id))
+                    }
+                    Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 
