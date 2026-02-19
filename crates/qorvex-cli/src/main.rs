@@ -26,8 +26,14 @@
 //! # Get screenshot (base64)
 //! qorvex screenshot > screen.b64
 //!
-//! # Get screen info (JSON)
-//! qorvex screen-info | jq '.elements'
+//! # Get screen info (concise actionable elements)
+//! qorvex screen-info
+//!
+//! # Get full raw JSON
+//! qorvex screen-info --full
+//!
+//! # Get REPL-style formatted list
+//! qorvex screen-info --pretty
 //!
 //! # Get element value (waits for element by default)
 //! qorvex get-value username-field
@@ -46,6 +52,7 @@
 
 use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
+use qorvex_core::element::{UIElement, ElementFrame};
 use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse};
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
@@ -115,8 +122,15 @@ enum Command {
     /// Capture a screenshot (outputs base64-encoded PNG)
     Screenshot,
 
-    /// Get UI hierarchy information (outputs JSON)
-    ScreenInfo,
+    /// Get UI hierarchy information
+    ScreenInfo {
+        /// Output full raw JSON (original behavior)
+        #[arg(long)]
+        full: bool,
+        /// Output REPL-style formatted list
+        #[arg(long)]
+        pretty: bool,
+    },
 
     /// Get the value of an element by ID or label
     GetValue {
@@ -278,8 +292,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Screenshot => {
             execute_action(&mut client, ActionType::GetScreenshot, &cli).await
         }
-        Command::ScreenInfo => {
-            execute_action(&mut client, ActionType::GetScreenInfo, &cli).await
+        Command::ScreenInfo { full, pretty } => {
+            execute_screen_info(&mut client, &cli, full, pretty).await
         }
         Command::GetValue { ref selector, label, ref element_type, no_wait, timeout } => {
             if !no_wait {
@@ -380,6 +394,127 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -
         _ => {
             Err(CliError::Protocol("Unexpected response type".to_string()))
         }
+    }
+}
+
+/// Check if an element is "actionable" (has an identifier or label, and is a meaningful type).
+fn is_actionable(elem: &UIElement) -> bool {
+    elem.identifier.is_some() || elem.label.is_some()
+}
+
+/// Filter the top-level element list to actionable elements only (no recursion into children).
+fn collect_actionable(elements: &[UIElement]) -> Vec<&UIElement> {
+    elements.iter().filter(|e| is_actionable(e)).collect()
+}
+
+/// Serialize a UIElement concisely: no null fields, rounded frame values.
+fn element_to_concise_json(elem: &UIElement) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(ref t) = elem.element_type {
+        map.insert("type".into(), serde_json::Value::String(t.clone()));
+    }
+    if let Some(ref id) = elem.identifier {
+        map.insert("id".into(), serde_json::Value::String(id.clone()));
+    }
+    if let Some(ref label) = elem.label {
+        map.insert("label".into(), serde_json::Value::String(label.clone()));
+    }
+    if let Some(ref value) = elem.value {
+        map.insert("value".into(), serde_json::Value::String(value.clone()));
+    }
+    if let Some(ref frame) = elem.frame {
+        map.insert("frame".into(), frame_to_rounded_json(frame));
+    }
+    if let Some(ref role) = elem.role {
+        map.insert("role".into(), serde_json::Value::String(role.clone()));
+    }
+    if let Some(hittable) = elem.hittable {
+        map.insert("hittable".into(), serde_json::Value::Bool(hittable));
+    }
+    serde_json::Value::Object(map)
+}
+
+fn frame_to_rounded_json(frame: &ElementFrame) -> serde_json::Value {
+    serde_json::json!({
+        "x": frame.x.round() as i64,
+        "y": frame.y.round() as i64,
+        "width": frame.width.round() as i64,
+        "height": frame.height.round() as i64,
+    })
+}
+
+/// Format an element in the REPL style: `[Type] id "label" =value @(x,y)`
+fn format_element_pretty(elem: &UIElement) -> String {
+    let mut parts = Vec::new();
+    let elem_type = elem.element_type.as_deref().unwrap_or("Unknown");
+    parts.push(format!("[{}]", elem_type));
+    if let Some(ref id) = elem.identifier {
+        parts.push(id.clone());
+    }
+    if let Some(ref label) = elem.label {
+        parts.push(format!("\"{}\"", label));
+    }
+    if let Some(ref value) = elem.value {
+        parts.push(format!("={}", value));
+    }
+    if let Some(ref frame) = elem.frame {
+        parts.push(format!("@({:.0},{:.0})", frame.x, frame.y));
+    }
+    parts.join(" ")
+}
+
+async fn execute_screen_info(
+    client: &mut IpcClient,
+    cli: &Cli,
+    full: bool,
+    pretty: bool,
+) -> Result<(), CliError> {
+    let request = IpcRequest::Execute { action: ActionType::GetScreenInfo };
+    let response = client
+        .send(&request)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::ActionResult { success, message, data, .. } => {
+            if !success {
+                return Err(CliError::ActionFailed(message));
+            }
+            let data_str = data.as_deref().unwrap_or("[]");
+
+            if full {
+                // Original behavior: dump raw JSON
+                println!("{}", data_str);
+            } else if pretty {
+                // REPL-style formatted output
+                let elements: Vec<UIElement> = serde_json::from_str(data_str)
+                    .map_err(|e| CliError::Protocol(format!("Failed to parse elements: {}", e)))?;
+                let actionable = collect_actionable(&elements);
+                for elem in &actionable {
+                    println!("{}", format_element_pretty(elem));
+                }
+                if !cli.quiet {
+                    eprintln!("{} elements", actionable.len());
+                }
+            } else {
+                // Default: concise JSON, actionable only, no nulls, rounded frames
+                let elements: Vec<UIElement> = serde_json::from_str(data_str)
+                    .map_err(|e| CliError::Protocol(format!("Failed to parse elements: {}", e)))?;
+                let actionable = collect_actionable(&elements);
+                let concise: Vec<serde_json::Value> = actionable
+                    .iter()
+                    .map(|e| element_to_concise_json(e))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&concise).unwrap());
+                if !cli.quiet {
+                    eprintln!("{} elements", actionable.len());
+                }
+            }
+
+            Ok(())
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 
