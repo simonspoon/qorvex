@@ -861,6 +861,59 @@ impl App {
                     }
                 }
             }
+            "wait_for_not" => {
+                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "wait_for_not requires at least 1 argument: wait_for_not(selector) or wait_for_not(selector, timeout_ms) or wait_for_not(selector, timeout_ms, label) or wait_for_not(selector, timeout_ms, label, type)"));
+                } else {
+                    let timeout_ms: u64 = args.get(1)
+                        .map(|s| s.parse().unwrap_or(5000))
+                        .unwrap_or(5000);
+                    let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                    let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
+                    match &self.executor {
+                        Some(executor) => {
+                            let result = executor.execute(ActionType::WaitForNot {
+                                selector: selector.to_string(),
+                                by_label,
+                                element_type: element_type.clone(),
+                                timeout_ms,
+                            }).await;
+
+                            let action_result = if result.success {
+                                ActionResult::Success
+                            } else {
+                                ActionResult::Failure(result.message.clone())
+                            };
+
+                            let duration_ms = result.data.as_ref()
+                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                                .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
+
+                            self.log_action(
+                                ActionType::WaitForNot {
+                                    selector: selector.to_string(),
+                                    by_label,
+                                    element_type,
+                                    timeout_ms,
+                                },
+                                action_result,
+                                duration_ms,
+                            ).await;
+
+                            if result.success {
+                                self.add_output(format_result(true, &format!("{} ({})", result.message, result.data.unwrap_or_default())));
+                            } else {
+                                self.add_output(format_result(false, &result.message));
+                            }
+                        }
+                        None => {
+                            self.add_output(format_result(false, "No simulator selected"));
+                        }
+                    }
+                }
+            }
             "send_keys" => {
                 let text = args.join(" ");
                 if text.is_empty() {
@@ -1068,6 +1121,8 @@ impl App {
             "  wait_for(selector)     Wait for element (5s timeout)",
             "  wait_for(sel, ms)      Wait with custom timeout",
             "  wait_for(sel,ms,label) Wait by label with timeout",
+            "  wait_for_not(selector) Wait for element to disappear (5s)",
+            "  wait_for_not(sel, ms)  Wait for disappearance with timeout",
             "",
             "Input:",
             "  send_keys(text)        Send keyboard input",

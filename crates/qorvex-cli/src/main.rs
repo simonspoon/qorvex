@@ -171,6 +171,21 @@ enum Command {
         timeout: u64,
     },
 
+    /// Wait for an element to disappear by ID or label
+    WaitForNot {
+        /// The selector (accessibility ID or label)
+        selector: String,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
+        /// Timeout in milliseconds
+        #[arg(short = 'o', long, default_value = "5000")]
+        timeout: u64,
+    },
+
     /// Get current session state
     Status,
 
@@ -315,6 +330,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Command::WaitFor { ref selector, label, ref element_type, timeout } => {
             execute_action(&mut client, ActionType::WaitFor {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+                timeout_ms: timeout,
+            }, &cli).await
+        }
+        Command::WaitForNot { ref selector, label, ref element_type, timeout } => {
+            execute_action(&mut client, ActionType::WaitForNot {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),

@@ -84,6 +84,21 @@ Commands are available across three interfaces: the REPL (interactive), CLI (scr
 
 Wait behavior: polls every 100ms, requires element to be hittable, requires 3 consecutive stable frames (same position) before success.
 
+### Wait For Element to Disappear
+
+| Syntax | Description |
+|--------|-------------|
+| REPL: `wait_for_not(selector)` | Wait for element to disappear by ID (5s default) |
+| REPL: `wait_for_not(selector, timeout_ms)` | Custom timeout |
+| REPL: `wait_for_not(selector, timeout_ms, label)` | Wait by label |
+| REPL: `wait_for_not(selector, timeout_ms, label, type)` | Wait by label + type |
+| CLI: `qorvex wait-for-not <selector> --timeout 10000` | Wait for disappearance |
+| CLI: `qorvex wait-for-not <selector> --label --timeout 10000` | Wait by label |
+| Script: `wait_for_not("selector")` | Wait until gone (uses `set timeout` or 5s default) |
+| Script: `wait_for_not("selector", 10000)` | Custom timeout |
+
+Returns success as soon as the element is absent or not hittable. Fails with timeout if element persists.
+
 ## Screen and Elements
 
 | Command | REPL | CLI | Script |

@@ -177,6 +177,14 @@ pub static COMMANDS: &[CommandDef] = &[
             completion: ArgCompletion::ElementSelector,
         }],
     },
+    CommandDef {
+        name: "wait_for_not",
+        description: "Wait for element to disappear",
+        args: &[ArgSpec {
+            name: "selector",
+            completion: ArgCompletion::ElementSelector,
+        }],
+    },
     // Input commands
     CommandDef {
         name: "send_keys",

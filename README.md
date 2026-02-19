@@ -90,6 +90,8 @@ Available commands:
 - `wait_for(selector, timeout_ms)` — Wait with custom timeout
 - `wait_for(selector, timeout_ms, label)` — Wait for element by label
 - `wait_for(selector, timeout_ms, label, type)` — Wait for element by label with type filter
+- `wait_for_not(selector)` — Wait for element to disappear (5s default timeout)
+- `wait_for_not(selector, timeout_ms)` — Wait for disappearance with custom timeout
 - `get_screenshot` — Capture current screen
 - `get_screen_info` — Get UI hierarchy information
 - `list_elements` — List actionable UI elements

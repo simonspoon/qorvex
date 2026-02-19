@@ -96,6 +96,19 @@ impl LogConverter {
                 }
                 Some(format!("wait_for({})", args.join(", ")))
             }
+            ActionType::WaitForNot { selector, by_label, element_type, timeout_ms } => {
+                let mut args = vec![format!("\"{}\"", selector), timeout_ms.to_string()];
+                if *by_label {
+                    args.push("\"label\"".to_string());
+                }
+                if let Some(t) = element_type {
+                    if !*by_label {
+                        args.push("\"\"".to_string());
+                    }
+                    args.push(format!("\"{}\"", t));
+                }
+                Some(format!("wait_for_not({})", args.join(", ")))
+            }
             ActionType::LongPress { x, y, duration } => {
                 Some(format!("long_press({}, {}, {})", x, y, duration))
             }

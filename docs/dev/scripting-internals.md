@@ -209,7 +209,7 @@ The executor handles the following commands:
 
 **Watcher commands:** `start_watcher`, `stop_watcher`
 
-**Action commands:** `tap`, `swipe`, `tap_location`, `send_keys`, `wait_for`, `get_value`, `get_screenshot`, `get_screen_info`, `list_elements`
+**Action commands:** `tap`, `swipe`, `tap_location`, `send_keys`, `wait_for`, `wait_for_not`, `get_value`, `get_screenshot`, `get_screen_info`, `list_elements`
 
 **Logging commands:** `log`, `log_comment`
 

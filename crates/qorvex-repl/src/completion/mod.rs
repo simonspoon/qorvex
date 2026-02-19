@@ -354,7 +354,7 @@ fn element_selector_candidates(
         }
     }
 
-    let is_wait_for = command_name == "wait_for";
+    let is_wait_for = command_name == "wait_for" || command_name == "wait_for_not";
 
     let mut candidates: Vec<Candidate> = elements
         .iter()

@@ -128,6 +128,18 @@ pub enum ActionType {
         timeout_ms: u64,
     },
 
+    /// Wait for an element to disappear from screen by ID or label.
+    WaitForNot {
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
+        /// Maximum time to wait in milliseconds.
+        timeout_ms: u64,
+    },
+
     /// Start a new automation session.
     StartSession,
 
@@ -153,6 +165,7 @@ impl ActionType {
             ActionType::GetValue { .. } => "get_value",
             ActionType::SendKeys { .. } => "send_keys",
             ActionType::WaitFor { .. } => "wait_for",
+            ActionType::WaitForNot { .. } => "wait_for_not",
             ActionType::StartSession => "start_session",
             ActionType::EndSession => "end_session",
             ActionType::Quit => "quit",

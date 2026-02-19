@@ -371,7 +371,7 @@ impl ScriptExecutor {
                 Ok(Value::String(info))
             }
             "help" => {
-                info!("available commands: start_session, end_session, tap, swipe, send_keys, wait_for, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, set_target, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
+                info!("available commands: start_session, end_session, tap, swipe, send_keys, wait_for, wait_for_not, get_value, get_screenshot, get_screen_info, list_elements, list_devices, use_device, boot_device, set_target, tap_location, log, log_comment, start_watcher, stop_watcher, get_session_info, help");
                 Ok(Value::String("help".to_string()))
             }
             "tap" => {
@@ -462,6 +462,20 @@ impl ScriptExecutor {
                 let element_type = args.get(3).cloned().filter(|s| !s.is_empty());
 
                 let action = ActionType::WaitFor { selector, by_label, element_type, timeout_ms };
+                self.execute_action(action, line).await
+            }
+            "wait_for_not" => {
+                let selector = args.first().ok_or_else(|| AutoError::Runtime {
+                    message: "wait_for_not requires at least 1 argument".to_string(),
+                    line,
+                })?.clone();
+                let timeout_ms: u64 = args.get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(self.default_timeout_ms);
+                let by_label = args.get(2).map(|s| s.to_lowercase() == "label").unwrap_or(false);
+                let element_type = args.get(3).cloned().filter(|s| !s.is_empty());
+
+                let action = ActionType::WaitForNot { selector, by_label, element_type, timeout_ms };
                 self.execute_action(action, line).await
             }
             "get_value" => {

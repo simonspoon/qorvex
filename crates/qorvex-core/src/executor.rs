@@ -474,6 +474,49 @@ impl ActionExecutor {
                 }
             }
 
+            ActionType::WaitForNot { ref selector, by_label, ref element_type, timeout_ms } => {
+                let start = Instant::now();
+                let timeout = Duration::from_millis(timeout_ms);
+                let poll_interval = Duration::from_millis(100);
+
+                loop {
+                    let found = self.driver.find_element_with_type(
+                        selector,
+                        by_label,
+                        element_type.as_deref(),
+                    ).await;
+
+                    let element_present = matches!(found, Ok(Some(ref el)) if el.hittable != Some(false));
+
+                    if !element_present {
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                        let msg = if by_label {
+                            format!("Element with label '{}' not found", selector)
+                        } else {
+                            format!("Element '{}' not found", selector)
+                        };
+                        let mut result = ExecutionResult::success(msg)
+                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                        if let Some(screenshot) = self.capture_screenshot().await {
+                            result = result.with_screenshot(screenshot);
+                        }
+                        return result;
+                    }
+
+                    if start.elapsed() >= timeout {
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                        let msg = if by_label {
+                            format!("Timeout after {}ms waiting for element with label '{}' to disappear", elapsed_ms, selector)
+                        } else {
+                            format!("Timeout after {}ms waiting for element '{}' to disappear", elapsed_ms, selector)
+                        };
+                        return ExecutionResult::failure(msg)
+                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                    }
+                    tokio::time::sleep(poll_interval).await;
+                }
+            }
+
             // Session management actions should be handled by the caller
             ActionType::StartSession | ActionType::EndSession | ActionType::Quit => {
                 ExecutionResult::failure("Session management actions must be handled by the session manager")
