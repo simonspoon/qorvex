@@ -1,0 +1,139 @@
+# Troubleshooting
+
+## Agent Won't Start
+
+**Symptoms:** `start_agent` hangs or fails, "Agent failed to become ready within timeout"
+
+**Check:**
+
+1. Is a simulator booted? Run `xcrun simctl list devices | grep Booted`
+2. Is xcodegen installed? `which xcodegen` -- install via `brew install xcodegen`
+3. Is the agent source configured? Check `~/.qorvex/config.json` for `agent_source_dir`
+4. Is port 8080 available? `lsof -i :8080` -- kill any existing process
+5. Check Xcode build errors: run `make -C qorvex-agent build` manually to see full output
+
+**Common fixes:**
+
+- Re-run `./install.sh` to set up the agent source directory
+- `start_agent(/full/path/to/qorvex/qorvex-agent)` -- provide path explicitly
+
+## Agent Won't Connect
+
+**Symptoms:** "Not connected to automation backend", "Connection lost"
+
+**Check:**
+
+1. Is the agent process running? Look for `xcodebuild test-without-building` in Activity Monitor
+2. Try stopping and restarting: `stop_agent` then `start_agent`
+3. The agent binds to `127.0.0.1:8080` -- ensure nothing else is using that port
+
+**Timeouts:**
+
+- Connection timeout: 5 seconds
+- Read timeout: 30 seconds
+- Agent startup timeout: 30 seconds (3 retries)
+
+## Element Not Found
+
+**Symptoms:** "Timeout waiting for element", tap/get_value fails
+
+**Debug steps:**
+
+1. `get_screen_info` -- inspect the current UI hierarchy
+2. `list_elements` -- see all elements with identifiers or labels
+3. Check the exact identifier/label: IDs are case-sensitive
+4. Try glob matching: `tap(login-*)` to match partial IDs
+5. Is the element in a different app? Use `set_target(bundle_id)` to switch
+
+## Element Not Hittable
+
+**Symptoms:** "Element found but not hittable", wait_for times out
+
+**What this means:** The element exists in the accessibility tree but iOS reports it as not tappable. Common causes:
+
+- Element is behind another view (covered/overlapped)
+- Element is off-screen (need to scroll first)
+- Element is disabled
+- Element is still animating into position
+
+**Fixes:**
+
+- `swipe(up)` or `swipe(down)` to scroll the element into view
+- Wait longer: `wait_for(element, 10000)` -- the default is 5 seconds
+- `wait_for` requires 3 stable frames (300ms of no movement), so animations must complete
+
+## USB Tunnel Issues (Physical Devices)
+
+**Symptoms:** "USB tunnel error", device not found
+
+**Check:**
+
+1. Is the device connected via USB? `idevice list` or `xcrun xctrace list devices`
+2. Is developer mode enabled on the device?
+3. Has the device been trusted? Check for the "Trust This Computer" dialog
+4. Is usbmuxd running? `launchctl list | grep usbmuxd`
+
+## Script Errors
+
+### Parse Error (exit code 2)
+
+```
+Parse error at line 5: unexpected token
+```
+
+Check syntax: matching braces, quoted strings, correct keywords.
+
+### Runtime Error (exit code 3)
+
+```
+Runtime error at line 10: Undefined variable: user
+```
+
+Variables must be assigned before use. Check for typos in variable names.
+
+```
+Runtime error at line 15: Circular include detected
+```
+
+Script A includes B which includes A. Remove the circular dependency.
+
+```
+Runtime error at line 8: Unknown setting: delay
+```
+
+Only `timeout` is a valid `set` directive.
+
+### Action Failed (exit code 1)
+
+```
+Action failed at line 12: Timeout after 5000ms waiting for element 'submit-btn'
+```
+
+The element didn't appear within the timeout. Increase timeout with `set timeout 10000` or `wait_for("selector", 10000)`.
+
+## IPC Connection Issues
+
+**Symptoms:** qorvex-cli or qorvex-live can't connect
+
+**Check:**
+
+1. Is a REPL session running? The CLI and Live TUI connect via IPC to the REPL
+2. Check socket file: `ls ~/.qorvex/qorvex_*.sock`
+3. Wrong session name? Use `-s session-name` to specify, or set `$QORVEX_SESSION`
+4. List active sessions: `qorvex list-sessions`
+
+## Stale Socket Files
+
+If a session crashes, the socket file may be left behind:
+
+```bash
+rm ~/.qorvex/qorvex_default.sock
+```
+
+The server cleans up old sockets on startup, but manual removal may be needed after a crash.
+
+## Performance
+
+- **Watcher polling:** Default 500ms. Lower values increase CPU usage. Set via `start_watcher(interval_ms)`.
+- **Visual change threshold:** Default 5 (hamming distance 0-64). Lower = more sensitive to visual changes.
+- **Screenshot capture:** Enabled by default in watcher. Disable if you only need accessibility tree changes.
