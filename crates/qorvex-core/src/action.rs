@@ -185,6 +185,55 @@ impl ActionType {
             ActionType::Quit => "quit",
         }
     }
+
+    /// Returns a human-friendly display name for CLI output.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ActionType::Tap { .. } | ActionType::TapLocation { .. } => "Tap",
+            ActionType::Swipe { .. } => "Swipe",
+            ActionType::LongPress { .. } => "LongPress",
+            ActionType::LogComment { .. } => "Comment",
+            ActionType::GetScreenshot => "Screenshot",
+            ActionType::GetScreenInfo => "ScreenInfo",
+            ActionType::GetValue { .. } => "GetValue",
+            ActionType::SendKeys { .. } => "Type",
+            ActionType::WaitFor { .. } => "Find",
+            ActionType::WaitForNot { .. } => "Gone",
+            ActionType::SetTarget { .. } => "Target",
+            ActionType::StartSession => "Start",
+            ActionType::EndSession => "End",
+            ActionType::Quit => "Quit",
+        }
+    }
+
+    /// Returns a formatted target string for CLI output.
+    pub fn display_target(&self) -> String {
+        match self {
+            ActionType::Tap { selector, by_label, .. }
+            | ActionType::WaitFor { selector, by_label, .. }
+            | ActionType::WaitForNot { selector, by_label, .. }
+            | ActionType::GetValue { selector, by_label, .. } => {
+                if *by_label {
+                    format!("label:'{}'", selector)
+                } else {
+                    selector.clone()
+                }
+            }
+            ActionType::TapLocation { x, y } => format!("({},{})", x, y),
+            ActionType::Swipe { direction } => direction.clone(),
+            ActionType::LongPress { x, y, duration } => format!("({},{}) {:.1}s", x, y, duration),
+            ActionType::SendKeys { text } => {
+                if text.len() > 20 {
+                    format!("'{}..'", &text[..18])
+                } else {
+                    format!("'{}'", text)
+                }
+            }
+            ActionType::LogComment { message } => message.clone(),
+            ActionType::SetTarget { bundle_id } => bundle_id.clone(),
+            _ => String::new(),
+        }
+    }
 }
 
 /// A logged action with metadata.

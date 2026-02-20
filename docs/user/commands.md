@@ -101,7 +101,7 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 | Screen info | `get_screen_info` | `qorvex screen-info` |
 | List elements | `list_elements` | — |
 
-`qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. `qorvex get-value` prints the element value to stdout. Status messages go to stderr.
+`qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. `qorvex get-value` prints the element value to stdout. Status messages go to stderr in `|timestamp|Action|target|duration|` format.
 
 ## Values
 

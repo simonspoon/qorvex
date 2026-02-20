@@ -450,6 +450,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -> Result<(), CliError> {
     let is_screenshot_action = matches!(action, ActionType::GetScreenshot);
     let is_data_action = matches!(action, ActionType::GetScreenInfo | ActionType::GetValue { .. });
+    let action_label = action.display_name();
+    let action_target = action.display_target();
     let request = IpcRequest::Execute { action };
     let response = client
         .send(&request)
@@ -482,20 +484,13 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -
                         }
                     }
                     if !cli.quiet {
-                        // Include duration from data if present
-                        if let Some(ref d) = data {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(d) {
-                                if let Some(elapsed) = parsed.get("elapsed_ms").and_then(|v| v.as_u64()) {
-                                    eprintln!("{} ({}ms)", message, elapsed);
-                                } else {
-                                    eprintln!("{}", message);
-                                }
-                            } else {
-                                eprintln!("{}", message);
-                            }
-                        } else {
-                            eprintln!("{}", message);
-                        }
+                        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.4fZ");
+                        let duration_str = data.as_ref()
+                            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                            .and_then(|parsed| parsed.get("elapsed_ms").and_then(|v| v.as_u64()))
+                            .map(|ms| format!("{}ms", ms))
+                            .unwrap_or_default();
+                        eprintln!("|{}|{}|{}|{}|", now, action_label, action_target, duration_str);
                     }
                 } else {
                     return Err(CliError::ActionFailed(message));

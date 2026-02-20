@@ -98,7 +98,7 @@ See [commands.md](commands.md) for full option details.
 - Use `QORVEX_TIMEOUT` to set a default timeout (ms) for all wait/tap operations without passing `-o` on every command.
 - Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
 - Use `qorvex -f json` for machine-readable output in pipelines.
-- Status messages go to stderr; data goes to stdout. Use `-q` to suppress status messages.
+- Status messages go to stderr in a pipe-delimited format: `|timestamp|Action|target|duration|`. Data (screenshots, element values) goes to stdout. Use `-q` to suppress status messages.
 
 ## Exit Codes
 
