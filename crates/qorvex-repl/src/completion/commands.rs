@@ -101,6 +101,14 @@ pub static COMMANDS: &[CommandDef] = &[
             completion: ArgCompletion::None,
         }],
     },
+    CommandDef {
+        name: "set_timeout",
+        description: "Set default wait timeout (ms)",
+        args: &[ArgSpec {
+            name: "ms",
+            completion: ArgCompletion::None,
+        }],
+    },
     // Screen commands
     CommandDef {
         name: "get_screenshot",

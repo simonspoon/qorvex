@@ -126,6 +126,8 @@ pub struct App {
     pub watcher_handle: Option<WatcherHandle>,
     /// Channel receiver for element updates from session events.
     pub element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
+    /// Default timeout in milliseconds for wait operations.
+    pub default_timeout_ms: u64,
     /// Whether the app should quit.
     pub should_quit: bool,
 }
@@ -160,6 +162,7 @@ impl App {
             ipc_shared_driver: Arc::new(tokio::sync::Mutex::new(None)),
             watcher_handle: None,
             element_update_rx: None,
+            default_timeout_ms: 5000,
             should_quit: false,
         };
 
@@ -605,6 +608,22 @@ impl App {
                     self.add_output(format_result(false, "No managed agent to stop"));
                 }
             }
+            "set_timeout" => {
+                let ms_str = args.first().map(|s| s.trim()).unwrap_or("");
+                if ms_str.is_empty() {
+                    self.add_output(format_result(true, &format!("Current default timeout: {}ms", self.default_timeout_ms)));
+                } else {
+                    match ms_str.parse::<u64>() {
+                        Ok(ms) => {
+                            self.default_timeout_ms = ms;
+                            self.add_output(format_result(true, &format!("Default timeout set to {}ms", ms)));
+                        }
+                        Err(_) => {
+                            self.add_output(format_result(false, "set_timeout requires a number in milliseconds: set_timeout(ms)"));
+                        }
+                    }
+                }
+            }
             "set_target" => {
                 let bundle_id = args.first().map(|s| strip_quotes(s)).unwrap_or("");
                 if bundle_id.is_empty() {
@@ -676,7 +695,7 @@ impl App {
                                     selector: selector.to_string(),
                                     by_label,
                                     element_type: element_type.clone(),
-                                    timeout_ms: 5000,
+                                    timeout_ms: self.default_timeout_ms,
                                     require_stable: false,
                                 }).await;
                                 if !wait_result.success {
@@ -811,10 +830,10 @@ impl App {
                 if selector.is_empty() {
                     self.add_output(format_result(false, "wait_for requires at least 1 argument: wait_for(selector) or wait_for(selector, timeout_ms) or wait_for(selector, timeout_ms, label) or wait_for(selector, timeout_ms, label, type)"));
                 } else {
-                    // Second arg is timeout (default 5000)
+                    // Second arg is timeout (default from set_timeout)
                     let timeout_ms: u64 = args.get(1)
-                        .map(|s| s.parse().unwrap_or(5000))
-                        .unwrap_or(5000);
+                        .map(|s| s.parse().unwrap_or(self.default_timeout_ms))
+                        .unwrap_or(self.default_timeout_ms);
                     // Third arg is 'label' flag
                     let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
                     // Fourth arg is element type
@@ -870,8 +889,8 @@ impl App {
                     self.add_output(format_result(false, "wait_for_not requires at least 1 argument: wait_for_not(selector) or wait_for_not(selector, timeout_ms) or wait_for_not(selector, timeout_ms, label) or wait_for_not(selector, timeout_ms, label, type)"));
                 } else {
                     let timeout_ms: u64 = args.get(1)
-                        .map(|s| s.parse().unwrap_or(5000))
-                        .unwrap_or(5000);
+                        .map(|s| s.parse().unwrap_or(self.default_timeout_ms))
+                        .unwrap_or(self.default_timeout_ms);
                     let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
                     let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
@@ -970,7 +989,7 @@ impl App {
                                     selector: selector.to_string(),
                                     by_label,
                                     element_type: element_type.clone(),
-                                    timeout_ms: 5000,
+                                    timeout_ms: self.default_timeout_ms,
                                     require_stable: false,
                                 }).await;
                                 if !wait_result.success {
@@ -1102,6 +1121,7 @@ impl App {
             "  start_agent(path)      Build and launch agent from project dir",
             "  stop_agent             Stop managed agent process",
             "  set_target(bundle_id)  Set target app for automation",
+            "  set_timeout(ms)        Set default wait timeout (ms)",
             "",
             "Screen:",
             "  get_screenshot         Capture a screenshot (base64 PNG)",

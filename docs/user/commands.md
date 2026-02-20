@@ -27,6 +27,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Start agent | `start_agent` or `start_agent(path)` | — |
 | Stop agent | `stop_agent` | — |
 | Set target app | `set_target(bundle_id)` | `qorvex set-target <bundle_id>` |
+| Set default timeout | `set_timeout(ms)` | — |
 
 ## UI Interaction
 
@@ -70,7 +71,7 @@ Tap auto-wait behavior (unless `--no-wait`): polls every 100ms until the element
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `wait_for(selector)` | Wait for element by ID (5s default) |
+| REPL: `wait_for(selector)` | Wait for element by ID (uses `set_timeout` default, initially 5s) |
 | REPL: `wait_for(selector, timeout_ms)` | Custom timeout |
 | REPL: `wait_for(selector, timeout_ms, label)` | Wait by label |
 | REPL: `wait_for(selector, timeout_ms, label, type)` | Wait by label + type |
@@ -83,7 +84,7 @@ Wait behavior: polls every 100ms, requires element to be hittable, requires 3 co
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `wait_for_not(selector)` | Wait for element to disappear by ID (5s default) |
+| REPL: `wait_for_not(selector)` | Wait for element to disappear by ID (uses `set_timeout` default, initially 5s) |
 | REPL: `wait_for_not(selector, timeout_ms)` | Custom timeout |
 | REPL: `wait_for_not(selector, timeout_ms, label)` | Wait by label |
 | REPL: `wait_for_not(selector, timeout_ms, label, type)` | Wait by label + type |
