@@ -484,7 +484,7 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -
                         }
                     }
                     if !cli.quiet {
-                        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.4fZ");
+                        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3fZ");
                         let duration_str = data.as_ref()
                             .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                             .and_then(|parsed| parsed.get("elapsed_ms").and_then(|v| v.as_u64()))

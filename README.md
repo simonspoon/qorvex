@@ -73,6 +73,7 @@ Available commands:
 - `start_agent(path)` — Build and launch Swift agent from project directory
 - `stop_agent` — Stop a managed agent process
 - `set_target(bundle_id)` — Set target app bundle ID
+- `set_timeout(ms)` — Set default timeout for tap/wait operations (default: 5000ms); no arg prints current value
 - `start_session` — Begin a new session (auto-starts agent if configured)
 - `end_session` — End the current session
 - `get_session_info` — Get session status info
@@ -186,6 +187,10 @@ Options:
 - `-s, --session <name>` — Session to connect to (default: "default", or `$QORVEX_SESSION`)
 - `-f, --format <text|json>` — Output format
 - `-q, --quiet` — Suppress non-essential output
+
+Environment:
+- `QORVEX_SESSION` — Default session name
+- `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not` (default: 5000); overridden by `-o`
 
 Command-specific options:
 - `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip auto-wait for element; `-o, --timeout <ms>` — Wait timeout (default: 5000)
