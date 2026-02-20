@@ -43,6 +43,8 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | CLI: `qorvex tap <selector> --label --type Button` | Tap by label + type |
 | CLI: `qorvex tap <selector> --no-wait` | Skip auto-wait |
 
+Tap auto-wait behavior (unless `--no-wait`): polls every 100ms until the element both exists and is hittable, then taps. Fails with timeout if the element never becomes hittable. This is faster than the explicit `wait-for` (no frame-stability check) but still guards against elements that are covered, off-screen, or mid-animation.
+
 ### Tap at Coordinates
 
 | Syntax | Description |

@@ -457,8 +457,21 @@ impl ActionExecutor {
                                     return result;
                                 }
                             } else {
-                                // Fast path: element exists, return immediately.
-                                // XCUIElement's native tap handles hittability and animations.
+                                // Fast path: element exists and is hittable, return immediately.
+                                if element.hittable == Some(false) {
+                                    if start.elapsed() >= timeout {
+                                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                                        let msg = if by_label {
+                                            format!("Timeout after {}ms: element with label '{}' exists but is not hittable", elapsed_ms, selector)
+                                        } else {
+                                            format!("Timeout after {}ms: element '{}' exists but is not hittable", elapsed_ms, selector)
+                                        };
+                                        return ExecutionResult::failure(msg)
+                                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                                    }
+                                    tokio::time::sleep(poll_interval).await;
+                                    continue;
+                                }
                                 let elapsed_ms = start.elapsed().as_millis() as u64;
                                 let msg = if by_label {
                                     format!("Element with label '{}' found", selector)

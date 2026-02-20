@@ -129,8 +129,8 @@ pub enum ActionType {
         /// Maximum time to wait in milliseconds.
         timeout_ms: u64,
         /// If true, require 3 consecutive stable frames before returning success.
-        /// If false, return as soon as the element exists (faster, lets XCUIElement
-        /// handle hittability and animations natively).
+        /// If false, return as soon as the element exists and is hittable (faster,
+        /// skips frame-stability tracking).
         #[serde(default = "default_true")]
         require_stable: bool,
     },

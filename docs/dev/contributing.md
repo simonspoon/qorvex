@@ -107,7 +107,7 @@ Sessions are always `Arc`-wrapped and shared by reference across the executor, I
 
 ### Auto-Wait and `--no-wait`
 
-By default, `tap` and `get_value` wait for the target element to appear before acting. This sends `ActionType::WaitFor` with `require_stable: false` — it returns as soon as the element exists, letting XCUIElement's native tap handle hittability and animations. This saves at least 200ms compared to the stable-frames path.
+By default, `tap` and `get_value` wait for the target element to appear before acting. This sends `ActionType::WaitFor` with `require_stable: false` — it polls until the element exists and is hittable, then proceeds. This saves at least 200ms compared to the stable-frames path.
 
 The `--no-wait` flag (CLI/REPL) skips the wait entirely and attempts the action immediately. Use this when you are certain the element is already present, or when testing error handling for missing elements.
 
@@ -117,7 +117,7 @@ The `--no-wait` flag (CLI/REPL) skips the wait entirely and attempts the action 
 
 - **`require_stable: true`** (used by explicit `wait_for` / `qorvex wait-for`): requires the element to be hittable and requires **3 consecutive polls** (at 100ms intervals) where the frame coordinates are identical before reporting success. Prevents tapping elements still animating into position.
 
-- **`require_stable: false`** (used by `tap` and `get_value` auto-wait): returns as soon as the element exists once. Faster; relies on XCUIElement's native tap to handle animations.
+- **`require_stable: false`** (used by `tap` and `get_value` auto-wait): returns as soon as the element exists and is hittable. Faster than stable mode; no frame-stability tracking.
 
 ### Error Handling in the Agent
 

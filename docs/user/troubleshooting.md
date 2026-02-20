@@ -47,7 +47,7 @@
 
 ## Element Not Hittable
 
-**Symptoms:** "Element found but not hittable", wait_for times out
+**Symptoms:** "element exists but is not hittable" timeout from `tap` or `wait_for`
 
 **What this means:** The element exists in the accessibility tree but iOS reports it as not tappable. Common causes:
 
@@ -59,8 +59,8 @@
 **Fixes:**
 
 - `swipe(up)` or `swipe(down)` to scroll the element into view
-- Wait longer: `wait_for(element, 10000)` -- the default is 5 seconds
-- `wait_for` requires 3 stable frames (300ms of no movement), so animations must complete
+- Wait longer: increase `--timeout` (default: 5000ms)
+- `wait_for` additionally requires 3 stable frames (300ms of no movement), so animations must complete before it returns success
 
 ## USB Tunnel Issues (Physical Devices)
 
