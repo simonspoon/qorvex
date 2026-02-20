@@ -95,6 +95,7 @@ See [commands.md](commands.md) for full option details.
 
 - Use `set -euo pipefail` so the script stops on the first failed command.
 - Use `QORVEX_SESSION` environment variable to target a specific session.
+- Use `QORVEX_TIMEOUT` to set a default timeout (ms) for all wait/tap operations without passing `-o` on every command.
 - Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
 - Use `qorvex -f json` for machine-readable output in pipelines.
 - Status messages go to stderr; data goes to stdout. Use `-q` to suppress status messages.

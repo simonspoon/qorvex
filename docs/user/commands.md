@@ -146,6 +146,13 @@ See [scripting-guide.md](scripting-guide.md) for full scripting details.
 - `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`
 - `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000)
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `QORVEX_SESSION` | `default` | Session name to connect to |
+| `QORVEX_TIMEOUT` | `5000` | Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not`. Overridden by `-o` / `--timeout`. |
+
 ## Element Selectors
 
 Selectors support glob matching:

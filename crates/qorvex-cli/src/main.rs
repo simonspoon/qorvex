@@ -105,7 +105,7 @@ enum Command {
         #[arg(long)]
         no_wait: bool,
         /// Timeout in milliseconds when waiting
-        #[arg(short = 'o', long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
     },
 
@@ -150,7 +150,7 @@ enum Command {
         #[arg(long)]
         no_wait: bool,
         /// Timeout in milliseconds when waiting
-        #[arg(short = 'o', long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
     },
 
@@ -171,7 +171,7 @@ enum Command {
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
         /// Timeout in milliseconds
-        #[arg(short = 'o', long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
     },
 
@@ -186,7 +186,7 @@ enum Command {
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
         /// Timeout in milliseconds
-        #[arg(short = 'o', long, default_value = "5000")]
+        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
     },
 
