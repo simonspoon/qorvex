@@ -231,8 +231,19 @@ impl AgentClient {
 
         match result {
             Ok(Ok(payload)) => Ok(payload),
-            Ok(Err(io_err)) => Err(AgentClientError::Io(io_err)),
-            Err(_) => Err(AgentClientError::Timeout),
+            Ok(Err(io_err)) => {
+                // I/O error — stream is likely broken, drop it to prevent reuse.
+                self.stream.take();
+                Err(AgentClientError::Io(io_err))
+            }
+            Err(_) => {
+                // Timeout — the agent may still send a response later, leaving
+                // stale bytes in the TCP buffer. Drop the stream so the next
+                // caller gets NotConnected instead of reading a mismatched
+                // response from a previous request.
+                self.stream.take();
+                Err(AgentClientError::Timeout)
+            }
         }
     }
 }

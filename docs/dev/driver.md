@@ -185,6 +185,12 @@ This provides accurate **live hittability** -- the `isHittable` property is only
 | `AgentDriver::direct(host, port)` | Direct TCP for simulators |
 | `AgentDriver::usb_device(udid, port)` | USB tunnel for physical devices |
 
+### Connection Invalidation
+
+`AgentClient` enforces a 30-second read timeout on every response. If the timeout fires (or an I/O error occurs), the TCP stream is **dropped immediately** to prevent response desynchronization. All subsequent calls return `DriverError::NotConnected` until `connect()` is called again.
+
+This matters when the watcher and executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
+
 ## `flatten_elements(elements: &[UIElement]) -> Vec<UIElement>`
 
 Public utility function that recursively collects elements from the tree where `identifier.is_some() || label.is_some()`. Uses pre-order traversal (parent before children). Children are cleared in the returned elements to produce a flat list.
