@@ -1,0 +1,4 @@
+{"id":"11111111-2222-3333-4444-555555555555","timestamp":"2026-02-20T11:00:00Z","action":{"type":"Tap","selector":"missing-element","by_label":false,"element_type":null},"result":{"Failure":"Element not found: missing-element"},"screenshot":null,"duration_ms":5000}
+{"id":"22222222-3333-4444-5555-666666666666","timestamp":"2026-02-20T11:00:01Z","action":{"type":"LogComment","message":"Retrying after failure"},"result":"Success","screenshot":null}
+{"id":"33333333-4444-5555-6666-777777777777","timestamp":"2026-02-20T11:00:02Z","action":{"type":"TapLocation","x":150,"y":300},"result":"Success","screenshot":null,"duration_ms":30}
+{"id":"44444444-5555-6666-7777-888888888888","timestamp":"2026-02-20T11:00:03Z","action":{"type":"SendKeys","text":"it's a \"test\" with <special> chars & more"},"result":"Success","screenshot":null,"duration_ms":95}

@@ -6,60 +6,17 @@
 //! Each test spins up a mock TCP agent that speaks the binary protocol, then
 //! executes actions through the ActionExecutor using an AgentDriver backend.
 
-use std::net::SocketAddr;
+mod common;
+
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use common::connected_executor;
 
 use qorvex_core::action::ActionType;
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::driver::AutomationDriver;
 use qorvex_core::executor::ActionExecutor;
-use qorvex_core::protocol::{encode_response, read_frame_length, Response};
-
-// ---------------------------------------------------------------------------
-// Mock agent helper
-// ---------------------------------------------------------------------------
-
-/// Start a mock TCP agent that accepts one connection and handles a sequence
-/// of request/response pairs. The first response is always consumed by the
-/// heartbeat that `AgentDriver::connect()` sends.
-async fn mock_agent(responses: Vec<Response>) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-
-        for response in responses {
-            // Read one request frame: 4-byte LE header + payload.
-            let mut header = [0u8; 4];
-            stream.read_exact(&mut header).await.unwrap();
-            let len = read_frame_length(&header) as usize;
-            let mut payload = vec![0u8; len];
-            stream.read_exact(&mut payload).await.unwrap();
-
-            // Send the canned response.
-            let resp_bytes = encode_response(&response);
-            stream.write_all(&resp_bytes).await.unwrap();
-            stream.flush().await.unwrap();
-        }
-    });
-
-    addr
-}
-
-/// Convenience: create an AgentDriver connected to the mock, with screenshots
-/// disabled, ready to use in an ActionExecutor.
-async fn connected_executor(responses: Vec<Response>) -> ActionExecutor {
-    let addr = mock_agent(responses).await;
-    let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
-    driver.connect().await.unwrap();
-    let mut executor = ActionExecutor::new(Arc::new(driver));
-    executor.set_capture_screenshots(false);
-    executor
-}
+use qorvex_core::protocol::Response;
 
 // ---------------------------------------------------------------------------
 // 1. Tap element by identifier

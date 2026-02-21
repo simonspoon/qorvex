@@ -38,6 +38,9 @@ cargo test -p qorvex-cli
 # Run integration tests
 cargo test -p qorvex-core --test ipc_integration
 cargo test -p qorvex-core --test driver_integration
+cargo test -p qorvex-core --test e2e_pipeline
+cargo test -p qorvex-core --test error_recovery
+cargo test -p qorvex-cli  --test cli_integration
 
 # Build Swift agent (requires Xcode)
 make -C qorvex-agent build

@@ -6,18 +6,17 @@
 //! - Session event broadcasting
 //! - Action logging and retrieval
 
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
+use common::unique_session_name;
+
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::ipc::{IpcClient, IpcRequest, IpcResponse, IpcServer};
 use qorvex_core::session::{Session, SessionEvent};
-
-/// Helper to create a unique session name for each test
-fn unique_session_name() -> String {
-    format!("test_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string())
-}
 
 /// Helper to start the IPC server in a background task
 async fn start_server(session: Arc<Session>, session_name: &str) -> tokio::task::JoinHandle<()> {

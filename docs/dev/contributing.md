@@ -63,6 +63,9 @@ cargo test -p qorvex-cli                # cli only
 ```bash
 cargo test -p qorvex-core --test ipc_integration      # IPC server/client
 cargo test -p qorvex-core --test driver_integration    # driver abstraction
+cargo test -p qorvex-core --test e2e_pipeline          # full-stack pipeline
+cargo test -p qorvex-core --test error_recovery        # disconnect/timeout/corruption
+cargo test -p qorvex-cli  --test cli_integration       # CLI binary behavior
 ```
 
 **`ipc_integration` verifies:**
@@ -74,6 +77,28 @@ cargo test -p qorvex-core --test driver_integration    # driver abstraction
 - Driver connection and basic commands
 - Element search and tree dump
 - Error handling for missing elements and invalid commands
+
+**`e2e_pipeline` verifies:**
+- Full path from IPC client → IPC server → Session → ActionExecutor → mock TCP agent and back
+- Action logging after IPC execution and session event broadcasting
+
+**`error_recovery` verifies:**
+- Agent connection drops mid-session (graceful failure, no panic)
+- Agent hangs trigger the read timeout (~30 s) and surface as an error
+- Garbage bytes from the agent produce a protocol error
+- Normal operation after delayed agent responses
+
+**`cli_integration` verifies:**
+- `qorvex --help`, `qorvex convert`, `qorvex list-devices`, and unknown subcommand exit codes and output
+
+### Shared Test Infrastructure
+
+`crates/qorvex-core/tests/common/mod.rs` provides helpers shared across integration test suites:
+
+- `mock_agent(responses)` / `connected_executor(responses)` — simple mock TCP agent with canned responses
+- `unique_session_name()` — UUID-based session name for test isolation
+- `MockBehavior` enum + `programmable_mock_agent(behaviors)` — scriptable mock that can simulate delays, connection drops, garbage bytes, or hangs
+- `TestHarness::start(responses)` — full-stack fixture: Session + ActionExecutor + mock agent + IPC server in one call
 
 ### Swift Agent Tests
 
