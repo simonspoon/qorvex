@@ -2149,6 +2149,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qorvex-server"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs",
+ "qorvex-core",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "quantette"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

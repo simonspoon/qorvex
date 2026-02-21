@@ -1,26 +1,17 @@
 //! Application state and event handling.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tui_input::Input;
 
-use qorvex_core::action::{ActionResult, ActionType};
-use qorvex_core::agent_driver::AgentDriver;
-use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
-use qorvex_core::config::QorvexConfig;
-use qorvex_core::driver::AutomationDriver;
+use qorvex_core::action::ActionType;
 use qorvex_core::element::UIElement;
-use qorvex_core::executor::ActionExecutor;
-use qorvex_core::ipc::{socket_path, IpcServer};
-use qorvex_core::session::{Session, SessionEvent};
-use qorvex_core::simctl::{Simctl, SimulatorDevice};
-use qorvex_core::watcher::{ScreenWatcher, WatcherConfig, WatcherHandle};
+use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse};
+use qorvex_core::session::SessionEvent;
+use qorvex_core::simctl::SimulatorDevice;
 
 use crate::completion::{CandidateKind, CompletionState};
 use crate::format::{format_command, format_device, format_element, format_result};
@@ -92,6 +83,7 @@ impl SelectionState {
 
 /// Application state.
 pub struct App {
+    // --- TUI state (kept as-is) ---
     /// Text input widget state.
     pub input: Input,
     /// Completion state.
@@ -104,45 +96,72 @@ pub struct App {
     pub selection: SelectionState,
     /// Cached output area rect from last render (for mouse hit-testing).
     pub output_area: Option<Rect>,
+    /// Whether the app should quit.
+    pub should_quit: bool,
+
+    // --- IPC client ---
+    /// Session name.
+    pub session_name: String,
+    /// IPC client connection to qorvex-server.
+    client: Option<IpcClient>,
+
+    // --- Completion caches (populated via IPC) ---
     /// Cached UI elements from last screen info.
     pub cached_elements: Vec<UIElement>,
     /// Cached simulator devices.
     pub cached_devices: Vec<SimulatorDevice>,
-    /// Session name.
-    pub session_name: String,
-    /// Current session.
-    pub session: Option<Arc<Session>>,
-    /// Current simulator UDID.
-    pub simulator_udid: Option<String>,
-    /// IPC server handle.
-    pub ipc_server_handle: Option<JoinHandle<()>>,
-    /// Shared driver slot for the IPC server to reuse the REPL's connected driver.
-    pub ipc_shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn AutomationDriver>>>>,
-    /// Action executor for automation commands.
-    pub executor: Option<ActionExecutor>,
-    /// Managed agent lifecycle (set when agent is started via start_agent with a path).
-    pub agent_lifecycle: Option<AgentLifecycle>,
-    /// Screen watcher handle.
-    pub watcher_handle: Option<WatcherHandle>,
+
+    // --- Background subscriber channel ---
     /// Channel receiver for element updates from session events.
-    pub element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
-    /// Default timeout in milliseconds for wait operations.
-    pub default_timeout_ms: u64,
-    /// Whether the app should quit.
-    pub should_quit: bool,
+    element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
+}
+
+/// Ensure the qorvex-server process is running for the given session.
+///
+/// If the socket already exists, assumes the server is running.
+/// Otherwise, spawns `qorvex-server` as a detached background process
+/// and waits briefly for the socket to appear.
+fn ensure_server_running(session_name: &str) {
+    let sock = socket_path(session_name);
+    if sock.exists() {
+        return;
+    }
+    // Spawn qorvex-server as a detached background process
+    let log_dir = dirs::home_dir()
+        .expect("Could not determine home directory")
+        .join(".qorvex")
+        .join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    let log_file = std::fs::File::create(log_dir.join("qorvex-server-launch.log")).ok();
+
+    let mut cmd = std::process::Command::new("qorvex-server");
+    cmd.args(["-s", session_name]);
+    if let Some(f) = log_file {
+        cmd.stdout(f.try_clone().unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()));
+        cmd.stderr(f);
+    }
+    let _ = cmd.spawn();
+
+    // Wait briefly for socket to appear
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if sock.exists() {
+            break;
+        }
+    }
 }
 
 impl App {
     /// Create a new App instance.
-    pub fn new(session_name: String) -> Self {
-        // Pre-fetch devices
-        let cached_devices = Simctl::list_devices().unwrap_or_default();
+    pub async fn new(session_name: String) -> Self {
+        // Ensure server is running
+        ensure_server_running(&session_name);
 
-        // Try to get booted simulator
-        let simulator_udid = Simctl::get_booted_udid().ok();
-
-        // Create executor if we have a simulator
-        let executor = simulator_udid.as_ref().map(|_| ActionExecutor::with_agent("localhost".to_string(), 8080));
+        // Connect IPC client
+        let client = match IpcClient::connect(&session_name).await {
+            Ok(c) => Some(c),
+            Err(_) => None,
+        };
 
         let mut app = Self {
             input: Input::default(),
@@ -151,36 +170,82 @@ impl App {
             output_scroll_position: 0,
             selection: SelectionState::default(),
             output_area: None,
-            cached_elements: Vec::new(),
-            cached_devices,
-            session_name,
-            session: None,
-            simulator_udid,
-            executor,
-            agent_lifecycle: None,
-            ipc_server_handle: None,
-            ipc_shared_driver: Arc::new(tokio::sync::Mutex::new(None)),
-            watcher_handle: None,
-            element_update_rx: None,
-            default_timeout_ms: 5000,
             should_quit: false,
+            session_name: session_name.clone(),
+            client,
+            cached_elements: Vec::new(),
+            cached_devices: Vec::new(),
+            element_update_rx: None,
         };
 
-        // Show initial info
-        app.add_output(Line::from(format!(
-            "Session: {} | Socket: {:?}",
-            app.session_name,
-            socket_path(&app.session_name)
-        )));
+        // Show connection status
+        let sock = socket_path(&session_name);
+        if app.client.is_some() {
+            app.add_output(Line::from(format!(
+                "Connected to server | Session: {} | Socket: {:?}",
+                session_name, sock
+            )));
 
-        if let Some(udid) = &app.simulator_udid {
-            app.add_output(Line::from(format!("Using booted simulator: {}", udid)));
+            // Send StartSession
+            if let Some(ref mut client) = app.client {
+                match client.send(&IpcRequest::StartSession).await {
+                    Ok(IpcResponse::CommandResult { success, message }) => {
+                        app.add_output(format_result(success, &message));
+                    }
+                    Ok(IpcResponse::Error { message }) => {
+                        app.add_output(format_result(false, &message));
+                    }
+                    Err(e) => {
+                        app.add_output(format_result(false, &format!("StartSession error: {}", e)));
+                    }
+                    _ => {}
+                }
+            }
+
+            // Fetch initial completion data
+            if let Some(ref mut client) = app.client {
+                match client.send(&IpcRequest::GetCompletionData).await {
+                    Ok(IpcResponse::CompletionData { elements, devices }) => {
+                        app.cached_elements = elements;
+                        app.cached_devices = devices;
+                    }
+                    _ => {}
+                }
+            }
         } else {
-            app.add_output(Line::from("No booted simulator found. Use list_devices and use_device."));
+            app.add_output(Line::from(format!(
+                "Failed to connect to server | Session: {} | Socket: {:?}",
+                session_name, sock
+            )));
+            app.add_output(Line::from("Is qorvex-server running? Try: qorvex-server -s <session>"));
         }
 
         app.add_output(Line::from("Type 'help' for available commands."));
         app.add_output(Line::from(""));
+
+        // Background subscriber for element updates
+        let (tx, rx) = mpsc::channel::<Vec<UIElement>>(16);
+        app.element_update_rx = Some(rx);
+        let sub_session = session_name.clone();
+        tokio::spawn(async move {
+            // Keep trying to subscribe
+            loop {
+                if let Ok(mut sub_client) = IpcClient::connect(&sub_session).await {
+                    if sub_client.subscribe().await.is_ok() {
+                        loop {
+                            match sub_client.read_event().await {
+                                Ok(IpcResponse::Event { event: SessionEvent::ScreenInfoUpdated { elements, .. } }) => {
+                                    let _ = tx.send((*elements).clone()).await;
+                                }
+                                Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        });
 
         app
     }
@@ -315,793 +380,314 @@ impl App {
         }
     }
 
-    /// Set the executor and update the IPC shared driver so CLI clients reuse the same connection.
-    async fn set_executor_with_driver(&mut self, driver: Arc<dyn AutomationDriver>) {
-        self.executor = Some(ActionExecutor::new(driver.clone()));
-        *self.ipc_shared_driver.lock().await = Some(driver);
-    }
-
-    async fn log_action(&self, action: ActionType, result: ActionResult, duration_ms: Option<u64>) {
-        if let Some(session) = &self.session {
-            let screenshot = None;
-            session.log_action(action, result, screenshot, duration_ms).await;
-        }
-    }
-
     async fn process_command(&mut self, input: &str) {
         let (cmd, args) = parse_command(input);
 
+        // Local-only commands
         match cmd.as_str() {
-            "start_session" => {
-                let session = Session::new(self.simulator_udid.clone(), &self.session_name);
-                self.session = Some(session.clone());
-
-                let server = IpcServer::new(session, &self.session_name);
-                self.ipc_shared_driver = server.shared_driver();
-                let handle = tokio::spawn(async move {
-                    let _ = server.run().await;
-                });
-                self.ipc_server_handle = Some(handle);
-
-                self.add_output(format_result(true, "Session started"));
-
-                // Auto-start agent if no executor or agent not reachable
-                let needs_agent = match &self.executor {
-                    Some(executor) => executor.driver().screenshot().await.is_err(),
-                    None => true,
-                };
-
-                if needs_agent {
-                    let udid_clone = self.simulator_udid.clone();
-                    if let Some(udid) = udid_clone {
-                        let config = QorvexConfig::load();
-                        if let Some(agent_source_dir) = config.agent_source_dir {
-                            self.add_output(Line::from("Starting agent..."));
-                            let lc_config = AgentLifecycleConfig::new(agent_source_dir);
-                            let lifecycle = AgentLifecycle::new(udid, lc_config);
-
-                            match lifecycle.ensure_agent_ready().await {
-                                Ok(()) => {
-                                    self.agent_lifecycle = Some(lifecycle);
-                                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
-                                    match driver.connect().await {
-                                        Ok(()) => {
-                                            self.set_executor_with_driver(Arc::new(driver)).await;
-                                            self.add_output(format_result(true, "Agent started and connected"));
-                                        }
-                                        Err(e) => {
-                                            self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    self.add_output(format_result(false, &format!("Auto-start agent failed: {} (use start_agent manually)", e)));
-                                }
-                            }
-                        } else {
-                            self.add_output(Line::from("Tip: run install.sh from the qorvex repo to enable auto-agent startup"));
-                        }
-                    }
-                }
-            }
-            "end_session" => {
-                // Stop watcher first
-                if let Some(handle) = self.watcher_handle.take() {
-                    handle.cancel();
-                }
-                self.element_update_rx = None;
-                if let Some(handle) = self.ipc_server_handle.take() {
-                    handle.abort();
-                }
-                self.session = None;
-                self.add_output(format_result(true, "Session ended"));
-            }
-            "quit" => {
-                // Stop watcher first
-                if let Some(handle) = self.watcher_handle.take() {
-                    handle.cancel();
-                }
-                self.element_update_rx = None;
-                if let Some(handle) = self.ipc_server_handle.take() {
-                    handle.abort();
-                }
-                // Stop managed agent
-                if let Some(lifecycle) = self.agent_lifecycle.take() {
-                    let _ = lifecycle.terminate_agent();
-                }
-                self.session = None;
-                self.should_quit = true;
-            }
-            "start_watcher" => {
-                if self.watcher_handle.is_some() {
-                    self.add_output(format_result(false, "Watcher already running"));
-                } else if self.session.is_none() {
-                    self.add_output(format_result(false, "No active session. Run start_session first."));
-                } else if self.executor.is_none() {
-                    self.add_output(format_result(false, "No simulator selected"));
-                } else {
-                    let interval_ms = args.first()
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(500);
-
-                    let config = WatcherConfig {
-                        interval_ms,
-                        capture_screenshots: true,
-                        visual_change_threshold: 5,
-                    };
-
-                    let session = self.session.as_ref().unwrap().clone();
-
-                    // Create channel for element updates
-                    let (tx, rx) = mpsc::channel::<Vec<UIElement>>(16);
-                    self.element_update_rx = Some(rx);
-
-                    // Spawn task to forward session events to the channel
-                    let mut event_rx = session.subscribe();
-                    tokio::spawn(async move {
-                        while let Ok(event) = event_rx.recv().await {
-                            if let SessionEvent::ScreenInfoUpdated { elements, .. } = event {
-                                let elements_vec = (*elements).clone();
-                                if tx.send(elements_vec).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                    });
-
-                    let driver = self.executor.as_ref().unwrap().driver().clone();
-                    let handle = ScreenWatcher::spawn(session, driver, config);
-                    self.watcher_handle = Some(handle);
-
-                    self.add_output(format_result(true, &format!("Watcher started ({}ms interval)", interval_ms)));
-                }
-            }
-            "stop_watcher" => {
-                if let Some(handle) = self.watcher_handle.take() {
-                    handle.cancel();
-                    self.element_update_rx = None;
-                    self.add_output(format_result(true, "Watcher stopped"));
-                } else {
-                    self.add_output(format_result(false, "No watcher running"));
-                }
-            }
             "help" => {
                 self.show_help();
+                return;
             }
-            "list_devices" => {
-                match Simctl::list_devices() {
-                    Ok(devices) => {
-                        self.cached_devices = devices.clone();
-                        for device in &devices {
-                            self.add_output(format_device(device));
-                        }
-                        self.add_output(format_result(true, &format!("{} devices", devices.len())));
-                    }
-                    Err(e) => {
-                        self.add_output(format_result(false, &e.to_string()));
-                    }
+            "quit" => {
+                // Tell server to end session, then quit
+                if let Some(ref mut client) = self.client {
+                    let _ = client.send(&IpcRequest::EndSession).await;
                 }
+                self.should_quit = true;
+                return;
             }
-            "use_device" => {
-                let udid = args.first().map(|s| s.as_str()).unwrap_or("");
-                if udid.is_empty() {
-                    self.add_output(format_result(false, "use_device requires 1 argument: use_device(udid)"));
-                } else if !is_valid_udid(udid) {
-                    self.add_output(format_result(false, &format!("Invalid UDID format: {}", udid)));
-                } else {
-                    self.simulator_udid = Some(udid.to_string());
-                    self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), 8080));
-                    self.add_output(format_result(true, &format!("Using device {}", udid)));
-                }
-            }
-            "boot_device" => {
-                let udid = args.first().map(|s| s.as_str()).unwrap_or("");
-                if udid.is_empty() {
-                    self.add_output(format_result(false, "boot_device requires 1 argument: boot_device(udid)"));
-                } else if !is_valid_udid(udid) {
-                    self.add_output(format_result(false, &format!("Invalid UDID format: {}", udid)));
-                } else {
-                    match Simctl::boot(udid) {
-                        Ok(_) => {
-                            self.simulator_udid = Some(udid.to_string());
-                            self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), 8080));
-                            self.add_output(format_result(true, &format!("Booted and using device {}", udid)));
-                        }
-                        Err(e) => {
-                            self.add_output(format_result(false, &e.to_string()));
-                        }
-                    }
-                }
-            }
-            "start_agent" => {
-                if self.simulator_udid.is_none() {
-                    self.add_output(format_result(false, "No simulator selected. Use use_device or boot_device first."));
-                } else {
-                    let udid = self.simulator_udid.clone().unwrap();
+            _ => {}
+        }
 
-                    if let Some(project_dir_str) = args.first() {
-                        // With path: build, spawn, wait, store lifecycle
-                        let project_dir = PathBuf::from(strip_quotes(project_dir_str));
-                        let config = AgentLifecycleConfig::new(project_dir);
-                        let lifecycle = AgentLifecycle::new(udid, config);
-
-                        self.add_output(Line::from("Building and starting agent..."));
-
-                        match lifecycle.ensure_running().await {
-                            Ok(()) => {
-                                self.agent_lifecycle = Some(lifecycle);
-                                let mut driver = AgentDriver::direct("127.0.0.1", 8080);
-                                match driver.connect().await {
-                                    Ok(()) => {
-                                        self.set_executor_with_driver(Arc::new(driver)).await;
-                                        self.add_output(format_result(true, "Agent started and connected"));
-                                    }
-                                    Err(e) => {
-                                        self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.add_output(format_result(false, &format!("Failed to start agent: {}", e)));
-                            }
-                        }
-                    } else {
-                        // No path argument: try config, then fall back to external agent
-                        let config = QorvexConfig::load();
-                        if let Some(project_dir) = config.agent_source_dir {
-                            // Use configured agent source dir
-                            let lc_config = AgentLifecycleConfig::new(project_dir);
-                            let lifecycle = AgentLifecycle::new(udid, lc_config);
-
-                            self.add_output(Line::from("Building and starting agent..."));
-
-                            match lifecycle.ensure_agent_ready().await {
-                                Ok(()) => {
-                                    self.agent_lifecycle = Some(lifecycle);
-                                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
-                                    match driver.connect().await {
-                                        Ok(()) => {
-                                            self.set_executor_with_driver(Arc::new(driver)).await;
-                                            self.add_output(format_result(true, "Agent started and connected"));
-                                        }
-                                        Err(e) => {
-                                            self.add_output(format_result(false, &format!("Agent started but connection failed: {}", e)));
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    self.add_output(format_result(false, &format!("Failed to start agent: {}", e)));
-                                }
-                            }
-                        } else {
-                            // No config: connect to externally-started agent
-                            self.add_output(Line::from("Connecting to agent..."));
-                            let lc_config = AgentLifecycleConfig::new(PathBuf::new());
-                            let lifecycle = AgentLifecycle::new(udid, lc_config);
-
-                            match lifecycle.wait_for_ready().await {
-                                Ok(()) => {
-                                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
-                                    match driver.connect().await {
-                                        Ok(()) => {
-                                            self.set_executor_with_driver(Arc::new(driver)).await;
-                                            self.add_output(format_result(true, "Agent connected"));
-                                        }
-                                        Err(e) => {
-                                            self.add_output(format_result(false, &format!("Connection failed: {}", e)));
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    self.add_output(format_result(false, &format!("Agent not reachable: {}", e)));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            "stop_agent" => {
-                if let Some(lifecycle) = self.agent_lifecycle.take() {
-                    let _ = lifecycle.terminate_agent();
-                    self.add_output(format_result(true, "Agent stopped"));
-                } else {
-                    self.add_output(format_result(false, "No managed agent to stop"));
-                }
-            }
+        // Map command to IPC request
+        let request = match cmd.as_str() {
+            "start_session" => IpcRequest::StartSession,
+            "end_session" => IpcRequest::EndSession,
+            "list_devices" => IpcRequest::ListDevices,
+            "use_device" => IpcRequest::UseDevice {
+                udid: args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default(),
+            },
+            "boot_device" => IpcRequest::BootDevice {
+                udid: args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default(),
+            },
+            "start_agent" => IpcRequest::StartAgent {
+                project_dir: args.first().map(|s| strip_quotes(s).to_string()),
+            },
+            "stop_agent" => IpcRequest::StopAgent,
+            "set_target" => IpcRequest::SetTarget {
+                bundle_id: args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default(),
+            },
             "set_timeout" => {
                 let ms_str = args.first().map(|s| s.trim()).unwrap_or("");
                 if ms_str.is_empty() {
-                    self.add_output(format_result(true, &format!("Current default timeout: {}ms", self.default_timeout_ms)));
+                    IpcRequest::GetTimeout
                 } else {
                     match ms_str.parse::<u64>() {
-                        Ok(ms) => {
-                            self.default_timeout_ms = ms;
-                            self.add_output(format_result(true, &format!("Default timeout set to {}ms", ms)));
-                        }
+                        Ok(ms) => IpcRequest::SetTimeout { timeout_ms: ms },
                         Err(_) => {
-                            self.add_output(format_result(false, "set_timeout requires a number in milliseconds: set_timeout(ms)"));
+                            self.add_output(format_result(false, "set_timeout requires a number in milliseconds"));
+                            return;
                         }
                     }
                 }
-            }
-            "set_target" => {
-                let bundle_id = args.first().map(|s| strip_quotes(s)).unwrap_or("");
-                if bundle_id.is_empty() {
-                    self.add_output(format_result(false, "set_target requires 1 argument: set_target(bundle_id)"));
-                } else {
-                    match &self.executor {
-                        Some(executor) => {
-                            match executor.driver().set_target(bundle_id).await {
-                                Ok(()) => {
-                                    self.add_output(format_result(true, &format!("Target set to {}", bundle_id)));
-                                }
-                                Err(e) => {
-                                    self.add_output(format_result(false, &format!("Failed to set target: {}", e)));
-                                }
+            },
+            "start_watcher" => IpcRequest::StartWatcher {
+                interval_ms: args.first().and_then(|s| s.parse().ok()),
+            },
+            "stop_watcher" => IpcRequest::StopWatcher,
+            "get_session_info" => IpcRequest::GetSessionInfo,
+            "get_screenshot" => IpcRequest::Execute {
+                action: ActionType::GetScreenshot,
+            },
+            "list_elements" | "get_screen_info" => IpcRequest::Execute {
+                action: ActionType::GetScreenInfo,
+            },
+            "tap" => {
+                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
+                let filtered: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
+                let selector = filtered.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "tap requires at least 1 argument: tap(selector)"));
+                    return;
+                }
+                let by_label = filtered.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                let element_type = filtered.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                if !no_wait {
+                    if let Some(ref mut client) = self.client {
+                        let wait_req = IpcRequest::Execute {
+                            action: ActionType::WaitFor {
+                                selector: selector.clone(),
+                                by_label,
+                                element_type: element_type.clone(),
+                                timeout_ms: 5000,
+                                require_stable: false,
+                            },
+                        };
+                        match client.send(&wait_req).await {
+                            Ok(IpcResponse::ActionResult { success: false, message, .. }) => {
+                                self.add_output(format_result(false, &message));
+                                return;
                             }
-                        }
-                        None => {
-                            self.add_output(format_result(false, "No agent connected"));
+                            Ok(IpcResponse::Error { message }) => {
+                                self.add_output(format_result(false, &message));
+                                return;
+                            }
+                            Err(e) => {
+                                self.add_output(format_result(false, &format!("IPC error: {}", e)));
+                                return;
+                            }
+                            _ => {} // success, continue to tap
                         }
                     }
                 }
+                IpcRequest::Execute {
+                    action: ActionType::Tap { selector, by_label, element_type },
+                }
+            },
+            "swipe" => IpcRequest::Execute {
+                action: ActionType::Swipe {
+                    direction: args.first().map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "up".to_string()),
+                },
+            },
+            "tap_location" => {
+                if args.len() < 2 {
+                    self.add_output(format_result(false, "tap_location requires 2 arguments: tap_location(x, y)"));
+                    return;
+                }
+                match (args[0].parse::<i32>(), args[1].parse::<i32>()) {
+                    (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
+                        action: ActionType::TapLocation { x, y },
+                    },
+                    _ => {
+                        self.add_output(format_result(false, "Invalid coordinates"));
+                        return;
+                    }
+                }
+            },
+            "wait_for" => {
+                let selector = args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "wait_for requires at least 1 argument"));
+                    return;
+                }
+                let timeout_ms = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5000);
+                let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                IpcRequest::Execute {
+                    action: ActionType::WaitFor { selector, by_label, element_type, timeout_ms, require_stable: true },
+                }
+            },
+            "wait_for_not" => {
+                let selector = args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "wait_for_not requires at least 1 argument"));
+                    return;
+                }
+                let timeout_ms = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5000);
+                let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                IpcRequest::Execute {
+                    action: ActionType::WaitForNot { selector, by_label, element_type, timeout_ms },
+                }
+            },
+            "send_keys" => {
+                let text = args.join(" ");
+                if text.is_empty() {
+                    self.add_output(format_result(false, "send_keys requires text"));
+                    return;
+                }
+                IpcRequest::Execute {
+                    action: ActionType::SendKeys { text },
+                }
+            },
+            "get_value" => {
+                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
+                let filtered: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
+                let selector = filtered.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "get_value requires at least 1 argument"));
+                    return;
+                }
+                let by_label = filtered.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
+                let element_type = filtered.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                if !no_wait {
+                    if let Some(ref mut client) = self.client {
+                        let wait_req = IpcRequest::Execute {
+                            action: ActionType::WaitFor {
+                                selector: selector.clone(),
+                                by_label,
+                                element_type: element_type.clone(),
+                                timeout_ms: 5000,
+                                require_stable: false,
+                            },
+                        };
+                        match client.send(&wait_req).await {
+                            Ok(IpcResponse::ActionResult { success: false, message, .. }) => {
+                                self.add_output(format_result(false, &message));
+                                return;
+                            }
+                            Ok(IpcResponse::Error { message }) => {
+                                self.add_output(format_result(false, &message));
+                                return;
+                            }
+                            Err(e) => {
+                                self.add_output(format_result(false, &format!("IPC error: {}", e)));
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                IpcRequest::Execute {
+                    action: ActionType::GetValue { selector, by_label, element_type },
+                }
+            },
+            "log_comment" => {
+                let message = args.join(" ");
+                if message.is_empty() {
+                    self.add_output(format_result(false, "log_comment requires a message"));
+                    return;
+                }
+                IpcRequest::Execute {
+                    action: ActionType::LogComment { message },
+                }
+            },
+            _ => {
+                self.add_output(format_result(false, &format!("Unknown command: {}", cmd)));
+                return;
             }
-            "list_elements" | "get_screen_info" => {
-                match &self.executor {
-                    Some(executor) => {
-                        let result = executor.execute(ActionType::GetScreenInfo).await;
-                        if result.success {
-                            if let Some(ref data) = result.data {
+        };
+
+        // Send request and display response
+        let Some(ref mut client) = self.client else {
+            self.add_output(format_result(false, "Not connected to server"));
+            return;
+        };
+
+        match client.send(&request).await {
+            Ok(response) => self.display_response(&cmd, response),
+            Err(e) => self.add_output(format_result(false, &format!("IPC error: {}", e))),
+        }
+    }
+
+    fn display_response(&mut self, cmd: &str, response: IpcResponse) {
+        match response {
+            IpcResponse::CommandResult { success, message } => {
+                self.add_output(format_result(success, &message));
+            }
+            IpcResponse::ActionResult { success, message, data, .. } => {
+                match cmd {
+                    "list_elements" | "get_screen_info" => {
+                        if success {
+                            if let Some(ref data) = data {
                                 if let Ok(elements) = serde_json::from_str::<Vec<UIElement>>(data) {
                                     self.cached_elements = elements.clone();
                                     for elem in &elements {
                                         self.add_output(format_element(elem));
                                     }
                                     self.add_output(format_result(true, &format!("{} elements", elements.len())));
-                                }
-                            }
-                            if cmd == "get_screen_info" {
-                                self.log_action(ActionType::GetScreenInfo, ActionResult::Success, None).await;
-                            }
-                        } else {
-                            self.add_output(format_result(false, &result.message));
-                            if cmd == "get_screen_info" {
-                                self.log_action(ActionType::GetScreenInfo, ActionResult::Failure(result.message), None).await;
-                            }
-                        }
-                    }
-                    None => {
-                        self.add_output(format_result(false, "No simulator selected"));
-                    }
-                }
-            }
-            "tap" => {
-                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
-                let args: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
-                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
-                if selector.is_empty() {
-                    self.add_output(format_result(false, "tap requires at least 1 argument: tap(selector) or tap(selector, label) or tap(selector, label, type)"));
-                } else {
-                    // Check for 'label' flag in second argument
-                    let by_label = args.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                    // Third argument is element type (if present and not empty)
-                    let element_type = args.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-
-                    match &self.executor {
-                        Some(executor) => {
-                            // Wait for element first (default behavior, skip with --no-wait)
-                            if !no_wait {
-                                let wait_result = executor.execute(ActionType::WaitFor {
-                                    selector: selector.to_string(),
-                                    by_label,
-                                    element_type: element_type.clone(),
-                                    timeout_ms: self.default_timeout_ms,
-                                    require_stable: false,
-                                }).await;
-                                if !wait_result.success {
-                                    self.log_action(
-                                        ActionType::Tap {
-                                            selector: selector.to_string(),
-                                            by_label,
-                                            element_type,
-                                        },
-                                        ActionResult::Failure(wait_result.message.clone()),
-                                        None,
-                                    ).await;
-                                    self.add_output(format_result(false, &wait_result.message));
                                     return;
                                 }
                             }
-
-                            let result = executor.execute(ActionType::Tap {
-                                selector: selector.to_string(),
-                                by_label,
-                                element_type: element_type.clone(),
-                            }).await;
-
-                            let action_result = if result.success {
-                                ActionResult::Success
-                            } else {
-                                ActionResult::Failure(result.message.clone())
-                            };
-
-                            self.log_action(
-                                ActionType::Tap {
-                                    selector: selector.to_string(),
-                                    by_label,
-                                    element_type,
-                                },
-                                action_result,
-                                None,
-                            ).await;
-
-                            if result.success {
-                                let msg = if by_label {
-                                    format!("Tapped element with label \"{}\"", selector)
-                                } else {
-                                    format!("Tapped {}", selector)
-                                };
-                                self.add_output(format_result(true, &msg));
-                            } else {
-                                self.add_output(format_result(false, &result.message));
-                            }
                         }
-                        None => {
-                            self.add_output(format_result(false, "No simulator selected"));
-                        }
+                        self.add_output(format_result(success, &message));
                     }
-                }
-            }
-            "swipe" => {
-                let direction = args.first().map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "up".to_string());
-                match &self.executor {
-                    Some(executor) => {
-                        let result = executor.execute(ActionType::Swipe {
-                            direction: direction.clone(),
-                        }).await;
-
-                        let action_result = if result.success {
-                            ActionResult::Success
+                    "get_value" => {
+                        if success {
+                            let value = data.unwrap_or_else(|| "(null)".to_string());
+                            self.add_output(format_result(true, &format!("Value: {}", value)));
                         } else {
-                            ActionResult::Failure(result.message.clone())
-                        };
-
-                        self.log_action(
-                            ActionType::Swipe { direction },
-                            action_result,
-                            None,
-                        ).await;
-
-                        if result.success {
-                            self.add_output(format_result(true, &result.message));
-                        } else {
-                            self.add_output(format_result(false, &result.message));
+                            self.add_output(format_result(false, &message));
                         }
                     }
-                    None => {
-                        self.add_output(format_result(false, "No simulator selected"));
-                    }
-                }
-            }
-            "tap_location" => {
-                if args.len() < 2 {
-                    self.add_output(format_result(false, "tap_location requires 2 arguments: tap_location(x, y)"));
-                } else {
-                    let x: Result<i32, _> = args[0].parse();
-                    let y: Result<i32, _> = args[1].parse();
-
-                    match (x, y) {
-                        (Ok(x), Ok(y)) if x >= 0 && y >= 0 => {
-                            match &self.executor {
-                                Some(executor) => {
-                                    let result = executor.execute(ActionType::TapLocation { x, y }).await;
-
-                                    let action_result = if result.success {
-                                        ActionResult::Success
-                                    } else {
-                                        ActionResult::Failure(result.message.clone())
-                                    };
-
-                                    self.log_action(
-                                        ActionType::TapLocation { x, y },
-                                        action_result,
-                                        None,
-                                    ).await;
-
-                                    if result.success {
-                                        self.add_output(format_result(true, &format!("Tapped ({}, {})", x, y)));
-                                    } else {
-                                        self.add_output(format_result(false, &result.message));
-                                    }
-                                }
-                                None => {
-                                    self.add_output(format_result(false, "No simulator selected"));
-                                }
-                            }
-                        }
-                        _ => {
-                            self.add_output(format_result(false, "Invalid coordinates - must be non-negative integers"));
-                        }
-                    }
-                }
-            }
-            "wait_for" => {
-                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
-                if selector.is_empty() {
-                    self.add_output(format_result(false, "wait_for requires at least 1 argument: wait_for(selector) or wait_for(selector, timeout_ms) or wait_for(selector, timeout_ms, label) or wait_for(selector, timeout_ms, label, type)"));
-                } else {
-                    // Second arg is timeout (default from set_timeout)
-                    let timeout_ms: u64 = args.get(1)
-                        .map(|s| s.parse().unwrap_or(self.default_timeout_ms))
-                        .unwrap_or(self.default_timeout_ms);
-                    // Third arg is 'label' flag
-                    let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                    // Fourth arg is element type
-                    let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-
-                    match &self.executor {
-                        Some(executor) => {
-                            let result = executor.execute(ActionType::WaitFor {
-                                selector: selector.to_string(),
-                                by_label,
-                                element_type: element_type.clone(),
-                                timeout_ms,
-                                require_stable: true,
-                            }).await;
-
-                            let action_result = if result.success {
-                                ActionResult::Success
-                            } else {
-                                ActionResult::Failure(result.message.clone())
-                            };
-
-                            let duration_ms = result.data.as_ref()
-                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                                .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
-
-                            self.log_action(
-                                ActionType::WaitFor {
-                                    selector: selector.to_string(),
-                                    by_label,
-                                    element_type,
-                                    timeout_ms,
-                                    require_stable: true,
-                                },
-                                action_result,
-                                duration_ms,
-                            ).await;
-
-                            if result.success {
-                                self.add_output(format_result(true, &format!("{} ({})", result.message, result.data.unwrap_or_default())));
-                            } else {
-                                self.add_output(format_result(false, &result.message));
-                            }
-                        }
-                        None => {
-                            self.add_output(format_result(false, "No simulator selected"));
-                        }
-                    }
-                }
-            }
-            "wait_for_not" => {
-                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
-                if selector.is_empty() {
-                    self.add_output(format_result(false, "wait_for_not requires at least 1 argument: wait_for_not(selector) or wait_for_not(selector, timeout_ms) or wait_for_not(selector, timeout_ms, label) or wait_for_not(selector, timeout_ms, label, type)"));
-                } else {
-                    let timeout_ms: u64 = args.get(1)
-                        .map(|s| s.parse().unwrap_or(self.default_timeout_ms))
-                        .unwrap_or(self.default_timeout_ms);
-                    let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                    let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-
-                    match &self.executor {
-                        Some(executor) => {
-                            let result = executor.execute(ActionType::WaitForNot {
-                                selector: selector.to_string(),
-                                by_label,
-                                element_type: element_type.clone(),
-                                timeout_ms,
-                            }).await;
-
-                            let action_result = if result.success {
-                                ActionResult::Success
-                            } else {
-                                ActionResult::Failure(result.message.clone())
-                            };
-
-                            let duration_ms = result.data.as_ref()
-                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                                .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
-
-                            self.log_action(
-                                ActionType::WaitForNot {
-                                    selector: selector.to_string(),
-                                    by_label,
-                                    element_type,
-                                    timeout_ms,
-                                },
-                                action_result,
-                                duration_ms,
-                            ).await;
-
-                            if result.success {
-                                self.add_output(format_result(true, &format!("{} ({})", result.message, result.data.unwrap_or_default())));
-                            } else {
-                                self.add_output(format_result(false, &result.message));
-                            }
-                        }
-                        None => {
-                            self.add_output(format_result(false, "No simulator selected"));
-                        }
-                    }
-                }
-            }
-            "send_keys" => {
-                let text = args.join(" ");
-                if text.is_empty() {
-                    self.add_output(format_result(false, "send_keys requires text: send_keys(text)"));
-                } else {
-                    match &self.executor {
-                        Some(executor) => {
-                            let result = executor.execute(ActionType::SendKeys { text: text.clone() }).await;
-
-                            let action_result = if result.success {
-                                ActionResult::Success
-                            } else {
-                                ActionResult::Failure(result.message.clone())
-                            };
-
-                            self.log_action(
-                                ActionType::SendKeys { text: text.clone() },
-                                action_result,
-                                None,
-                            ).await;
-
-                            if result.success {
-                                self.add_output(format_result(true, &format!("Sent: {}", text)));
-                            } else {
-                                self.add_output(format_result(false, &result.message));
-                            }
-                        }
-                        None => {
-                            self.add_output(format_result(false, "No simulator selected"));
-                        }
-                    }
-                }
-            }
-            "get_value" => {
-                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
-                let args: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
-                let selector = args.first().map(|s| strip_quotes(s)).unwrap_or("");
-                if selector.is_empty() {
-                    self.add_output(format_result(false, "get_value requires at least 1 argument: get_value(selector) or get_value(selector, label) or get_value(selector, label, type)"));
-                } else {
-                    // Check for 'label' flag in second argument
-                    let by_label = args.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                    // Third argument is element type (if present and not empty)
-                    let element_type = args.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-
-                    match &self.executor {
-                        Some(executor) => {
-                            // Wait for element first (default behavior, skip with --no-wait)
-                            if !no_wait {
-                                let wait_result = executor.execute(ActionType::WaitFor {
-                                    selector: selector.to_string(),
-                                    by_label,
-                                    element_type: element_type.clone(),
-                                    timeout_ms: self.default_timeout_ms,
-                                    require_stable: false,
-                                }).await;
-                                if !wait_result.success {
-                                    self.log_action(
-                                        ActionType::GetValue {
-                                            selector: selector.to_string(),
-                                            by_label,
-                                            element_type,
-                                        },
-                                        ActionResult::Failure(wait_result.message.clone()),
-                                        None,
-                                    ).await;
-                                    self.add_output(format_result(false, &wait_result.message));
-                                    return;
-                                }
-                            }
-
-                            let result = executor.execute(ActionType::GetValue {
-                                selector: selector.to_string(),
-                                by_label,
-                                element_type: element_type.clone(),
-                            }).await;
-
-                            let action_result = if result.success {
-                                ActionResult::Success
-                            } else {
-                                ActionResult::Failure(result.message.clone())
-                            };
-
-                            self.log_action(
-                                ActionType::GetValue {
-                                    selector: selector.to_string(),
-                                    by_label,
-                                    element_type,
-                                },
-                                action_result,
-                                None,
-                            ).await;
-
-                            if result.success {
-                                let value = result.data.unwrap_or_else(|| "(null)".to_string());
-                                self.add_output(format_result(true, &format!("Value: {}", value)));
-                            } else {
-                                self.add_output(format_result(false, &result.message));
-                            }
-                        }
-                        None => {
-                            self.add_output(format_result(false, "No simulator selected"));
-                        }
-                    }
-                }
-            }
-            "get_screenshot" => {
-                match &self.executor {
-                    Some(executor) => {
-                        let result = executor.execute(ActionType::GetScreenshot).await;
-                        if result.success {
-                            if let Some(ref screenshot) = result.screenshot {
-                                if let Some(session) = &self.session {
-                                    session.log_action(
-                                        ActionType::GetScreenshot,
-                                        ActionResult::Success,
-                                        Some(screenshot.clone()),
-                                        None,
-                                    ).await;
-                                }
-                            }
-                            // Estimate byte count from base64 data length
-                            let byte_count = result.data.as_ref()
-                                .map(|d| d.len() * 3 / 4)
-                                .unwrap_or(0);
+                    "get_screenshot" => {
+                        if success {
+                            let byte_count = data.as_ref().map(|d| d.len() * 3 / 4).unwrap_or(0);
                             self.add_output(format_result(true, &format!("{} bytes (base64 logged)", byte_count)));
                         } else {
-                            self.log_action(ActionType::GetScreenshot, ActionResult::Failure(result.message.clone()), None).await;
-                            self.add_output(format_result(false, &result.message));
+                            self.add_output(format_result(false, &message));
                         }
                     }
-                    None => {
-                        self.add_output(format_result(false, "No simulator selected"));
+                    "wait_for" | "wait_for_not" => {
+                        if success {
+                            self.add_output(format_result(true, &format!("{} ({})", message, data.unwrap_or_default())));
+                        } else {
+                            self.add_output(format_result(false, &message));
+                        }
+                    }
+                    _ => {
+                        self.add_output(format_result(success, &message));
                     }
                 }
             }
-            "log_comment" => {
-                let message = args.join(" ");
-                if message.is_empty() {
-                    self.add_output(format_result(false, "log_comment requires a message"));
+            IpcResponse::DeviceList { devices } => {
+                self.cached_devices = devices.clone();
+                for device in &devices {
+                    self.add_output(format_device(device));
+                }
+                self.add_output(format_result(true, &format!("{} devices", devices.len())));
+            }
+            IpcResponse::SessionInfo { session_name, active, device_udid, action_count } => {
+                if active {
+                    self.add_output(Line::from(format!("Session: {} (active)", session_name)));
+                    self.add_output(Line::from(format!("Device: {:?}", device_udid)));
+                    self.add_output(Line::from(format!("Actions: {}", action_count)));
                 } else {
-                    self.log_action(
-                        ActionType::LogComment { message: message.clone() },
-                        ActionResult::Success,
-                        None,
-                    ).await;
-                    self.add_output(format_result(true, &format!("Logged: {}", message)));
+                    self.add_output(Line::from(format!("Session: {} (inactive)", session_name)));
                 }
             }
-            "get_session_info" => {
-                match &self.session {
-                    Some(session) => {
-                        let action_log = session.get_action_log().await;
-                        self.add_output(Line::from(format!("Session: {} (active)", self.session_name)));
-                        self.add_output(Line::from(format!("Device: {:?}", self.simulator_udid)));
-                        self.add_output(Line::from(format!("Actions: {}", action_log.len())));
-                    }
-                    None => {
-                        self.add_output(Line::from(format!("Session: {} (inactive)", self.session_name)));
-                        self.add_output(Line::from(format!("Device: {:?}", self.simulator_udid)));
-                    }
-                }
+            IpcResponse::TimeoutValue { timeout_ms } => {
+                self.add_output(format_result(true, &format!("Current default timeout: {}ms", timeout_ms)));
             }
-            _ => {
-                self.add_output(format_result(false, &format!("Unknown command: {}", cmd)));
+            IpcResponse::CompletionData { elements, devices } => {
+                self.cached_elements = elements;
+                self.cached_devices = devices;
             }
+            IpcResponse::Error { message } => {
+                self.add_output(format_result(false, &message));
+            }
+            _ => {}
         }
     }
 
@@ -1162,30 +748,6 @@ impl App {
             self.add_output(Line::from(line.to_string()));
         }
     }
-}
-
-/// Validates a simulator UDID format.
-fn is_valid_udid(udid: &str) -> bool {
-    if udid.len() != 36 {
-        return false;
-    }
-
-    let parts: Vec<&str> = udid.split('-').collect();
-    if parts.len() != 5 {
-        return false;
-    }
-
-    let expected_lengths = [8, 4, 4, 4, 12];
-    for (part, &expected_len) in parts.iter().zip(expected_lengths.iter()) {
-        if part.len() != expected_len {
-            return false;
-        }
-        if !part.chars().all(|c| c.is_ascii_hexdigit()) {
-            return false;
-        }
-    }
-
-    true
 }
 
 /// Parse a command string into command name and arguments.

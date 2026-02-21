@@ -6,8 +6,10 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Start session | `start_session` | (auto) |
+| Start server + session (one step) | — | `qorvex start` |
+| Start session | `start_session` | `qorvex start-session` |
 | End session | `end_session` | — |
+| Stop server | — | `qorvex stop` |
 | Session info | `get_session_info` | `qorvex status` |
 | Get action log | — | `qorvex log` |
 | List sessions | — | `qorvex list-sessions` |
@@ -24,7 +26,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Start agent | `start_agent` or `start_agent(path)` | — |
+| Start agent | `start_agent` or `start_agent(path)` | `qorvex start-agent [--project-dir <path>]` |
 | Stop agent | `stop_agent` | — |
 | Set target app | `set_target(bundle_id)` | `qorvex set-target <bundle_id>` |
 | Set default timeout | `set_timeout(ms)` | — |
@@ -150,7 +152,7 @@ See [scripting-guide.md](scripting-guide.md) for full scripting details.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `QORVEX_SESSION` | `default` | Session name to connect to |
+| `QORVEX_SESSION` | `default` | Session name — respected by both `qorvex` (CLI) and `qorvex-server`. Set once at the top of a script to avoid passing `-s` on every command. |
 | `QORVEX_TIMEOUT` | `5000` | Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not`. Overridden by `-o` / `--timeout`. |
 
 ## Element Selectors

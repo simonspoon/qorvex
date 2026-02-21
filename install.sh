@@ -2,6 +2,7 @@
 set -euo pipefail
 
 CRATES=(
+    qorvex-server
     qorvex-repl
     qorvex-live
     qorvex-cli

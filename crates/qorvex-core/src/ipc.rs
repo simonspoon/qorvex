@@ -1,7 +1,7 @@
-//! Inter-process communication for REPL and watcher coordination.
+//! Inter-process communication for server and client coordination.
 //!
 //! This module provides Unix socket-based IPC using a JSON-over-newlines protocol.
-//! The REPL runs an [`IpcServer`] that accepts connections from watchers (TUI clients),
+//! The server runs an [`IpcServer`] that accepts connections from watchers (TUI clients),
 //! which connect using [`IpcClient`].
 //!
 //! # Protocol
@@ -34,6 +34,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use serde::{Deserialize, Serialize};
@@ -84,6 +85,54 @@ pub enum IpcRequest {
 
     /// Request the action log history.
     GetLog,
+
+    // --- Session Management ---
+    /// Start a new automation session.
+    StartSession,
+    /// End the current session.
+    EndSession,
+
+    // --- Device Management ---
+    /// List available simulator devices.
+    ListDevices,
+    /// Select a simulator device by UDID.
+    UseDevice { udid: String },
+    /// Boot a simulator device.
+    BootDevice { udid: String },
+
+    // --- Agent Management ---
+    /// Start or connect to the automation agent.
+    StartAgent { project_dir: Option<String> },
+    /// Stop the managed agent process.
+    StopAgent,
+    /// Connect to agent at a specific host/port.
+    Connect { host: String, port: u16 },
+
+    // --- Configuration ---
+    /// Set the target app bundle ID.
+    SetTarget { bundle_id: String },
+    /// Set the default wait timeout in milliseconds.
+    SetTimeout { timeout_ms: u64 },
+    /// Get the current default wait timeout.
+    GetTimeout,
+
+    // --- Watcher ---
+    /// Start the screen change watcher.
+    StartWatcher { interval_ms: Option<u64> },
+    /// Stop the screen change watcher.
+    StopWatcher,
+
+    // --- Info ---
+    /// Get current session information.
+    GetSessionInfo,
+    /// Get cached elements and devices for client-side tab completion.
+    GetCompletionData,
+
+    // --- Server Lifecycle ---
+    /// Request the server to shut down cleanly.
+    ///
+    /// The server will stop the agent, remove the socket, and exit.
+    Shutdown,
 }
 
 /// A response sent from server to client over the IPC connection.
@@ -129,6 +178,68 @@ pub enum IpcResponse {
         /// Human-readable error message.
         message: String,
     },
+
+    /// Generic success/failure result for management commands.
+    CommandResult {
+        /// Whether the command succeeded.
+        success: bool,
+        /// Human-readable description of the result.
+        message: String,
+    },
+
+    /// List of simulator devices.
+    DeviceList {
+        /// Available simulator devices.
+        devices: Vec<crate::simctl::SimulatorDevice>,
+    },
+
+    /// Current session information.
+    SessionInfo {
+        /// Session name.
+        session_name: String,
+        /// Whether a session is currently active.
+        active: bool,
+        /// Connected device UDID, if any.
+        device_udid: Option<String>,
+        /// Number of actions logged this session.
+        action_count: usize,
+    },
+
+    /// Cached completion data for client-side tab completion.
+    CompletionData {
+        /// Cached UI elements from the last screen info.
+        elements: Vec<crate::element::UIElement>,
+        /// Cached simulator devices.
+        devices: Vec<crate::simctl::SimulatorDevice>,
+    },
+
+    /// Current timeout value.
+    TimeoutValue {
+        /// Default timeout in milliseconds.
+        timeout_ms: u64,
+    },
+
+    /// Acknowledgement that the server is shutting down.
+    ShutdownAck,
+}
+
+/// Trait for handling IPC requests.
+///
+/// Implement this trait to provide custom request handling logic for the IPC server.
+/// The handler receives parsed requests and writes responses directly to the client.
+#[async_trait]
+pub trait RequestHandler: Send + Sync + 'static {
+    /// Handle a single IPC request.
+    ///
+    /// For streaming requests like Subscribe, the handler should write multiple
+    /// responses to the writer. For single-response requests, write one response
+    /// and return.
+    async fn handle(
+        &self,
+        request: IpcRequest,
+        session: Arc<Session>,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+    ) -> Result<(), IpcError>;
 }
 
 /// Returns the qorvex directory path (`~/.qorvex/`).
@@ -176,6 +287,9 @@ pub struct IpcServer {
     /// Shared driver slot, populated when the automation backend connects.
     /// IPC Execute requests use this driver instead of creating new connections.
     shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>>,
+    /// Optional pluggable request handler. When set, all requests are delegated
+    /// to this handler instead of the built-in logic.
+    handler: Option<Arc<dyn RequestHandler>>,
 }
 
 impl IpcServer {
@@ -198,7 +312,26 @@ impl IpcServer {
             session,
             socket_path: socket_path(session_name),
             shared_driver: Arc::new(tokio::sync::Mutex::new(None)),
+            handler: None,
         }
+    }
+
+    /// Sets a pluggable request handler on this server.
+    ///
+    /// When a handler is set, all incoming IPC requests are delegated to it
+    /// instead of the built-in hardcoded logic. This allows external crates
+    /// (e.g., `qorvex-server`) to provide their own request handling.
+    ///
+    /// # Arguments
+    ///
+    /// * `handler` - The request handler implementation
+    ///
+    /// # Returns
+    ///
+    /// The server instance (builder pattern).
+    pub fn with_handler(mut self, handler: Arc<dyn RequestHandler>) -> Self {
+        self.handler = Some(handler);
+        self
     }
 
     /// Returns the shared driver slot.
@@ -239,15 +372,21 @@ impl IpcServer {
             let (stream, _) = listener.accept().await?;
             let session = self.session.clone();
             let shared_driver = self.shared_driver.clone();
+            let handler = self.handler.clone();
 
             tokio::spawn(async move {
                 let span = info_span!("ipc_client");
-                let _ = Self::handle_client(stream, session, shared_driver).instrument(span).await;
+                let _ = Self::handle_client(stream, session, shared_driver, handler).instrument(span).await;
             });
         }
     }
 
-    async fn handle_client(stream: UnixStream, session: Arc<Session>, shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>>) -> Result<(), IpcError> {
+    async fn handle_client(
+        stream: UnixStream,
+        session: Arc<Session>,
+        shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>>,
+        handler: Option<Arc<dyn RequestHandler>>,
+    ) -> Result<(), IpcError> {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
@@ -261,6 +400,12 @@ impl IpcServer {
 
             let request: IpcRequest = serde_json::from_str(line.trim())?;
 
+            if let Some(ref handler) = handler {
+                handler.handle(request, session.clone(), &mut writer).await?;
+                continue;
+            }
+
+            // Fallback: built-in hardcoded logic (backward compatibility)
             match request {
                 IpcRequest::Execute { action } => {
                     debug!(action = %action.name(), "executing action via IPC");
@@ -343,6 +488,14 @@ impl IpcServer {
                     debug!("client requesting log");
                     let response = IpcResponse::Log {
                         entries: session.get_action_log().await,
+                    };
+                    let json = serde_json::to_string(&response)? + "\n";
+                    writer.write_all(json.as_bytes()).await?;
+                    writer.flush().await?;
+                }
+                _ => {
+                    let response = IpcResponse::Error {
+                        message: "This server does not support management commands. Use qorvex-server instead.".to_string(),
                     };
                     let json = serde_json::to_string(&response)? + "\n";
                     writer.write_all(json.as_bytes()).await?;

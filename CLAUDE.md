@@ -11,14 +11,19 @@ cargo build
 # Build release
 cargo build --release
 
-# Run REPL
+# Run server
+cargo run -p qorvex-server -- -s default
+
+# Run REPL (auto-launches server if needed)
 cargo run -p qorvex-repl
 
 # Run live TUI
 cargo run -p qorvex-live
 
-# Run CLI (requires running REPL session)
+# Run CLI (start server + session, then stop)
+cargo run -p qorvex-cli -- start
 cargo run -p qorvex-cli -- tap button-id
+cargo run -p qorvex-cli -- stop
 
 # CLI commands that don't require a session
 cargo run -p qorvex-cli -- list-devices
@@ -26,6 +31,7 @@ cargo run -p qorvex-cli -- boot-device <udid>
 cargo run -p qorvex-cli -- convert log.jsonl
 
 # Install binaries locally
+cargo install --path crates/qorvex-server
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
@@ -51,11 +57,12 @@ make -C qorvex-agent build
 
 ## Architecture
 
-Rust workspace with four crates plus a Swift agent for iOS Simulator and device automation on macOS:
+Rust workspace with five crates plus a Swift agent for iOS Simulator and device automation on macOS:
 
 ```
 qorvex-core    - Core library (driver abstraction, protocol, session, ipc, action, executor, watcher)
-qorvex-repl    - TUI REPL with tab completion, uses core directly
+qorvex-server  - Standalone automation server daemon, manages sessions and agent lifecycle
+qorvex-repl    - TUI REPL client with tab completion, connects to server via IPC
 qorvex-live    - TUI client with screenshot rendering (ratatui-image) and IPC reconnection
 qorvex-cli     - Scriptable CLI client for automation pipelines, JSONL log converter
 qorvex-agent   - Swift XCTest agent for native iOS accessibility (not a Cargo crate)

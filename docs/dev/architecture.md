@@ -1,57 +1,50 @@
 # Architecture Guide
 
-This document describes the high-level architecture of the qorvex project: a Rust workspace with four crates plus a Swift agent for iOS Simulator and physical device automation on macOS.
+This document describes the high-level architecture of the qorvex project: a Rust workspace with five crates plus a Swift agent for iOS Simulator and physical device automation on macOS.
 
 ## Crate Dependency Graph
 
 ```
-qorvex-repl  ──► qorvex-core
-qorvex-live  ──► qorvex-core (via IPC)
-qorvex-cli   ──► qorvex-core (via IPC)
-qorvex-core  ──► qorvex-agent (TCP binary protocol)
+qorvex-server ──► qorvex-core
+qorvex-repl   ──► qorvex-core (via IPC to qorvex-server)
+qorvex-live   ──► qorvex-core (via IPC to qorvex-server)
+qorvex-cli    ──► qorvex-core (via IPC to qorvex-server)
+qorvex-core   ──► qorvex-agent (TCP binary protocol)
 ```
 
 | Crate | Role |
 |-------|------|
 | `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor, watcher |
-| `qorvex-repl` | TUI REPL with tab completion, uses core directly |
+| `qorvex-server` | Standalone automation server daemon -- manages sessions, agent lifecycle, and IPC |
+| `qorvex-repl` | TUI REPL client with tab completion, connects to server via IPC; auto-launches server if needed |
 | `qorvex-live` | TUI client with screenshot rendering (ratatui-image) and IPC reconnection |
 | `qorvex-cli` | Scriptable CLI client for automation pipelines, includes JSONL log-to-script converter |
 | `qorvex-agent` | Swift XCTest agent for native iOS accessibility (not a Cargo crate) |
 
 ## Data Flow
 
-1. **REPL** receives commands via stdin, executes via `ActionExecutor` (which delegates to `AutomationDriver`), logs to `Session`.
-2. **Session** broadcasts `SessionEvent`s to subscribers (broadcast channel, capacity 100).
-3. **Live TUI** connects via `IpcClient`, subscribes to events, renders TUI with ratatui.
-4. **CLI** connects via `IpcClient`, sends `Execute` requests.
-5. **Screenshots** are base64-encoded PNGs passed through the event system.
-6. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
+1. **Server** (`qorvex-server`) starts, binds an `IpcServer` on the session socket, manages agent lifecycle.
+2. **REPL** auto-launches the server if the socket is absent, then connects as an IPC client. Sends commands (e.g., `StartSession`, `Execute`) via IPC.
+3. **Server** executes actions via `ActionExecutor` (which delegates to `AutomationDriver`), logs to `Session`.
+4. **Session** broadcasts `SessionEvent`s to subscribers (broadcast channel, capacity 100).
+5. **Live TUI** connects via `IpcClient`, sends `Subscribe`, renders incoming `Event` responses in a TUI.
+6. **CLI** connects via `IpcClient`, sends `Execute` and management requests.
+7. **Screenshots** are base64-encoded PNGs passed through the event system.
+8. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
 
 ```
-┌────────────┐   stdin    ┌────────────────┐              ┌─────────┐
-│  qorvex-   │──────────►│  ActionExecutor │─── TCP ────►│  Swift  │
-│    repl    │           │  (qorvex-core)  │  (port 8080) │  Agent  │
-└─────┬──────┘           └────────┬────────┘              └─────────┘
-      │                           │
-      │ log_action()              │ AutomationDriver trait
-      ▼                           │
-┌───────────┐                     │
-│  Session   │◄────────────────────┘
-│ (broadcast)│
-└─────┬──────┘
-      │ SessionEvent
-      ▼
-┌───────────────────────────────────┐
-│  IPC Server (Unix socket)         │
-│  qorvex_{session_name}.sock      │
-└─────┬────────────┬───────────────┘
-      │            │
-      ▼            ▼
-┌──────────┐  ┌──────────┐
-│ qorvex-  │  │ qorvex-  │
-│   live   │  │   cli    │
-└──────────┘  └──────────┘
+┌────────────┐   IPC     ┌───────────────────────────────────┐
+│ qorvex-    │──────────►│  qorvex-server                    │
+│   repl     │           │  IpcServer (Unix socket)          │
+└────────────┘           │  qorvex_{session_name}.sock       │
+┌────────────┐   IPC     │                                   │    ┌─────────┐
+│ qorvex-    │──────────►│  ActionExecutor ──── TCP ────────►│───►│  Swift  │
+│   live     │           │  (qorvex-core)       (port 8080) │    │  Agent  │
+└────────────┘           │       │                           │    └─────────┘
+┌────────────┐   IPC     │  Session (broadcast)              │
+│ qorvex-    │──────────►│  SessionEvent ──► subscribers     │
+│   cli      │           └───────────────────────────────────┘
+└────────────┘
 ```
 
 ## Key Abstractions
@@ -126,7 +119,7 @@ For physical devices, the `usb_tunnel` module provides:
 
 The IPC layer uses Unix sockets with a JSON-over-newlines protocol.
 
-**Request types:**
+**Core request types:**
 
 | Type | Description |
 |------|-------------|
@@ -134,6 +127,17 @@ The IPC layer uses Unix sockets with a JSON-over-newlines protocol.
 | `Subscribe` | Subscribe to session events |
 | `GetState` | Get current session state |
 | `GetLog` | Get action log history |
+
+**Management request types** (handled by `qorvex-server` via `RequestHandler`):
+
+| Type | Description |
+|------|-------------|
+| `StartSession` / `EndSession` | Session lifecycle |
+| `ListDevices` / `UseDevice` / `BootDevice` | Device management |
+| `StartAgent` / `StopAgent` / `Connect` | Agent management |
+| `SetTarget` / `SetTimeout` / `GetTimeout` | Configuration |
+| `StartWatcher` / `StopWatcher` | Screen change watcher |
+| `GetSessionInfo` / `GetCompletionData` | Info and tab completion |
 
 **Response types:**
 
@@ -144,9 +148,15 @@ The IPC layer uses Unix sockets with a JSON-over-newlines protocol.
 | `Log` | Action log entries |
 | `Event` | Streamed session event |
 | `Error` | Error message |
+| `CommandResult` | Generic success/failure for management commands |
+| `DeviceList` | List of simulator devices |
+| `SessionInfo` | Current session status |
+| `CompletionData` | Cached elements and devices for tab completion |
+| `TimeoutValue` | Current default timeout |
 
 Server constructors:
 - `IpcServer::new(session, name)` -- starts with empty driver slot; call `set_driver()` after the agent connects
+- `IpcServer::with_handler(handler)` -- attach a `RequestHandler` impl (builder pattern); when set, all requests are delegated to the handler instead of built-in logic
 - `shared_driver()` / `set_driver(driver)` -- wire the server to an already-connected driver so `Execute` requests reuse the existing TCP connection
 
 ## External Dependencies

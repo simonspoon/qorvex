@@ -41,16 +41,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_title(frame: &mut Frame, app: &App, area: Rect) {
-    let session_info = if app.session.is_some() {
-        format!("session: {}", app.session_name)
-    } else {
-        "no session".to_string()
-    };
+    let session_info = format!("session: {}", app.session_name);
 
-    let device_info = app.simulator_udid
-        .as_ref()
-        .map(|u| format!("device: {}...", &u[..8]))
-        .unwrap_or_else(|| "no device".to_string());
+    let device_info = "ipc-client".to_string();
 
     let title = Line::from(vec![
         Span::styled(" qorvex-repl ", Theme::title().add_modifier(Modifier::BOLD)),

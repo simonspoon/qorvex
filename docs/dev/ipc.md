@@ -1,6 +1,6 @@
 # IPC Reference
 
-Inter-process communication in qorvex uses Unix domain sockets with a JSON-over-newlines protocol. This allows the REPL and script runner to expose session state to external clients like `qorvex-live` and `qorvex-cli`.
+Inter-process communication in qorvex uses Unix domain sockets with a JSON-over-newlines protocol. `qorvex-server` runs an `IpcServer` that exposes session state and automation commands to clients like `qorvex-repl`, `qorvex-live`, and `qorvex-cli`.
 
 **Source:** `crates/qorvex-core/src/ipc.rs`
 
@@ -29,10 +29,41 @@ One socket per session. The server removes any existing socket file at the path 
 ```rust
 #[serde(tag = "type")]
 enum IpcRequest {
+    // Core
     Execute { action: ActionType },
     Subscribe,
     GetState,
     GetLog,
+
+    // Session management
+    StartSession,
+    EndSession,
+
+    // Device management
+    ListDevices,
+    UseDevice { udid: String },
+    BootDevice { udid: String },
+
+    // Agent management
+    StartAgent { project_dir: Option<String> },
+    StopAgent,
+    Connect { host: String, port: u16 },
+
+    // Configuration
+    SetTarget { bundle_id: String },
+    SetTimeout { timeout_ms: u64 },
+    GetTimeout,
+
+    // Watcher
+    StartWatcher { interval_ms: Option<u64> },
+    StopWatcher,
+
+    // Info
+    GetSessionInfo,
+    GetCompletionData,
+
+    // Server lifecycle
+    Shutdown,
 }
 ```
 
@@ -42,6 +73,24 @@ enum IpcRequest {
 | `Subscribe` | Begin receiving `Event` responses as session events occur (screenshots, actions, etc.). |
 | `GetState` | Request current session state (session ID, latest screenshot). |
 | `GetLog` | Request the full action log history. |
+| `StartSession` | Start a new automation session. |
+| `EndSession` | End the current session. |
+| `ListDevices` | List available simulator devices. |
+| `UseDevice` | Select a simulator device by UDID. |
+| `BootDevice` | Boot a simulator device by UDID. |
+| `StartAgent` | Start or connect to the automation agent; `project_dir` overrides the configured source directory. |
+| `StopAgent` | Stop the managed agent process. |
+| `Connect` | Connect to an agent at a specific host/port. |
+| `SetTarget` | Set the target app bundle ID. |
+| `SetTimeout` | Set the default wait timeout in milliseconds. |
+| `GetTimeout` | Get the current default wait timeout. |
+| `StartWatcher` | Start the screen change watcher; `interval_ms` defaults to 500ms. |
+| `StopWatcher` | Stop the screen change watcher. |
+| `GetSessionInfo` | Get current session status. |
+| `GetCompletionData` | Get cached elements and devices for client-side tab completion. |
+| `Shutdown` | Request the server to shut down cleanly (stop agent, remove socket, exit). Intercepted by the server's accept loop before reaching `handle_request`. |
+
+Management requests (`StartSession` and below) are only handled when the server has a `RequestHandler` attached. The built-in fallback returns an `Error` for these variants with a message directing users to `qorvex-server`.
 
 ---
 
@@ -69,6 +118,27 @@ enum IpcResponse {
     Error {
         message: String,
     },
+    CommandResult {
+        success: bool,
+        message: String,
+    },
+    DeviceList {
+        devices: Vec<SimulatorDevice>,
+    },
+    SessionInfo {
+        session_name: String,
+        active: bool,
+        device_udid: Option<String>,
+        action_count: usize,
+    },
+    CompletionData {
+        elements: Vec<UIElement>,
+        devices: Vec<SimulatorDevice>,
+    },
+    TimeoutValue {
+        timeout_ms: u64,
+    },
+    ShutdownAck,
 }
 ```
 
@@ -79,6 +149,30 @@ enum IpcResponse {
 | `Log` | `GetLog` | `entries`: vector of `ActionLog` entries from the session ring buffer. |
 | `Event` | `Subscribe` (streamed) | `event`: a `SessionEvent` pushed to all subscribers. Event types include `ActionLogged`, `ScreenshotUpdated`, `ScreenInfoUpdated`, `Started`, `Ended`. |
 | `Error` | Any | `message`: error description. |
+| `CommandResult` | Management commands | `success`: whether the command succeeded. `message`: human-readable result. |
+| `DeviceList` | `ListDevices` | `devices`: list of available `SimulatorDevice` entries. |
+| `SessionInfo` | `GetSessionInfo` | `session_name`, `active`, `device_udid` (if connected), `action_count`. |
+| `CompletionData` | `GetCompletionData` | `elements`: cached UI elements from last screen info. `devices`: cached simulator devices. |
+| `TimeoutValue` | `GetTimeout` | `timeout_ms`: current default wait timeout. |
+| `ShutdownAck` | `Shutdown` | Sent immediately before the server exits. No fields. |
+
+---
+
+## `RequestHandler` Trait
+
+```rust
+#[async_trait]
+pub trait RequestHandler: Send + Sync + 'static {
+    async fn handle(
+        &self,
+        request: IpcRequest,
+        session: Arc<Session>,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+    ) -> Result<(), IpcError>;
+}
+```
+
+When attached via `IpcServer::with_handler()`, all incoming IPC requests are delegated to this handler instead of the built-in hardcoded logic. `qorvex-server` uses this to provide full management command support. For streaming requests like `Subscribe`, the handler writes multiple responses to `writer`. For single-response requests, it writes one response and returns.
 
 ---
 
@@ -86,7 +180,11 @@ enum IpcResponse {
 
 ### `IpcServer::new(session, session_name)`
 
-Creates an IPC server with an empty shared driver slot. The server starts without a connected driver; call `set_driver()` (or wire up the `shared_driver()` handle) before Execute requests will work.
+Creates an IPC server with an empty shared driver slot and no request handler. The server starts without a connected driver; call `set_driver()` before `Execute` requests will work. Management requests return an error directing clients to use `qorvex-server`.
+
+### `IpcServer::with_handler(handler: Arc<dyn RequestHandler>) -> Self`
+
+Builder method: attaches a pluggable request handler. Returns the server instance. When a handler is set, all requests are delegated to it instead of the built-in logic. Used by `qorvex-server` to wire in its own handler.
 
 ### `shared_driver() -> Arc<Mutex<Option<Arc<dyn AutomationDriver>>>>`
 
@@ -100,6 +198,7 @@ Convenience async method to populate the shared driver slot.
 
 - On startup: removes any existing socket file at the conventional path, then binds.
 - On `Drop`: removes the socket file.
+- On `Shutdown` IPC request or SIGINT/SIGTERM: cancels the watcher, drops `ServerState` (triggering `AgentLifecycle::Drop` which kills the agent child process), removes the socket file, then exits. `ShutdownAck` is sent to the requesting client before the shutdown sequence begins.
 
 ---
 
@@ -115,13 +214,15 @@ This function is used throughout the codebase for socket paths, log directories,
 
 ## Architecture Note
 
-The IPC server exists so that `qorvex-live` can monitor any running session in real-time, regardless of how that session was started.
+The IPC server exists so that all clients — REPL, Live TUI, and CLI — can interact with any running session in real-time, regardless of how that session was started.
 
-- **`qorvex-repl`** runs its `ActionExecutor` in-process and spawns an `IpcServer`. After the agent connects, it calls `set_executor_with_driver()` which populates both the local executor and the IPC server's shared driver slot — so `qorvex-cli` Execute requests reuse the same TCP connection to the agent rather than opening a competing one.
-- **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` requests; the REPL's connected driver is used to fulfill them.
+- **`qorvex-server`** runs an `IpcServer` with a `RequestHandler` attached. It owns the `ActionExecutor`, `Session`, and agent lifecycle. After the agent connects, the server populates the IPC shared driver slot so `Execute` requests reuse the existing TCP connection.
+- **`qorvex-repl`** is an IPC client. It auto-launches `qorvex-server` if the session socket is absent, then connects and sends management and `Execute` requests.
+- **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` and management requests.
 - **`qorvex-live`** is an IPC client. It connects, sends `Subscribe`, and renders incoming `Event` responses in a TUI.
 
 ```
-qorvex-repl ──── IpcServer (Unix socket) ──> qorvex-live (Subscribe)
-                                         ──> qorvex-cli  (Execute)
+qorvex-server ── IpcServer (Unix socket) ──> qorvex-repl  (Execute, management)
+                                         ──> qorvex-live  (Subscribe)
+                                         ──> qorvex-cli   (Execute, management)
 ```

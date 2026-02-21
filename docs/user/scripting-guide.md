@@ -33,14 +33,16 @@ QORVEX_SESSION=my-session ./test-login.sh
 
 ## Writing Scripts by Hand
 
-Use `qorvex` CLI commands in a bash script:
+Use `qorvex start` to launch the server and session in one step, and `qorvex stop` (via a `trap`) to clean up on exit or error:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+export QORVEX_SESSION=my_test   # applies to both qorvex and qorvex-server
 
-# Boot a simulator and set the target app
-qorvex boot-device "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+qorvex start                    # spawns server, waits for socket, starts session
+trap 'qorvex stop || true' EXIT # clean up on exit or error
+
 qorvex set-target com.example.myapp
 
 # Login
@@ -68,10 +70,16 @@ for tab in home settings profile; do
 done
 ```
 
+`qorvex start` is idempotent — if the server is already running for the session, it skips spawning and just starts the session.
+
 ## Available Commands
 
 | Command | Description |
 |---------|-------------|
+| `qorvex start` | Start server + session in one step (use at top of script) |
+| `qorvex stop` | Stop the server cleanly (use in `trap`) |
+| `qorvex start-session` | Start session only (server must be running) |
+| `qorvex start-agent [--project-dir <path>]` | Start automation agent explicitly |
 | `qorvex tap <selector>` | Tap by accessibility ID |
 | `qorvex tap <selector> --label` | Tap by label |
 | `qorvex tap <selector> -T Button` | Tap with type filter |
@@ -94,7 +102,8 @@ See [commands.md](commands.md) for full option details.
 ## Tips
 
 - Use `set -euo pipefail` so the script stops on the first failed command.
-- Use `QORVEX_SESSION` environment variable to target a specific session.
+- Use `export QORVEX_SESSION=<name>` at the top — both `qorvex` and `qorvex-server` respect it, so you never need `-s` on individual commands.
+- Use `trap 'qorvex stop || true' EXIT` immediately after `qorvex start` so the server is always stopped, even on error. The `|| true` prevents the trap itself from masking the script's exit code when the server is already gone.
 - Use `QORVEX_TIMEOUT` to set a default timeout (ms) for all wait/tap operations without passing `-o` on every command.
 - Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
 - Use `qorvex -f json` for machine-readable output in pipelines.

@@ -4,10 +4,11 @@ iOS Simulator and device automation toolkit for macOS.
 
 ## Overview
 
-Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with four crates and a Swift agent:
+Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with five crates and a Swift agent:
 
 - **qorvex-core** — Core library with driver abstraction, protocol, session, IPC, and execution engine
-- **qorvex-repl** — Interactive command-line interface for manual testing
+- **qorvex-server** — Standalone automation server daemon; manages sessions, agent lifecycle, and IPC
+- **qorvex-repl** — TUI REPL client for manual testing; auto-launches the server if needed
 - **qorvex-live** — TUI client with inline screenshot rendering and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines, including JSONL log-to-script conversion
 - **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
@@ -35,6 +36,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 ./install.sh
 
 # Or install individually
+cargo install --path crates/qorvex-server
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
@@ -119,7 +121,7 @@ Controls:
 
 ### CLI
 
-Scriptable client for automation pipelines (requires a running REPL session):
+Scriptable client for automation pipelines (requires a running server session):
 
 ```bash
 # Tap an element by accessibility ID (waits for it by default)
@@ -254,38 +256,28 @@ done
 ## Architecture
 
 ```
-┌─────────────┐     IPC      ┌──────────────┐
-│ qorvex-repl │◄────────────►│ qorvex-live  │
-└──────┬──────┘              └──────────────┘
-       │                            ▲
-       │ IPC                   IPC  │
-       │◄───────────────────────────┤
-       │                     ┌──────┴─────┐
-       │                     │ qorvex-cli │
-       │                     └────────────┘
-       ▼
-┌──────────────┐
-│ qorvex-core  │
-├──────────────┤
-│ ActionExecutor
-│      │
-│ AutomationDriver
-│ ┌────┴────┐
-│ │AgentDrvr│
-│ └────┬────┘
-│      │
-│   TCP 8080──► qorvex-agent (Swift)
-│      │              │
-│   simctl    USB   XCUIElement
-│      │    tunnel  accessibility
-│      │  (usbmuxd)
-│      ▼      ▼
-│  iOS Sim  Physical
-│           Device
-└──────────────┘
+┌──────────────┐   IPC    ┌─────────────────────────┐
+│ qorvex-repl  │─────────►│                         │
+└──────────────┘          │     qorvex-server        │
+┌──────────────┐   IPC    │  (manages sessions,      │
+│ qorvex-live  │─────────►│   agent lifecycle, IPC)  │
+└──────────────┘          │                         │
+┌──────────────┐   IPC    └───────────┬─────────────┘
+│ qorvex-cli   │───────────────────►  │
+└──────────────┘             TCP 8080 │
+                                      ▼
+                            ┌─────────────────┐
+                            │  qorvex-agent   │
+                            │  (Swift/XCTest) │
+                            └────────┬────────┘
+                                     │ XCUIElement
+                                  simctl / USB
+                                  (usbmuxd)
+                                     │
+                            iOS Simulator / Device
 ```
 
-The `AutomationDriver` trait abstracts the automation backend. `AgentDriver` communicates with the Swift agent over a binary TCP protocol. For physical devices, it tunnels through usbmuxd.
+`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it tunnels through usbmuxd.
 
 ### Directory Structure
 

@@ -59,7 +59,7 @@ async fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let mut app = App::new(args.session);
+    let mut app = App::new(args.session).await;
 
     // Main loop
     let result = run_app(&mut terminal, &mut app).await;

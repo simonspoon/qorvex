@@ -225,6 +225,22 @@ enum Command {
 
     /// List all running qorvex sessions
     ListSessions,
+
+    /// Start server, session, and agent in one step
+    Start,
+
+    /// Start an automation session (auto-starts agent if configured)
+    StartSession,
+
+    /// Start or connect to the automation agent
+    StartAgent {
+        /// Path to the agent project directory
+        #[arg(short, long)]
+        project_dir: Option<String>,
+    },
+
+    /// Stop the server for this session
+    Stop,
 }
 
 #[tokio::main]
@@ -357,6 +373,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Err(e) => return Err(e),
             }
         }
+        Command::Start => {
+            return start_all(&cli).await;
+        }
         _ => {} // Fall through to IPC-connected commands
     }
 
@@ -440,6 +459,15 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 timeout_ms: timeout,
             }, &cli).await
         }
+        Command::StartSession => {
+            send_command(&mut client, IpcRequest::StartSession, &cli).await
+        }
+        Command::StartAgent { ref project_dir } => {
+            send_command(&mut client, IpcRequest::StartAgent { project_dir: project_dir.clone() }, &cli).await
+        }
+        Command::Stop => {
+            stop_server(&mut client, &cli).await
+        }
         Command::Status => {
             get_status(&mut client, &cli).await
         }
@@ -447,7 +475,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             get_log(&mut client, &cli).await
         }
         // These commands are handled before IPC connection above
-        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } => unreachable!(),
+        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start => unreachable!(),
     }
 }
 
@@ -773,6 +801,104 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
         _ => {
             Err(CliError::Protocol("Unexpected response type".to_string()))
         }
+    }
+}
+
+async fn send_command(client: &mut IpcClient, request: IpcRequest, cli: &Cli) -> Result<(), CliError> {
+    let response = client
+        .send(&request)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::CommandResult { success, message } => {
+            if success {
+                if !cli.quiet {
+                    eprintln!("{}", message);
+                }
+                Ok(())
+            } else {
+                Err(CliError::ActionFailed(message))
+            }
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response".to_string())),
+    }
+}
+
+async fn start_all(cli: &Cli) -> Result<(), CliError> {
+    use qorvex_core::ipc::socket_path;
+
+    let sock = socket_path(&cli.session);
+
+    // Start server if not already running
+    if !sock.exists() {
+        let log_dir = qorvex_dir().join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("qorvex-server-launch.log")).ok();
+
+        let mut cmd = std::process::Command::new("qorvex-server");
+        cmd.args(["-s", &cli.session]);
+        if let Some(f) = log_file {
+            cmd.stdout(f.try_clone().unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()));
+            cmd.stderr(f);
+        }
+        cmd.spawn()
+            .map_err(|e| CliError::Connection(format!("Failed to start server: {}", e)))?;
+
+        // Wait for socket to appear (up to 5s)
+        for _ in 0..50 {
+            if sock.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if !sock.exists() {
+            return Err(CliError::Connection("Server did not start in time".to_string()));
+        }
+    }
+
+    // Connect and start session
+    let mut client = IpcClient::connect(&cli.session)
+        .await
+        .map_err(|e| CliError::Connection(format!("Failed to connect: {}", e)))?;
+
+    let response = client
+        .send(&IpcRequest::StartSession)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to start session: {}", e)))?;
+
+    match response {
+        IpcResponse::CommandResult { success, message } => {
+            if success {
+                if !cli.quiet {
+                    eprintln!("{}", message);
+                }
+                Ok(())
+            } else {
+                Err(CliError::ActionFailed(message))
+            }
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response".to_string())),
+    }
+}
+
+async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::Shutdown)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send shutdown request: {}", e)))?;
+
+    match response {
+        IpcResponse::ShutdownAck => {
+            if !cli.quiet {
+                eprintln!("Server stopped");
+            }
+            Ok(())
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response to Shutdown".to_string())),
     }
 }
 
