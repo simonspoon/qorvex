@@ -34,7 +34,7 @@ fn tap_action() -> ActionType {
     ActionType::Tap {
         selector: "test-button".to_string(),
         by_label: false,
-        element_type: None,
+        element_type: None, timeout_ms: None,
     }
 }
 

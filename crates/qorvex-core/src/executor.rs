@@ -18,6 +18,7 @@
 //!         selector: "login-button".to_string(),
 //!         by_label: false,
 //!         element_type: None,
+//!         timeout_ms: Some(5000),
 //!     }).await;
 //!
 //!     if result.success {
@@ -32,7 +33,7 @@ use std::time::{Duration, Instant};
 use tracing::{info_span, debug_span, debug, Instrument};
 
 use crate::action::ActionType;
-use crate::driver::AutomationDriver;
+use crate::driver::{AutomationDriver, DriverError};
 
 /// Result of executing an action.
 ///
@@ -94,6 +95,16 @@ pub struct ActionExecutor {
     driver: Arc<dyn AutomationDriver>,
     /// Whether to capture screenshots after actions.
     capture_screenshots: bool,
+}
+
+/// Returns true if the driver error is transient and the action should be retried.
+fn is_retryable_error(err: &DriverError) -> bool {
+    match err {
+        DriverError::CommandFailed(msg) => {
+            msg.contains("not found") || msg.contains("not hittable")
+        }
+        _ => false,
+    }
 }
 
 impl ActionExecutor {
@@ -213,27 +224,44 @@ impl ActionExecutor {
 
     async fn execute_inner(&self, action: ActionType) -> ExecutionResult {
         match action {
-            ActionType::Tap { ref selector, by_label, ref element_type } => {
-                let tap_result = match element_type {
-                    Some(typ) => self.driver.tap_with_type(selector, by_label, typ).await,
-                    None if by_label => self.driver.tap_by_label(selector).await,
-                    None => self.driver.tap_element(selector).await,
-                };
+            ActionType::Tap { ref selector, by_label, ref element_type, timeout_ms } => {
+                let start = Instant::now();
+                let timeout = timeout_ms.map(Duration::from_millis);
+                let poll_interval = Duration::from_millis(100);
 
-                match tap_result {
-                    Ok(_) => {
-                        let msg = if by_label {
-                            format!("Tapped element with label '{}'", selector)
-                        } else {
-                            format!("Tapped element '{}'", selector)
-                        };
-                        let mut result = ExecutionResult::success(msg);
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
+                loop {
+                    let tap_result = match element_type {
+                        Some(typ) => self.driver.tap_with_type(selector, by_label, typ).await,
+                        None if by_label => self.driver.tap_by_label(selector).await,
+                        None => self.driver.tap_element(selector).await,
+                    };
+
+                    match tap_result {
+                        Ok(_) => {
+                            let elapsed_ms = start.elapsed().as_millis() as u64;
+                            let msg = if by_label {
+                                format!("Tapped element with label '{}'", selector)
+                            } else {
+                                format!("Tapped element '{}'", selector)
+                            };
+                            let mut result = ExecutionResult::success(msg)
+                                .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                            if let Some(screenshot) = self.capture_screenshot().await {
+                                result = result.with_screenshot(screenshot);
+                            }
+                            return result;
                         }
-                        result
+                        Err(ref e) if timeout.is_some() && is_retryable_error(e) => {
+                            if start.elapsed() >= timeout.unwrap() {
+                                let elapsed_ms = start.elapsed().as_millis();
+                                return ExecutionResult::failure(format!(
+                                    "Timeout after {}ms: {}", elapsed_ms, e
+                                ));
+                            }
+                            tokio::time::sleep(poll_interval).await;
+                        }
+                        Err(e) => return ExecutionResult::failure(e.to_string()),
                     }
-                    Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 
@@ -346,39 +374,54 @@ impl ActionExecutor {
                 }
             }
 
-            ActionType::GetValue { ref selector, by_label, ref element_type } => {
-                let value_result = match element_type {
-                    Some(typ) => self.driver.get_value_with_type(selector, by_label, typ).await,
-                    None if by_label => self.driver.get_element_value_by_label(selector).await,
-                    None => self.driver.get_element_value(selector).await,
-                };
+            ActionType::GetValue { ref selector, by_label, ref element_type, timeout_ms } => {
+                let start = Instant::now();
+                let timeout = timeout_ms.map(Duration::from_millis);
+                let poll_interval = Duration::from_millis(100);
 
-                match value_result {
-                    Ok(Some(value)) => {
-                        let msg = if by_label {
-                            format!("Got value for label '{}'", selector)
-                        } else {
-                            format!("Got value for '{}'", selector)
-                        };
-                        let mut result = ExecutionResult::success(msg).with_data(value);
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
+                loop {
+                    let value_result = match element_type {
+                        Some(typ) => self.driver.get_value_with_type(selector, by_label, typ).await,
+                        None if by_label => self.driver.get_element_value_by_label(selector).await,
+                        None => self.driver.get_element_value(selector).await,
+                    };
+
+                    match value_result {
+                        Ok(Some(value)) => {
+                            let msg = if by_label {
+                                format!("Got value for label '{}'", selector)
+                            } else {
+                                format!("Got value for '{}'", selector)
+                            };
+                            let mut result = ExecutionResult::success(msg).with_data(value);
+                            if let Some(screenshot) = self.capture_screenshot().await {
+                                result = result.with_screenshot(screenshot);
+                            }
+                            return result;
                         }
-                        result
-                    }
-                    Ok(None) => {
-                        let msg = if by_label {
-                            format!("Element with label '{}' has no value", selector)
-                        } else {
-                            format!("Element '{}' has no value", selector)
-                        };
-                        let mut result = ExecutionResult::success(msg).with_data("null".to_string());
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
+                        Ok(None) => {
+                            let msg = if by_label {
+                                format!("Element with label '{}' has no value", selector)
+                            } else {
+                                format!("Element '{}' has no value", selector)
+                            };
+                            let mut result = ExecutionResult::success(msg).with_data("null".to_string());
+                            if let Some(screenshot) = self.capture_screenshot().await {
+                                result = result.with_screenshot(screenshot);
+                            }
+                            return result;
                         }
-                        result
+                        Err(ref e) if timeout.is_some() && is_retryable_error(e) => {
+                            if start.elapsed() >= timeout.unwrap() {
+                                let elapsed_ms = start.elapsed().as_millis();
+                                return ExecutionResult::failure(format!(
+                                    "Timeout after {}ms: {}", elapsed_ms, e
+                                ));
+                            }
+                            tokio::time::sleep(poll_interval).await;
+                        }
+                        Err(e) => return ExecutionResult::failure(e.to_string()),
                     }
-                    Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 

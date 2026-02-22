@@ -81,7 +81,7 @@ fn test_ipc_request_execute_serialization() {
         action: ActionType::Tap {
             selector: "button_submit".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         },
     };
 
@@ -90,7 +90,7 @@ fn test_ipc_request_execute_serialization() {
 
     match deserialized {
         IpcRequest::Execute { action } => match action {
-            ActionType::Tap { selector, by_label, element_type } => {
+            ActionType::Tap { selector, by_label, element_type, .. } => {
                 assert_eq!(selector, "button_submit");
                 assert!(!by_label);
                 assert!(element_type.is_none());
@@ -246,12 +246,12 @@ fn test_all_action_types_serialization() {
         ActionType::Tap {
             selector: "elem".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         },
         ActionType::Tap {
             selector: "Sign In".to_string(),
             by_label: true,
-            element_type: Some("Button".to_string()),
+            element_type: Some("Button".to_string()), timeout_ms: None,
         },
         ActionType::TapLocation { x: 100, y: 200 },
         ActionType::LogComment {
@@ -262,7 +262,7 @@ fn test_all_action_types_serialization() {
         ActionType::GetValue {
             selector: "field".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         },
         ActionType::SendKeys {
             text: "hello".to_string(),
@@ -420,7 +420,7 @@ async fn test_session_logs_actions() {
             ActionType::Tap {
                 selector: "button".to_string(),
                 by_label: false,
-                element_type: None,
+                element_type: None, timeout_ms: None,
             },
             ActionResult::Success,
             None,
@@ -623,7 +623,7 @@ async fn test_ipc_execute_action_without_simulator_returns_error() {
             action: ActionType::Tap {
                 selector: "my_button".to_string(),
                 by_label: false,
-                element_type: None,
+                element_type: None, timeout_ms: None,
             },
         })
         .await
@@ -693,7 +693,7 @@ async fn test_session_creates_persistent_log_file() {
             ActionType::Tap {
                 selector: "test_button".to_string(),
                 by_label: false,
-                element_type: None,
+                element_type: None, timeout_ms: None,
             },
             ActionResult::Success,
             None,

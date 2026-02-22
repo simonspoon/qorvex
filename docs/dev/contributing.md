@@ -131,11 +131,13 @@ Sessions are always `Arc`-wrapped and shared by reference across the executor, I
 - `session.log_action(action_log)` -- standard action logging
 - `session.log_action_timed(action_log)` -- action logging with per-phase timing fields (`wait_ms`, `tap_ms`)
 
-### Auto-Wait and `--no-wait`
+### Retry-on-Failure and `--no-wait`
 
-By default, `tap` and `get_value` wait for the target element to appear before acting. This sends `ActionType::WaitFor` with `require_stable: false` — it polls until the element exists and is hittable, then proceeds. This saves at least 200ms compared to the stable-frames path.
+`ActionType::Tap` and `ActionType::GetValue` carry a `timeout_ms: Option<u64>` field. When set, the executor sends the tap/get-value directly to the agent and retries on transient errors ("not found", "not hittable") every 100ms until the timeout elapses. When `None`, the action is attempted once with no retry.
 
-The `--no-wait` flag (CLI/REPL) skips the wait entirely and attempts the action immediately. Use this when you are certain the element is already present, or when testing error handling for missing elements.
+The `--no-wait` flag (CLI/REPL) sets `timeout_ms` to `None` — single attempt, immediate failure if the element isn't present. By default `timeout_ms` is `Some(5000)`.
+
+The retry classification lives in `is_retryable_error()` in `executor.rs`. Only `DriverError::CommandFailed` messages containing "not found" or "not hittable" are retried; all other errors (connection loss, ObjC exceptions, unknown type) fail immediately.
 
 ### WaitFor Stability
 
@@ -143,7 +145,7 @@ The `--no-wait` flag (CLI/REPL) skips the wait entirely and attempts the action 
 
 - **`require_stable: true`** (used by explicit `wait_for` / `qorvex wait-for`): requires the element to be hittable and requires **3 consecutive polls** (at 100ms intervals) where the frame coordinates are identical before reporting success. Prevents tapping elements still animating into position.
 
-- **`require_stable: false`** (used by `tap` and `get_value` auto-wait): returns as soon as the element exists and is hittable. Faster than stable mode; no frame-stability tracking.
+- **`require_stable: false`**: returns as soon as the element exists and is hittable. Used when you want to wait-without-acting with a looser stability requirement.
 
 ### Error Handling in the Agent
 

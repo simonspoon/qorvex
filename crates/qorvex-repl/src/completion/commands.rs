@@ -177,7 +177,7 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[
             OptionSpec { flag: "--label", takes_value: false, description: "Match by label instead of ID" },
             OptionSpec { flag: "--type", takes_value: true, description: "Filter by element type" },
-            OptionSpec { flag: "--no-wait", takes_value: false, description: "Skip auto-wait" },
+            OptionSpec { flag: "--no-wait", takes_value: false, description: "Skip retry, attempt once" },
             OptionSpec { flag: "--timeout", takes_value: true, description: "Wait timeout in ms" },
         ],
     },
@@ -215,7 +215,7 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[
             OptionSpec { flag: "--label", takes_value: false, description: "Match by label instead of ID" },
             OptionSpec { flag: "--type", takes_value: true, description: "Filter by element type" },
-            OptionSpec { flag: "--no-wait", takes_value: false, description: "Skip auto-wait" },
+            OptionSpec { flag: "--no-wait", takes_value: false, description: "Skip retry, attempt once" },
         ],
     },
     CommandDef {

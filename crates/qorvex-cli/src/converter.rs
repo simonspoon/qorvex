@@ -45,7 +45,7 @@ impl LogConverter {
 
     fn action_to_command(action: &ActionType) -> Option<String> {
         match action {
-            ActionType::Tap { selector, by_label, element_type } => {
+            ActionType::Tap { selector, by_label, element_type, .. } => {
                 let mut cmd = format!("qorvex tap {}", shell_escape(selector));
                 if *by_label {
                     cmd.push_str(" --label");
@@ -70,7 +70,7 @@ impl LogConverter {
             ActionType::GetScreenInfo => {
                 Some("qorvex screen-info".to_string())
             }
-            ActionType::GetValue { selector, by_label, element_type } => {
+            ActionType::GetValue { selector, by_label, element_type, .. } => {
                 let mut cmd = format!("qorvex get-value {}", shell_escape(selector));
                 if *by_label {
                     cmd.push_str(" --label");
@@ -136,6 +136,7 @@ mod tests {
             selector: "login-button".to_string(),
             by_label: false,
             element_type: None,
+            timeout_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action),
@@ -149,6 +150,7 @@ mod tests {
             selector: "Login".to_string(),
             by_label: true,
             element_type: None,
+            timeout_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action),
@@ -162,6 +164,7 @@ mod tests {
             selector: "Submit".to_string(),
             by_label: true,
             element_type: Some("Button".to_string()),
+            timeout_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action),
@@ -175,6 +178,7 @@ mod tests {
             selector: "Sign In".to_string(),
             by_label: true,
             element_type: None,
+            timeout_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action),
@@ -249,6 +253,7 @@ mod tests {
             selector: "status-label".to_string(),
             by_label: false,
             element_type: None,
+            timeout_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action),
@@ -325,7 +330,7 @@ mod tests {
 
         let log1 = ActionLog::new(ActionType::StartSession, ActionResult::Success, None, None);
         let log2 = ActionLog::new(
-            ActionType::Tap { selector: "btn".to_string(), by_label: false, element_type: None },
+            ActionType::Tap { selector: "btn".to_string(), by_label: false, element_type: None, timeout_ms: None },
             ActionResult::Success,
             None,
             None,

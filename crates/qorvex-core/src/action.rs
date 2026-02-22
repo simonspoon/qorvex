@@ -23,6 +23,7 @@
 //!     selector: "login-button".to_string(),
 //!     by_label: false,
 //!     element_type: None,
+//!     timeout_ms: None,
 //! };
 //!
 //! // Create a log entry
@@ -62,6 +63,10 @@ pub enum ActionType {
         by_label: bool,
         /// Optional element type filter (e.g., "Button", "TextField").
         element_type: Option<String>,
+        /// If set, retry on transient errors (element not found / not hittable)
+        /// until this many milliseconds have elapsed. If `None`, attempt once.
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
 
     /// Tap at specific screen coordinates.
@@ -110,6 +115,10 @@ pub enum ActionType {
         by_label: bool,
         /// Optional element type filter (e.g., "Button", "TextField").
         element_type: Option<String>,
+        /// If set, retry on transient errors (element not found / not hittable)
+        /// until this many milliseconds have elapsed. If `None`, attempt once.
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
 
     /// Send keyboard input.

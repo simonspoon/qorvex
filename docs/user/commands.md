@@ -45,7 +45,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
-Tap auto-wait behavior (unless `--no-wait`): polls every 100ms until the element both exists and is hittable, then taps. Fails with timeout if the element never becomes hittable. This is faster than the explicit `wait-for` (no frame-stability check) but still guards against elements that are covered, off-screen, or mid-animation.
+Tap retry behavior (unless `--no-wait`): attempts the tap immediately. If the agent reports the element is not found or not hittable, retries every 100ms until the timeout elapses. Fails with timeout if the element never becomes tappable. Use explicit `wait-for` when you need frame-stability guarantees before tapping.
 
 ### Tap at Coordinates
 
@@ -99,7 +99,7 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 | Screen info | `get-screen-info` | `qorvex screen-info` |
 | List elements | `list-elements` | — |
 
-`qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. `qorvex get-value` prints the element value to stdout. Status messages go to stderr in pipe-delimited format. For `tap` and `get-value` (with auto-wait), two durations are reported: `|timestamp|Action|target|find_ms|action_ms|`. For other actions: `|timestamp|Action|target|duration|`.
+`qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. `qorvex get-value` prints the element value to stdout. Status messages go to stderr in pipe-delimited format: `|timestamp|Action|target|elapsed_ms|` for all actions.
 
 ## Values
 

@@ -101,10 +101,10 @@ enum Command {
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
-        /// Skip waiting for the element to appear before tapping
+        /// Skip retry, attempt tap once without waiting
         #[arg(long)]
         no_wait: bool,
-        /// Timeout in milliseconds when waiting
+        /// Timeout in milliseconds for retrying
         #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
     },
@@ -146,10 +146,10 @@ enum Command {
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
-        /// Skip waiting for the element to appear before getting value
+        /// Skip retry, attempt get-value once without waiting
         #[arg(long)]
         no_wait: bool,
-        /// Timeout in milliseconds when waiting
+        /// Timeout in milliseconds for retrying
         #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
     },
@@ -386,21 +386,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 
     match cli.command {
         Command::Tap { ref selector, label, ref element_type, no_wait, timeout } => {
-            let wait = if !no_wait {
-                Some(ActionType::WaitFor {
-                    selector: selector.clone(),
-                    by_label: label,
-                    element_type: element_type.clone(),
-                    timeout_ms: timeout,
-                    require_stable: false,
-                })
-            } else {
-                None
-            };
-            execute_with_wait(&mut client, wait, ActionType::Tap {
+            let timeout_ms = if no_wait { None } else { Some(timeout) };
+            execute_action(&mut client, ActionType::Tap {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),
+                timeout_ms,
             }, &cli).await
         }
         Command::TapLocation { x, y } => {
@@ -416,21 +407,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             execute_screen_info(&mut client, &cli, full, pretty).await
         }
         Command::GetValue { ref selector, label, ref element_type, no_wait, timeout } => {
-            let wait = if !no_wait {
-                Some(ActionType::WaitFor {
-                    selector: selector.clone(),
-                    by_label: label,
-                    element_type: element_type.clone(),
-                    timeout_ms: timeout,
-                    require_stable: false,
-                })
-            } else {
-                None
-            };
-            execute_with_wait(&mut client, wait, ActionType::GetValue {
+            let timeout_ms = if no_wait { None } else { Some(timeout) };
+            execute_action(&mut client, ActionType::GetValue {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),
+                timeout_ms,
             }, &cli).await
         }
         Command::Swipe { ref direction } => {
@@ -536,87 +518,6 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -
         _ => {
             Err(CliError::Protocol("Unexpected response type".to_string()))
         }
-    }
-}
-
-async fn execute_with_wait(
-    client: &mut IpcClient,
-    wait_action: Option<ActionType>,
-    action: ActionType,
-    cli: &Cli,
-) -> Result<(), CliError> {
-    // Execute wait phase and capture find duration
-    let find_ms = if let Some(wait) = wait_action {
-        let request = IpcRequest::Execute { action: wait };
-        let response = client
-            .send(&request)
-            .await
-            .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
-        match response {
-            IpcResponse::ActionResult { success, message, data, .. } => {
-                if !success {
-                    return Err(CliError::ActionFailed(message));
-                }
-                data.as_ref()
-                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                    .and_then(|parsed| parsed.get("elapsed_ms").and_then(|v| v.as_u64()))
-            }
-            IpcResponse::Error { message } => return Err(CliError::ActionFailed(message)),
-            _ => return Err(CliError::Protocol("Unexpected response type".to_string())),
-        }
-    } else {
-        None
-    };
-
-    // Execute the actual action
-    let is_screenshot_action = matches!(action, ActionType::GetScreenshot);
-    let is_data_action = matches!(action, ActionType::GetScreenInfo | ActionType::GetValue { .. });
-    let action_label = action.display_name();
-    let action_target = action.display_target();
-    let request = IpcRequest::Execute { action };
-    let start = std::time::Instant::now();
-    let response = client
-        .send(&request)
-        .await
-        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
-    let action_elapsed = start.elapsed();
-
-    match response {
-        IpcResponse::ActionResult { success, message, screenshot, data } => {
-            if cli.format == OutputFormat::Json {
-                let output = serde_json::json!({
-                    "success": success,
-                    "message": message,
-                    "screenshot": if is_screenshot_action { screenshot.as_ref().map(|s| s.as_ref()) } else { None },
-                    "data": data.as_ref().and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok()),
-                });
-                println!("{}", serde_json::to_string_pretty(&output).unwrap());
-            } else if success {
-                if is_screenshot_action {
-                    if let Some(ref ss) = screenshot {
-                        println!("{}", ss);
-                    }
-                }
-                if is_data_action {
-                    if let Some(ref d) = data {
-                        println!("{}", d);
-                    }
-                }
-                if !cli.quiet {
-                    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3fZ");
-                    let find_str = find_ms
-                        .map(|ms| format!("{}ms", ms))
-                        .unwrap_or_default();
-                    let action_str = format!("{}ms", action_elapsed.as_millis());
-                    eprintln!("|{}|{}|{}|{}|{}|", now, action_label, action_target, find_str, action_str);
-                }
-            } else {
-                return Err(CliError::ActionFailed(message));
-            }
-            Ok(())
-        }
-        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
-        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 

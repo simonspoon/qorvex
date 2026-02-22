@@ -36,7 +36,7 @@ async fn test_tap_via_ipc_to_mock_agent() {
             action: ActionType::Tap {
                 selector: "login-btn".to_string(),
                 by_label: false,
-                element_type: None,
+                element_type: None, timeout_ms: None,
             },
         })
         .await
@@ -187,7 +187,7 @@ async fn test_action_logged_after_ipc_execute() {
             action: ActionType::Tap {
                 selector: "submit-btn".to_string(),
                 by_label: false,
-                element_type: None,
+                element_type: None, timeout_ms: None,
             },
         })
         .await
@@ -283,7 +283,7 @@ async fn test_multiple_sequential_actions_via_ipc() {
             action: ActionType::Tap {
                 selector: "username-field".to_string(),
                 by_label: false,
-                element_type: None,
+                element_type: None, timeout_ms: None,
             },
         })
         .await

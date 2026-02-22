@@ -34,7 +34,7 @@ async fn test_executor_tap_element_via_agent_driver() {
         .execute(ActionType::Tap {
             selector: "login-button".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         })
         .await;
 
@@ -61,7 +61,7 @@ async fn test_executor_tap_by_label_via_agent_driver() {
         .execute(ActionType::Tap {
             selector: "Sign In".to_string(),
             by_label: true,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         })
         .await;
 
@@ -150,7 +150,7 @@ async fn test_executor_get_value_via_agent_driver() {
         .execute(ActionType::GetValue {
             selector: "email".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         })
         .await;
 
@@ -271,7 +271,7 @@ async fn test_executor_handles_agent_error() {
         .execute(ActionType::Tap {
             selector: "missing-button".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         })
         .await;
 
@@ -344,7 +344,7 @@ async fn test_executor_tap_with_type_via_agent_driver() {
         .execute(ActionType::Tap {
             selector: "Submit".to_string(),
             by_label: true,
-            element_type: Some("Button".to_string()),
+            element_type: Some("Button".to_string()), timeout_ms: None,
         })
         .await;
 
@@ -373,7 +373,7 @@ async fn test_executor_get_value_by_label_via_agent_driver() {
         .execute(ActionType::GetValue {
             selector: "Email".to_string(),
             by_label: true,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         })
         .await;
 
@@ -398,7 +398,7 @@ async fn test_executor_get_value_none_via_agent_driver() {
         .execute(ActionType::GetValue {
             selector: "empty-field".to_string(),
             by_label: false,
-            element_type: None,
+            element_type: None, timeout_ms: None,
         })
         .await;
 

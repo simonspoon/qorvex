@@ -454,36 +454,9 @@ impl App {
                 }
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
-                if !args.no_wait {
-                    if let Some(ref mut client) = self.client {
-                        let wait_req = IpcRequest::Execute {
-                            action: ActionType::WaitFor {
-                                selector: selector.clone(),
-                                by_label,
-                                element_type: element_type.clone(),
-                                timeout_ms: args.timeout.unwrap_or(5000),
-                                require_stable: false,
-                            },
-                        };
-                        match client.send(&wait_req).await {
-                            Ok(IpcResponse::ActionResult { success: false, message, .. }) => {
-                                self.add_output(format_result(false, &message));
-                                return;
-                            }
-                            Ok(IpcResponse::Error { message }) => {
-                                self.add_output(format_result(false, &message));
-                                return;
-                            }
-                            Err(e) => {
-                                self.add_output(format_result(false, &format!("IPC error: {}", e)));
-                                return;
-                            }
-                            _ => {} // success, continue to tap
-                        }
-                    }
-                }
+                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
                 IpcRequest::Execute {
-                    action: ActionType::Tap { selector, by_label, element_type },
+                    action: ActionType::Tap { selector, by_label, element_type, timeout_ms },
                 }
             },
             "swipe" => IpcRequest::Execute {
@@ -550,36 +523,9 @@ impl App {
                 }
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
-                if !args.no_wait {
-                    if let Some(ref mut client) = self.client {
-                        let wait_req = IpcRequest::Execute {
-                            action: ActionType::WaitFor {
-                                selector: selector.clone(),
-                                by_label,
-                                element_type: element_type.clone(),
-                                timeout_ms: args.timeout.unwrap_or(5000),
-                                require_stable: false,
-                            },
-                        };
-                        match client.send(&wait_req).await {
-                            Ok(IpcResponse::ActionResult { success: false, message, .. }) => {
-                                self.add_output(format_result(false, &message));
-                                return;
-                            }
-                            Ok(IpcResponse::Error { message }) => {
-                                self.add_output(format_result(false, &message));
-                                return;
-                            }
-                            Err(e) => {
-                                self.add_output(format_result(false, &format!("IPC error: {}", e)));
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
                 IpcRequest::Execute {
-                    action: ActionType::GetValue { selector, by_label, element_type },
+                    action: ActionType::GetValue { selector, by_label, element_type, timeout_ms },
                 }
             },
             "log-comment" => {
