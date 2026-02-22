@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 use clap::Parser;
 use crossterm::{
@@ -32,6 +33,18 @@ struct Args {
     /// Session name to connect to
     #[arg(short, long, default_value = "default")]
     session: String,
+
+    /// Frames per second for the live video feed (default: 15)
+    #[arg(long, default_value_t = 15)]
+    fps: u32,
+
+    /// JPEG quality for the live video feed, 1-100 (default: 70)
+    #[arg(long, default_value_t = 70)]
+    quality: u32,
+
+    /// Disable the live streamer (use polling fallback)
+    #[arg(long)]
+    no_streamer: bool,
 }
 
 /// Maximum number of consecutive IPC connection failures before giving up
@@ -41,10 +54,20 @@ const IPC_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 /// Maximum delay between retry attempts
 const IPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone, PartialEq)]
+enum StreamerStatus {
+    Connecting,
+    Connected,
+    Disconnected,
+    NotAvailable(String),
+}
+
 /// Message type for internal app events
 enum AppEvent {
     SessionEvent(SessionEvent),
     ScreenshotReady(Vec<u8>),
+    StreamerFrame(Vec<u8>),
+    StreamerStatus(StreamerStatus),
 }
 
 struct App {
@@ -54,6 +77,8 @@ struct App {
     session_name: String,
     simulator_udid: Option<String>,
     should_quit: bool,
+    streamer_active: bool,
+    streamer_status: StreamerStatus,
     image_picker: Picker,
     image_state: Option<StatefulProtocol>,
 }
@@ -69,6 +94,8 @@ impl App {
             session_name,
             simulator_udid: Simctl::get_booted_udid().ok(),
             should_quit: false,
+            streamer_active: false,
+            streamer_status: StreamerStatus::Disconnected,
             image_picker: picker,
             image_state: None,
         }
@@ -110,6 +137,212 @@ fn spawn_screenshot_task(udid: String, tx: mpsc::Sender<AppEvent>) {
             let _ = tx.send(AppEvent::ScreenshotReady(bytes)).await;
         }
     });
+}
+
+fn spawn_streamer_task(
+    session_name: &str,
+    udid: &str,
+    fps: u32,
+    quality: u32,
+    tx: mpsc::Sender<AppEvent>,
+    cancel: CancellationToken,
+) {
+    let socket_dir = dirs::home_dir()
+        .expect("home dir")
+        .join(".qorvex");
+    std::fs::create_dir_all(&socket_dir).ok();
+    let socket_path = socket_dir.join(format!("streamer_{}.sock", session_name));
+
+    // Clean up stale socket
+    let _ = std::fs::remove_file(&socket_path);
+
+    let socket_path_str = socket_path.to_string_lossy().to_string();
+    let udid = udid.to_string();
+
+    tokio::spawn(async move {
+        // Find the qorvex-streamer binary
+        let streamer_bin = which_streamer();
+        let Some(bin_path) = streamer_bin else {
+            let _ = tx.send(AppEvent::StreamerStatus(
+                StreamerStatus::NotAvailable("qorvex-streamer binary not found".into())
+            )).await;
+            return;
+        };
+
+        tracing::info!(path = %bin_path.display(), "found qorvex-streamer binary");
+        let _ = tx.send(AppEvent::StreamerStatus(StreamerStatus::Connecting)).await;
+
+        // Spawn the streamer process with stdio redirected to avoid TUI corruption
+        use std::process::Stdio;
+        let mut child = match tokio::process::Command::new(&bin_path)
+            .arg("--socket-path").arg(&socket_path_str)
+            .arg("--udid").arg(&udid)
+            .arg("--fps").arg(fps.to_string())
+            .arg("--quality").arg(quality.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(AppEvent::StreamerStatus(
+                    StreamerStatus::NotAvailable(format!("Failed to spawn streamer: {e}"))
+                )).await;
+                return;
+            }
+        };
+
+        // Wait for socket to appear, then connect (timeout after 10s)
+        let connect_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let stream = loop {
+            if cancel.is_cancelled() {
+                let _ = child.kill().await;
+                return;
+            }
+
+            if tokio::time::Instant::now() >= connect_deadline {
+                tracing::warn!("timed out connecting to streamer socket");
+                let stderr_msg = read_child_stderr(&mut child).await;
+                let msg = if stderr_msg.is_empty() {
+                    "Streamer connection timed out".into()
+                } else {
+                    format!("Streamer failed: {stderr_msg}")
+                };
+                let _ = child.kill().await;
+                let _ = tx.send(AppEvent::StreamerStatus(
+                    StreamerStatus::NotAvailable(msg)
+                )).await;
+                return;
+            }
+
+            // Check if child has exited
+            if let Ok(Some(status)) = child.try_wait() {
+                let stderr_msg = read_child_stderr(&mut child).await;
+                let msg = if status.code() == Some(2) {
+                    "Screen recording permission required. Grant in System Settings > Privacy > Screen Recording".into()
+                } else if !stderr_msg.is_empty() {
+                    stderr_msg
+                } else {
+                    format!("Streamer exited with status: {status}")
+                };
+                tracing::warn!(msg, "streamer process exited");
+                let _ = tx.send(AppEvent::StreamerStatus(
+                    StreamerStatus::NotAvailable(msg)
+                )).await;
+                return;
+            }
+
+            match tokio::net::UnixStream::connect(&socket_path).await {
+                Ok(s) => break s,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        };
+
+        let _ = tx.send(AppEvent::StreamerStatus(StreamerStatus::Connected)).await;
+
+        // Read frame loop
+        let mut reader = tokio::io::BufReader::new(stream);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    let _ = child.kill().await;
+                    return;
+                }
+                result = read_frame(&mut reader) => {
+                    match result {
+                        Ok(bytes) => {
+                            let _ = tx.send(AppEvent::StreamerFrame(bytes)).await;
+                        }
+                        Err(_) => {
+                            let _ = tx.send(AppEvent::StreamerStatus(StreamerStatus::Disconnected)).await;
+                            let _ = child.kill().await;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn read_child_stderr(child: &mut tokio::process::Child) -> String {
+    use tokio::io::AsyncReadExt;
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut buf = Vec::new();
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            stderr.read_to_end(&mut buf),
+        ).await;
+        let s = String::from_utf8_lossy(&buf).trim().to_string();
+        // Return the last meaningful line
+        s.lines()
+            .rev()
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+async fn read_frame<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let len = reader.read_u32_le().await? as usize;
+    if len == 0 || len > 10_000_000 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid frame length"));
+    }
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf).await?;
+    Ok(buf)
+}
+
+fn which_streamer() -> Option<PathBuf> {
+    // Check PATH
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("qorvex-streamer")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path.into());
+            }
+        }
+    }
+    // Check next to our own binary (e.g. both in ~/.cargo/bin/)
+    if let Ok(exe) = std::env::current_exe() {
+        let sibling = exe.parent()?.join("qorvex-streamer");
+        if sibling.exists() {
+            return Some(sibling);
+        }
+    }
+    // Check the repo's Swift build directories (for development)
+    // Walk up from the current exe to find the workspace root containing qorvex-streamer/
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent();
+        while let Some(d) = dir {
+            for profile in ["release", "debug"] {
+                let candidate = d.join("qorvex-streamer").join(".build").join(profile).join("qorvex-streamer");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+            dir = d.parent();
+        }
+    }
+    // Also check relative to the current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        for profile in ["release", "debug"] {
+            let candidate = cwd.join("qorvex-streamer").join(".build").join(profile).join("qorvex-streamer");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 #[tokio::main]
@@ -220,6 +453,20 @@ async fn main() -> io::Result<()> {
         }
     });
 
+    // Start streamer if available
+    if !args.no_streamer {
+        if let Some(ref udid) = app.simulator_udid {
+            spawn_streamer_task(
+                &app.session_name,
+                udid,
+                args.fps,
+                args.quality,
+                event_tx.clone(),
+                cancel_token.clone(),
+            );
+        }
+    }
+
     // Main loop
     loop {
         // Check for app events (IPC events and screenshot results)
@@ -244,6 +491,16 @@ async fn main() -> io::Result<()> {
                 },
                 AppEvent::ScreenshotReady(bytes) => {
                     app.set_screenshot(bytes);
+                }
+                AppEvent::StreamerFrame(bytes) => {
+                    app.set_screenshot(bytes);
+                    app.streamer_active = true;
+                }
+                AppEvent::StreamerStatus(status) => {
+                    app.streamer_status = status;
+                    if matches!(app.streamer_status, StreamerStatus::Disconnected | StreamerStatus::NotAvailable(_)) {
+                        app.streamer_active = false;
+                    }
                 }
             }
         }
@@ -309,10 +566,16 @@ fn ui(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     // Left: Simulator screenshot
+    let sim_title = match &app.streamer_status {
+        StreamerStatus::Connected => " Simulator (live) ".to_string(),
+        StreamerStatus::Connecting => " Simulator (connecting...) ".to_string(),
+        StreamerStatus::Disconnected => " Simulator ".to_string(),
+        StreamerStatus::NotAvailable(reason) => format!(" Simulator ({reason}) "),
+    };
     let sim_block = Block::default()
-        .title(" Simulator ")
+        .title(sim_title.as_str())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green));
+        .border_style(Style::default().fg(if app.streamer_active { Color::Green } else { Color::Yellow }));
 
     let inner = sim_block.inner(chunks[0]);
     f.render_widget(sim_block, chunks[0]);

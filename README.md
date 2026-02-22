@@ -12,6 +12,7 @@ Qorvex provides programmatic control over iOS Simulators and physical devices th
 - **qorvex-live** — TUI client with inline screenshot rendering and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines, including JSONL log-to-script conversion
 - **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
+- **qorvex-streamer** — ScreenCaptureKit-based live video streamer for Simulator windows (Swift, macOS 13+)
 
 ### Automation backend
 
@@ -27,12 +28,13 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 - macOS with Xcode and iOS Simulators installed
 - Rust 1.70+
 - **For Swift agent**: [xcodegen](https://github.com/yonaskolb/XcodeGen) and Xcode (see `qorvex-agent/README.md`)
+- **For qorvex-streamer**: macOS 13+ and Screen Recording permission
 - **For physical devices**: USB-connected iOS device with developer mode enabled
 
 ## Installation
 
 ```bash
-# Install all Rust binaries (also records agent source dir in ~/.qorvex/config.json)
+# Install all Rust binaries, build qorvex-streamer, and record agent source dir
 ./install.sh
 
 # Or install individually
@@ -108,15 +110,19 @@ Available commands:
 
 ### Live TUI
 
-Monitor a session in real-time with inline screenshot rendering and an action log:
+Monitor a session in real-time with a live video feed and action log:
 
 ```bash
-qorvex-live
+qorvex-live            # live feed at 15 fps (default)
+qorvex-live --fps 30   # higher frame rate
+qorvex-live --no-streamer  # polling fallback (no Screen Recording permission needed)
 ```
+
+`qorvex-live` automatically launches `qorvex-streamer` to capture the Simulator window via ScreenCaptureKit — zero impact on the automation session. Falls back to polling if the streamer binary is not found or Screen Recording permission is denied.
 
 Controls:
 - `q` — Quit
-- `r` — Refresh screenshot
+- `r` — Refresh screenshot (polling fallback only)
 - Arrow keys — Scroll action log
 
 ### CLI
@@ -261,20 +267,19 @@ done
 └──────────────┘          │     qorvex-server        │
 ┌──────────────┐   IPC    │  (manages sessions,      │
 │ qorvex-live  │─────────►│   agent lifecycle, IPC)  │
-└──────────────┘          │                         │
-┌──────────────┐   IPC    └───────────┬─────────────┘
-│ qorvex-cli   │───────────────────►  │
-└──────────────┘             TCP 8080 │
-                                      ▼
-                            ┌─────────────────┐
-                            │  qorvex-agent   │
-                            │  (Swift/XCTest) │
-                            └────────┬────────┘
-                                     │ XCUIElement
-                                  simctl / USB
-                                  (usbmuxd)
-                                     │
-                            iOS Simulator / Device
+│              │          │                         │
+│   spawns ▼   │          └───────────┬─────────────┘
+│ qorvex-      │  Unix sock             TCP 8080 │
+│  streamer ───┘──────────────┐          ▼
+└──────────────┘  JPEG frames │  ┌─────────────────┐
+┌──────────────┐   IPC        │  │  qorvex-agent   │
+│ qorvex-cli   │──────────────┘  │  (Swift/XCTest) │
+└──────────────┘             └────────┬────────┘
+                                       │ XCUIElement
+                                    simctl / USB
+                                    (usbmuxd)
+                                       │
+                              iOS Simulator / Device
 ```
 
 `qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it tunnels through usbmuxd.
@@ -288,6 +293,7 @@ Qorvex stores runtime files in `~/.qorvex/`:
 ├── config.json                  # Persistent config (agent_source_dir, etc.)
 ├── qorvex_default.sock          # Unix socket for "default" session
 ├── qorvex_my-session.sock       # Unix socket for "my-session"
+├── streamer_default.sock        # Live video socket for "default" session (qorvex-live)
 └── logs/
     ├── default_20250101_120000.jsonl
     └── my-session_20250101_130000.jsonl

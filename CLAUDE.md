@@ -51,6 +51,18 @@ cargo test -p qorvex-cli  --test cli_integration
 # Build Swift agent (requires Xcode)
 make -C qorvex-agent build
 
+# Build streamer (macOS only, requires macOS 13+)
+make -C qorvex-streamer build
+
+# Run streamer standalone
+qorvex-streamer --udid <UDID> --fps 30 --socket-path /tmp/qvx-stream.sock
+
+# Run live TUI with streamer (default)
+cargo run -p qorvex-live -- --fps 30
+
+# Run live TUI without streamer (polling fallback)
+cargo run -p qorvex-live -- --no-streamer
+
 # Install all Rust binaries
 ./install.sh
 ```
@@ -66,6 +78,7 @@ qorvex-repl    - TUI REPL client with tab completion, connects to server via IPC
 qorvex-live    - TUI client with screenshot rendering (ratatui-image) and IPC reconnection
 qorvex-cli     - Scriptable CLI client for automation pipelines, JSONL log converter
 qorvex-agent   - Swift XCTest agent for native iOS accessibility (not a Cargo crate)
+qorvex-streamer - ScreenCaptureKit-based live video streamer for Simulator windows (Swift, macOS only)
 ```
 
 Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary protocol (port 8080). Supports simulators (direct TCP) and physical devices (via USB tunnel).

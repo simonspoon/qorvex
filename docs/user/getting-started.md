@@ -29,11 +29,14 @@ cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
 ```
 
-### Build the Swift Agent
+### Build the Swift Agent and Streamer
 
 ```bash
-make -C qorvex-agent build
+make -C qorvex-agent build      # XCTest automation agent
+make -C qorvex-streamer build   # Live video streamer (macOS 13+)
 ```
+
+`install.sh` builds both automatically.
 
 ## First Session Walkthrough
 
@@ -89,10 +92,11 @@ get_screenshot
 In another terminal:
 
 ```bash
-qorvex-live
+qorvex-live           # live video feed at 15 fps (default)
+qorvex-live --fps 30  # higher frame rate
 ```
 
-Shows real-time screenshots and action log from your REPL session.
+Shows a live video feed of the Simulator window and the action log from your REPL session. Requires Screen Recording permission (macOS will prompt on first use). Use `--no-streamer` to fall back to polling if permission is unavailable.
 
 ## Simulator vs Physical Device
 

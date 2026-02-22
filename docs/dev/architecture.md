@@ -1,25 +1,27 @@
 # Architecture Guide
 
-This document describes the high-level architecture of the qorvex project: a Rust workspace with five crates plus a Swift agent for iOS Simulator and physical device automation on macOS.
+This document describes the high-level architecture of the qorvex project: a Rust workspace with five crates, a Swift XCTest agent, and a Swift ScreenCaptureKit streamer for iOS Simulator and physical device automation on macOS.
 
 ## Crate Dependency Graph
 
 ```
-qorvex-server ──► qorvex-core
-qorvex-repl   ──► qorvex-core (via IPC to qorvex-server)
-qorvex-live   ──► qorvex-core (via IPC to qorvex-server)
-qorvex-cli    ──► qorvex-core (via IPC to qorvex-server)
-qorvex-core   ──► qorvex-agent (TCP binary protocol)
+qorvex-server   ──► qorvex-core
+qorvex-repl     ──► qorvex-core (via IPC to qorvex-server)
+qorvex-live     ──► qorvex-core (via IPC to qorvex-server)
+qorvex-live     ──► qorvex-streamer (spawns, reads JPEG frames via Unix socket)
+qorvex-cli      ──► qorvex-core (via IPC to qorvex-server)
+qorvex-core     ──► qorvex-agent (TCP binary protocol)
 ```
 
-| Crate | Role |
+| Crate / Component | Role |
 |-------|------|
 | `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor, watcher |
 | `qorvex-server` | Standalone automation server daemon -- manages sessions, agent lifecycle, and IPC |
 | `qorvex-repl` | TUI REPL client with tab completion, connects to server via IPC; auto-launches server if needed |
-| `qorvex-live` | TUI client with screenshot rendering (ratatui-image) and IPC reconnection |
+| `qorvex-live` | TUI client with live video feed (via qorvex-streamer) and IPC reconnection |
 | `qorvex-cli` | Scriptable CLI client for automation pipelines, includes JSONL log-to-script converter |
 | `qorvex-agent` | Swift XCTest agent for native iOS accessibility (not a Cargo crate) |
+| `qorvex-streamer` | Swift standalone binary; captures Simulator window via ScreenCaptureKit and streams JPEG frames over a Unix socket (macOS 13+, not a Cargo crate) |
 
 ## Data Flow
 
@@ -27,10 +29,11 @@ qorvex-core   ──► qorvex-agent (TCP binary protocol)
 2. **REPL** auto-launches the server if the socket is absent, then connects as an IPC client. Sends commands (e.g., `StartSession`, `Execute`) via IPC.
 3. **Server** executes actions via `ActionExecutor` (which delegates to `AutomationDriver`), logs to `Session`.
 4. **Session** broadcasts `SessionEvent`s to subscribers (broadcast channel, capacity 100).
-5. **Live TUI** connects via `IpcClient`, sends `Subscribe`, renders incoming `Event` responses in a TUI.
-6. **CLI** connects via `IpcClient`, sends `Execute` and management requests.
-7. **Screenshots** are base64-encoded PNGs passed through the event system.
-8. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
+5. **Live TUI** connects via `IpcClient`, sends `Subscribe`, renders incoming `Event` responses in a TUI. Separately spawns `qorvex-streamer` and reads JPEG frames from a Unix socket for the live video feed.
+6. **Streamer** (`qorvex-streamer`) captures the Simulator window via ScreenCaptureKit on the macOS host, encodes frames as JPEG, and writes them length-prefixed to the Unix socket. Runs as a child process of `qorvex-live`; completely independent of the XCTest agent.
+7. **CLI** connects via `IpcClient`, sends `Execute` and management requests.
+8. **Screenshots** (from the agent path) are base64-encoded PNGs passed through the event system.
+9. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
 
 ```
 ┌────────────┐   IPC     ┌───────────────────────────────────┐
@@ -40,10 +43,14 @@ qorvex-core   ──► qorvex-agent (TCP binary protocol)
 ┌────────────┐   IPC     │                                   │    ┌─────────┐
 │ qorvex-    │──────────►│  ActionExecutor ──── TCP ────────►│───►│  Swift  │
 │   live     │           │  (qorvex-core)       (port 8080) │    │  Agent  │
-└────────────┘           │       │                           │    └─────────┘
-┌────────────┐   IPC     │  Session (broadcast)              │
-│ qorvex-    │──────────►│  SessionEvent ──► subscribers     │
-│   cli      │           └───────────────────────────────────┘
+│  spawns ▼  │           │       │                           │    └─────────┘
+│ qorvex-    │◄──────────│  Session (broadcast)              │
+│ streamer   │  JPEG     │  SessionEvent ──► subscribers     │
+│ (SCKit)    │  frames   └───────────────────────────────────┘
+└────────────┘  Unix sock
+┌────────────┐   IPC
+│ qorvex-    │──────────►  (same server)
+│   cli      │
 └────────────┘
 ```
 
@@ -106,13 +113,15 @@ For physical devices, the `usb_tunnel` module provides:
 ```
 ~/.qorvex/
 ├── config.json                  # Persistent config (agent_source_dir)
-├── qorvex_<session>.sock        # Unix socket per session
+├── qorvex_<session>.sock        # Unix socket per session (IPC)
+├── streamer_<session>.sock      # Unix socket for live video frames (qorvex-live)
 └── logs/
     └── <session>_<timestamp>.jsonl
 ```
 
 - `config.json` stores `QorvexConfig` with the `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent.
-- Unix socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
+- IPC socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
+- Streamer socket path convention: `~/.qorvex/streamer_{session_name}.sock` — created by `qorvex-live` on startup, deleted on quit.
 - JSONL log files follow the naming pattern `{session_name}_{%Y%m%d_%H%M%S}.jsonl`
 
 ## IPC Protocol

@@ -6,7 +6,7 @@ Qorvex documentation is organized into developer and user guides. Read only what
 
 | Topic | File | When to read |
 |-------|------|-------------|
-| Architecture | [dev/architecture.md](dev/architecture.md) | Onboarding, understanding crate relationships and data flow |
+| Architecture | [dev/architecture.md](dev/architecture.md) | Onboarding, understanding crate relationships, data flow, and live video streamer |
 | Binary Protocol | [dev/protocol.md](dev/protocol.md) | Modifying wire format, adding opcodes, debugging agent communication |
 | Driver Abstraction | [dev/driver.md](dev/driver.md) | Adding driver methods, understanding element types and selectors |
 | Session & Events | [dev/session-and-events.md](dev/session-and-events.md) | Working with action logging, change detection, or broadcast events |
