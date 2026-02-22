@@ -82,7 +82,6 @@ Constructors:
 - `ActionExecutor::from_config(config)` -- creates a driver from `DriverConfig`
 
 Configuration:
-- `set_capture_screenshots(bool)` -- toggle post-action screenshots
 - `driver()` -- accessor for the underlying driver
 
 WaitFor behavior: polls every 100ms, requires the element to be hittable, and requires 3 consecutive stable frames before reporting success.

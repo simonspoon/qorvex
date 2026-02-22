@@ -25,9 +25,7 @@ async fn programmable_executor(behaviors: Vec<MockBehavior>) -> ActionExecutor {
     let addr = programmable_mock_agent(behaviors).await;
     let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
     driver.connect().await.unwrap();
-    let mut executor = ActionExecutor::new(Arc::new(driver));
-    executor.set_capture_screenshots(false);
-    executor
+    ActionExecutor::new(Arc::new(driver))
 }
 
 fn tap_action() -> ActionType {

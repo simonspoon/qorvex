@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tracing::{info_span, debug_span, debug, Instrument};
+use tracing::{info_span, debug, Instrument};
 
 use crate::action::ActionType;
 use crate::driver::{AutomationDriver, DriverError};
@@ -93,8 +93,6 @@ impl ExecutionResult {
 pub struct ActionExecutor {
     /// The automation driver backend.
     driver: Arc<dyn AutomationDriver>,
-    /// Whether to capture screenshots after actions.
-    capture_screenshots: bool,
 }
 
 /// Returns true if the driver error is transient and the action should be retried.
@@ -114,10 +112,7 @@ impl ActionExecutor {
     ///
     /// * `driver` - The automation driver to use for executing actions
     pub fn new(driver: Arc<dyn AutomationDriver>) -> Self {
-        Self {
-            driver,
-            capture_screenshots: false,
-        }
+        Self { driver }
     }
 
     /// Convenience constructor: create an executor using the [`AgentDriver`](crate::agent_driver::AgentDriver) backend.
@@ -174,28 +169,6 @@ impl ActionExecutor {
         &self.driver
     }
 
-    /// Sets whether to capture screenshots after actions.
-    pub fn set_capture_screenshots(&mut self, capture: bool) {
-        self.capture_screenshots = capture;
-    }
-
-    /// Captures a screenshot and returns it as base64-encoded PNG.
-    /// Returns `None` if screenshot capture is disabled.
-    async fn capture_screenshot(&self) -> Option<String> {
-        let span = debug_span!("capture_screenshot");
-        self.capture_screenshot_inner().instrument(span).await
-    }
-
-    async fn capture_screenshot_inner(&self) -> Option<String> {
-        if !self.capture_screenshots {
-            return None;
-        }
-        self.driver.screenshot().await.ok().map(|bytes| {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(&bytes)
-        })
-    }
-
     /// Executes an action and returns the result.
     ///
     /// This method handles all [`ActionType`] variants except session management
@@ -244,12 +217,8 @@ impl ActionExecutor {
                             } else {
                                 format!("Tapped element '{}'", selector)
                             };
-                            let mut result = ExecutionResult::success(msg)
+                            return ExecutionResult::success(msg)
                                 .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
-                            if let Some(screenshot) = self.capture_screenshot().await {
-                                result = result.with_screenshot(screenshot);
-                            }
-                            return result;
                         }
                         Err(ref e) if timeout.is_some() && is_retryable_error(e) => {
                             if start.elapsed() >= timeout.unwrap() {
@@ -275,13 +244,7 @@ impl ActionExecutor {
                 }
 
                 match self.driver.tap_location(x, y).await {
-                    Ok(_) => {
-                        let mut result = ExecutionResult::success(format!("Tapped at ({}, {})", x, y));
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
-                        }
-                        result
-                    }
+                    Ok(_) => ExecutionResult::success(format!("Tapped at ({}, {})", x, y)),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
@@ -303,41 +266,23 @@ impl ActionExecutor {
                 };
 
                 match self.driver.swipe(start_x, start_y, end_x, end_y, Some(0.3)).await {
-                    Ok(_) => {
-                        let mut result = ExecutionResult::success(format!("Swiped {}", direction));
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
-                        }
-                        result
-                    }
+                    Ok(_) => ExecutionResult::success(format!("Swiped {}", direction)),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 
             ActionType::LongPress { x, y, duration } => {
                 match self.driver.long_press(x, y, duration).await {
-                    Ok(_) => {
-                        let mut result = ExecutionResult::success(format!(
-                            "Long pressed at ({}, {}) for {:.1}s", x, y, duration
-                        ));
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
-                        }
-                        result
-                    }
+                    Ok(_) => ExecutionResult::success(format!(
+                        "Long pressed at ({}, {}) for {:.1}s", x, y, duration
+                    )),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 
             ActionType::SendKeys { ref text } => {
                 match self.driver.type_text(text).await {
-                    Ok(_) => {
-                        let mut result = ExecutionResult::success(format!("Sent keys: '{}'", text));
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
-                        }
-                        result
-                    }
+                    Ok(_) => ExecutionResult::success(format!("Sent keys: '{}'", text)),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
@@ -360,12 +305,8 @@ impl ActionExecutor {
                     Ok(elements) => {
                         match serde_json::to_string(&elements) {
                             Ok(json) => {
-                                let mut result = ExecutionResult::success("Screen info retrieved")
-                                    .with_data(json);
-                                if let Some(screenshot) = self.capture_screenshot().await {
-                                    result = result.with_screenshot(screenshot);
-                                }
-                                result
+                                ExecutionResult::success("Screen info retrieved")
+                                    .with_data(json)
                             }
                             Err(e) => ExecutionResult::failure(format!("JSON serialization error: {}", e)),
                         }
@@ -393,11 +334,7 @@ impl ActionExecutor {
                             } else {
                                 format!("Got value for '{}'", selector)
                             };
-                            let mut result = ExecutionResult::success(msg).with_data(value);
-                            if let Some(screenshot) = self.capture_screenshot().await {
-                                result = result.with_screenshot(screenshot);
-                            }
-                            return result;
+                            return ExecutionResult::success(msg).with_data(value);
                         }
                         Ok(None) => {
                             let msg = if by_label {
@@ -405,11 +342,7 @@ impl ActionExecutor {
                             } else {
                                 format!("Element '{}' has no value", selector)
                             };
-                            let mut result = ExecutionResult::success(msg).with_data("null".to_string());
-                            if let Some(screenshot) = self.capture_screenshot().await {
-                                result = result.with_screenshot(screenshot);
-                            }
-                            return result;
+                            return ExecutionResult::success(msg).with_data("null".to_string());
                         }
                         Err(ref e) if timeout.is_some() && is_retryable_error(e) => {
                             if start.elapsed() >= timeout.unwrap() {
@@ -493,11 +426,7 @@ impl ActionExecutor {
                                     } else {
                                         format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms)
                                     };
-                                    let mut result = ExecutionResult::success(msg).with_data(data);
-                                    if let Some(screenshot) = self.capture_screenshot().await {
-                                        result = result.with_screenshot(screenshot);
-                                    }
-                                    return result;
+                                    return ExecutionResult::success(msg).with_data(data);
                                 }
                             } else {
                                 // Fast path: element exists and is hittable, return immediately.
@@ -521,12 +450,8 @@ impl ActionExecutor {
                                 } else {
                                     format!("Element '{}' found", selector)
                                 };
-                                let mut result = ExecutionResult::success(msg)
+                                return ExecutionResult::success(msg)
                                     .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
-                                if let Some(screenshot) = self.capture_screenshot().await {
-                                    result = result.with_screenshot(screenshot);
-                                }
-                                return result;
                             }
                         } else {
                             last_frame = None;
@@ -568,12 +493,8 @@ impl ActionExecutor {
                         } else {
                             format!("Element '{}' not found", selector)
                         };
-                        let mut result = ExecutionResult::success(msg)
+                        return ExecutionResult::success(msg)
                             .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
-                        if let Some(screenshot) = self.capture_screenshot().await {
-                            result = result.with_screenshot(screenshot);
-                        }
-                        return result;
                     }
 
                     if start.elapsed() >= timeout {

@@ -49,15 +49,13 @@ pub async fn mock_agent(responses: Vec<Response>) -> SocketAddr {
     addr
 }
 
-/// Convenience: create an AgentDriver connected to the mock, with screenshots
-/// disabled, ready to use in an ActionExecutor.
+/// Convenience: create an AgentDriver connected to the mock, ready to use in
+/// an ActionExecutor.
 pub async fn connected_executor(responses: Vec<Response>) -> ActionExecutor {
     let addr = mock_agent(responses).await;
     let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
     driver.connect().await.unwrap();
-    let mut executor = ActionExecutor::new(Arc::new(driver));
-    executor.set_capture_screenshots(false);
-    executor
+    ActionExecutor::new(Arc::new(driver))
 }
 
 // ---------------------------------------------------------------------------

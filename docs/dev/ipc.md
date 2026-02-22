@@ -144,7 +144,7 @@ enum IpcResponse {
 
 | Variant | Sent in response to | Fields |
 |---------|---------------------|--------|
-| `ActionResult` | `Execute` | `success`: whether the action succeeded. `message`: human-readable result. `screenshot`: base64-encoded PNG if a screenshot was captured post-action. `data`: optional payload (e.g., element value from `GetValue`). |
+| `ActionResult` | `Execute` | `success`: whether the action succeeded. `message`: human-readable result. `screenshot`: base64-encoded PNG, set only when the action is `GetScreenshot`. `data`: optional payload (e.g., element value from `GetValue`). |
 | `State` | `GetState` | `session_id`: current session identifier. `screenshot`: latest cached screenshot as base64 PNG. |
 | `Log` | `GetLog` | `entries`: vector of `ActionLog` entries from the session ring buffer. |
 | `Event` | `Subscribe` (streamed) | `event`: a `SessionEvent` pushed to all subscribers. Event types include `ActionLogged`, `ScreenshotUpdated`, `ScreenInfoUpdated`, `Started`, `Ended`. |
