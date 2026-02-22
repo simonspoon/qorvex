@@ -2,7 +2,7 @@
 
 ## Agent Won't Start
 
-**Symptoms:** `start_agent` hangs or fails, "Agent failed to become ready within timeout"
+**Symptoms:** `start-agent` hangs or fails, "Agent failed to become ready within timeout"
 
 **Check:**
 
@@ -15,7 +15,7 @@
 **Common fixes:**
 
 - Re-run `./install.sh` to set up the agent source directory
-- `start_agent(/full/path/to/qorvex/qorvex-agent)` -- provide path explicitly
+- `start-agent /full/path/to/qorvex/qorvex-agent` -- provide path explicitly
 
 ## Agent Won't Connect
 
@@ -24,7 +24,7 @@
 **Check:**
 
 1. Is the agent process running? Look for `xcodebuild test-without-building` in Activity Monitor
-2. Try stopping and restarting: `stop_agent` then `start_agent`
+2. Try stopping and restarting: `stop-agent` then `start-agent`
 3. The agent binds to `127.0.0.1:8080` -- ensure nothing else is using that port
 
 **Timeouts:**
@@ -37,19 +37,19 @@ If a read timeout occurs (e.g., while the watcher polls a slow UI hierarchy), th
 
 ## Element Not Found
 
-**Symptoms:** "Timeout waiting for element", tap/get_value fails
+**Symptoms:** "Timeout waiting for element", tap/get-value fails
 
 **Debug steps:**
 
-1. `get_screen_info` -- inspect the current UI hierarchy
-2. `list_elements` -- see all elements with identifiers or labels
+1. `get-screen-info` -- inspect the current UI hierarchy
+2. `list-elements` -- see all elements with identifiers or labels
 3. Check the exact identifier/label: IDs are case-sensitive
-4. Try glob matching: `tap(login-*)` to match partial IDs
-5. Is the element in a different app? Use `set_target(bundle_id)` to switch
+4. Try glob matching: `tap login-*` to match partial IDs
+5. Is the element in a different app? Use `set-target <bundle_id>` to switch
 
 ## Element Not Hittable
 
-**Symptoms:** "element exists but is not hittable" timeout from `tap` or `wait_for`
+**Symptoms:** "element exists but is not hittable" timeout from `tap` or `wait-for`
 
 **What this means:** The element exists in the accessibility tree but iOS reports it as not tappable. Common causes:
 
@@ -60,9 +60,9 @@ If a read timeout occurs (e.g., while the watcher polls a slow UI hierarchy), th
 
 **Fixes:**
 
-- `swipe(up)` or `swipe(down)` to scroll the element into view
+- `swipe up` or `swipe down` to scroll the element into view
 - Wait longer: increase `--timeout` (default: 5000ms)
-- `wait_for` additionally requires 3 stable frames (300ms of no movement), so animations must complete before it returns success
+- `wait-for` additionally requires 3 stable frames (300ms of no movement), so animations must complete before it returns success
 
 ## USB Tunnel Issues (Physical Devices)
 
@@ -111,7 +111,7 @@ Only `timeout` is a valid `set` directive.
 Action failed at line 12: Timeout after 5000ms waiting for element 'submit-btn'
 ```
 
-The element didn't appear within the timeout. Increase timeout with `set timeout 10000` or `wait_for("selector", 10000)`.
+The element didn't appear within the timeout. Increase timeout with `set-timeout 10000` or `wait-for selector --timeout 10000`.
 
 ## IPC Connection Issues
 
@@ -136,6 +136,6 @@ The server cleans up old sockets on startup, but manual removal may be needed af
 
 ## Performance
 
-- **Watcher polling:** Default 500ms. Lower values increase CPU usage. Set via `start_watcher(interval_ms)`.
+- **Watcher polling:** Default 500ms. Lower values increase CPU usage. Set via `start-watcher <ms>`.
 - **Visual change threshold:** Default 5 (hamming distance 0-64). Lower = more sensitive to visual changes.
 - **Screenshot capture:** Enabled by default in watcher. Disable if you only need accessibility tree changes.

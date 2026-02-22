@@ -7,10 +7,10 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Command | REPL | CLI |
 |---------|------|-----|
 | Start server + session (one step) | — | `qorvex start` |
-| Start session | `start_session` | `qorvex start-session` |
-| End session | `end_session` | — |
+| Start session | `start-session` | `qorvex start-session` |
+| End session | `end-session` | — |
 | Stop server | — | `qorvex stop` |
-| Session info | `get_session_info` | `qorvex status` |
+| Session info | `get-session-info` | `qorvex status` |
 | Get action log | — | `qorvex log` |
 | List sessions | — | `qorvex list-sessions` |
 
@@ -18,18 +18,18 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| List devices | `list_devices` | `qorvex list-devices` |
-| Select device | `use_device(udid)` | — |
-| Boot + select | `boot_device(udid)` | `qorvex boot-device <udid>` |
+| List devices | `list-devices` | `qorvex list-devices` |
+| Select device | `use-device <udid>` | — |
+| Boot + select | `boot-device <udid>` | `qorvex boot-device <udid>` |
 
 ## Agent Management
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Start agent | `start_agent` or `start_agent(path)` | `qorvex start-agent [--project-dir <path>]` |
-| Stop agent | `stop_agent` | — |
-| Set target app | `set_target(bundle_id)` | `qorvex set-target <bundle_id>` |
-| Set default timeout | `set_timeout(ms)` | — |
+| Start agent | `start-agent` or `start-agent <path>` | `qorvex start-agent [--project-dir <path>]` |
+| Stop agent | `stop-agent` | — |
+| Set target app | `set-target <bundle_id>` | `qorvex set-target <bundle_id>` |
+| Set default timeout | `set-timeout <ms>` | — |
 
 ## UI Interaction
 
@@ -37,14 +37,13 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `tap(selector)` | Tap by accessibility ID |
-| REPL: `tap(selector, label)` | Tap by label |
-| REPL: `tap(selector, label, type)` | Tap by label with type filter |
-| REPL: `tap(selector, --no-wait)` | Tap without waiting for element |
-| CLI: `qorvex tap <selector>` | Tap by ID |
-| CLI: `qorvex tap <selector> --label` | Tap by label |
-| CLI: `qorvex tap <selector> --label --type Button` | Tap by label + type |
-| CLI: `qorvex tap <selector> --no-wait` | Skip auto-wait |
+| `tap <selector>` | Tap by accessibility ID |
+| `tap <selector> --label` | Tap by label |
+| `tap <selector> --label --type Button` | Tap by label with type filter |
+| `tap <selector> --no-wait` | Tap without waiting for element |
+| `tap <selector> --timeout 10000` | Tap with custom timeout |
+
+Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
 Tap auto-wait behavior (unless `--no-wait`): polls every 100ms until the element both exists and is hittable, then taps. Fails with timeout if the element never becomes hittable. This is faster than the explicit `wait-for` (no frame-stability check) but still guards against elements that are covered, off-screen, or mid-animation.
 
@@ -52,33 +51,30 @@ Tap auto-wait behavior (unless `--no-wait`): polls every 100ms until the element
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `tap_location(x, y)` | Tap at screen coordinates |
-| CLI: `qorvex tap-location <x> <y>` | Same |
+| `tap-location <x> <y>` | Tap at screen coordinates (REPL and CLI) |
 
 ### Swipe
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `swipe()` or `swipe(direction)` | Swipe (default: up). Directions: up, down, left, right |
-| CLI: `qorvex swipe <direction>` | Same |
+| `swipe` or `swipe <direction>` | Swipe (default: up). Directions: up, down, left, right (REPL and CLI) |
 
 ### Send Keys
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `send_keys(text)` | Type text into focused field |
-| CLI: `qorvex send-keys "text"` | Same |
+| `send-keys <text>` | Type text into focused field (REPL and CLI) |
 
 ### Wait For Element
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `wait_for(selector)` | Wait for element by ID (uses `set_timeout` default, initially 5s) |
-| REPL: `wait_for(selector, timeout_ms)` | Custom timeout |
-| REPL: `wait_for(selector, timeout_ms, label)` | Wait by label |
-| REPL: `wait_for(selector, timeout_ms, label, type)` | Wait by label + type |
-| CLI: `qorvex wait-for <selector> --timeout 10000` | Wait with timeout |
-| CLI: `qorvex wait-for <selector> --label --timeout 10000` | Wait by label |
+| `wait-for <selector>` | Wait for element by ID (uses `set-timeout` default, initially 5s) |
+| `wait-for <selector> --timeout 10000` | Custom timeout |
+| `wait-for <selector> --label` | Wait by label |
+| `wait-for <selector> --label --type Button` | Wait by label + type |
+
+Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
 Wait behavior: polls every 100ms, requires element to be hittable, requires 3 consecutive stable frames (same position) before success. This is the strict mode used by the explicit `wait-for` command.
 
@@ -86,12 +82,12 @@ Wait behavior: polls every 100ms, requires element to be hittable, requires 3 co
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `wait_for_not(selector)` | Wait for element to disappear by ID (uses `set_timeout` default, initially 5s) |
-| REPL: `wait_for_not(selector, timeout_ms)` | Custom timeout |
-| REPL: `wait_for_not(selector, timeout_ms, label)` | Wait by label |
-| REPL: `wait_for_not(selector, timeout_ms, label, type)` | Wait by label + type |
-| CLI: `qorvex wait-for-not <selector> --timeout 10000` | Wait for disappearance |
-| CLI: `qorvex wait-for-not <selector> --label --timeout 10000` | Wait by label |
+| `wait-for-not <selector>` | Wait for element to disappear by ID (uses `set-timeout` default, initially 5s) |
+| `wait-for-not <selector> --timeout 10000` | Custom timeout |
+| `wait-for-not <selector> --label` | Wait by label |
+| `wait-for-not <selector> --label --type Button` | Wait by label + type |
+
+Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
 Returns success as soon as the element is absent or not hittable. Fails with timeout if element persists.
 
@@ -99,9 +95,9 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Screenshot | `get_screenshot` | `qorvex screenshot` |
-| Screen info | `get_screen_info` | `qorvex screen-info` |
-| List elements | `list_elements` | — |
+| Screenshot | `get-screenshot` | `qorvex screenshot` |
+| Screen info | `get-screen-info` | `qorvex screen-info` |
+| List elements | `list-elements` | — |
 
 `qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. `qorvex get-value` prints the element value to stdout. Status messages go to stderr in pipe-delimited format. For `tap` and `get-value` (with auto-wait), two durations are reported: `|timestamp|Action|target|find_ms|action_ms|`. For other actions: `|timestamp|Action|target|duration|`.
 
@@ -109,19 +105,18 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 
 | Syntax | Description |
 |--------|-------------|
-| REPL: `get_value(selector)` | Get element value by ID |
-| REPL: `get_value(selector, label)` | Get by label |
-| REPL: `get_value(selector, --no-wait)` | Without waiting |
-| CLI: `qorvex get-value <selector>` | By ID |
-| CLI: `qorvex get-value <selector> --label` | By label |
-| CLI: `qorvex get-value <selector> --no-wait` | Without waiting |
+| `get-value <selector>` | Get element value by ID |
+| `get-value <selector> --label` | Get by label |
+| `get-value <selector> --no-wait` | Without waiting |
+
+Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
 ## Watcher
 
 | Command | REPL |
 |---------|------|
-| Start watcher | `start_watcher` or `start_watcher(interval_ms)` |
-| Stop watcher | `stop_watcher` |
+| Start watcher | `start-watcher` or `start-watcher <ms>` |
+| Stop watcher | `stop-watcher` |
 
 Default interval: 500ms. Detects both accessibility tree changes and visual changes (via perceptual hashing).
 
@@ -138,7 +133,7 @@ See [scripting-guide.md](scripting-guide.md) for full scripting details.
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Add comment | `log_comment(text)` | `qorvex comment "text"` |
+| Add comment | `log-comment <text>` | `qorvex comment "text"` |
 
 ## CLI-Specific Options
 
@@ -162,4 +157,4 @@ Selectors support glob matching:
 - `*` matches any number of characters
 - `?` matches exactly one character
 
-Example: `tap(login-*)` matches `login-button`, `login-field`, etc.
+Example: `tap login-*` matches `login-button`, `login-field`, etc.

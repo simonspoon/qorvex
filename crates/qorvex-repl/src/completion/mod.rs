@@ -8,6 +8,7 @@ use qorvex_core::simctl::SimulatorDevice;
 
 use self::commands::{find_command, commands_matching, ArgCompletion, CommandDef};
 use self::fuzzy::FuzzyFilter;
+use crate::app::shell_tokenize;
 
 /// The context in which completion is being performed.
 #[derive(Debug, Clone)]
@@ -18,6 +19,10 @@ pub enum CompletionContext {
     Argument {
         command: &'static CommandDef,
         arg_index: usize,
+    },
+    /// Completing a flag/option for a command.
+    Option {
+        command: &'static CommandDef,
     },
 }
 
@@ -135,6 +140,9 @@ impl CompletionState {
                     Vec::new()
                 }
             }
+            CompletionContext::Option { command } => {
+                option_candidates(&prefix, command, input)
+            }
         };
 
         self.visible = !self.candidates.is_empty();
@@ -144,33 +152,67 @@ impl CompletionState {
 
 /// Parse the completion context from input.
 fn parse_completion_context(input: &str) -> (CompletionContext, String) {
-    // Check if we're inside parentheses (completing an argument)
-    if let Some(paren_idx) = input.find('(') {
-        let cmd_name = input[..paren_idx].trim();
-        if let Some(cmd) = find_command(cmd_name) {
-            let args_part = &input[paren_idx + 1..];
-            // Count commas to determine which argument we're on
-            let arg_index = args_part.matches(',').count();
-            // Get the current argument prefix (text after last comma or opening paren)
-            let prefix = args_part
-                .rsplit(',')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
+    let trimmed = input.trim_start();
 
-            return (
-                CompletionContext::Argument {
-                    command: cmd,
-                    arg_index,
-                },
-                prefix,
-            );
-        }
+    // If no space yet, we're completing a command name
+    if !trimmed.contains(' ') {
+        return (CompletionContext::Command, trimmed.to_string());
     }
 
-    // Otherwise we're completing a command name
-    (CompletionContext::Command, input.to_string())
+    // Split into command + rest
+    let first_space = trimmed.find(' ').unwrap();
+    let cmd_name = &trimmed[..first_space];
+
+    if let Some(cmd) = find_command(cmd_name) {
+        // Get the prefix being typed (text after last space)
+        let prefix = trimmed.rsplit(' ').next().unwrap_or("").to_string();
+
+        // If prefix starts with "--", we're completing a flag
+        if prefix.starts_with('-') {
+            return (CompletionContext::Option { command: cmd }, prefix);
+        }
+
+        // Count positional args (non-flag tokens after command name) to determine arg_index
+        let tokens = shell_tokenize(trimmed);
+        // tokens[0] is the command, rest are args
+        // Count how many positional (non-flag) args are before the current prefix
+        let args_after_cmd = &tokens[1..];
+        let mut positional_count: usize = 0;
+        let mut i = 0;
+        while i < args_after_cmd.len() {
+            let tok = &args_after_cmd[i];
+            if tok.starts_with("--") {
+                // Check if this flag takes a value
+                if let Some(opt) = cmd.options.iter().find(|o| o.flag == tok.as_str()) {
+                    if opt.takes_value {
+                        i += 1; // skip the value token
+                    }
+                }
+            } else {
+                positional_count += 1;
+            }
+            i += 1;
+        }
+
+        // If input ends with a space and prefix is empty, we're starting a new arg
+        // If prefix is non-empty and not a flag, it's the current positional being typed
+        let arg_index = if prefix.is_empty() {
+            positional_count
+        } else {
+            positional_count.saturating_sub(1)
+        };
+
+        return (
+            CompletionContext::Argument {
+                command: cmd,
+                arg_index,
+            },
+            prefix,
+        );
+    }
+
+    // Unknown command, fall back to command completion
+    (CompletionContext::Command, trimmed.to_string())
 }
 
 /// Generate element ID completion candidates with fuzzy matching.
@@ -310,7 +352,7 @@ fn device_candidates(prefix: &str, devices: &[SimulatorDevice]) -> Vec<Candidate
 
 /// Quote a string if it contains characters that need escaping in command arguments.
 fn quote_if_needed(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\'') || s.contains('(') || s.contains(')') {
+    if s.contains(' ') || s.contains('"') || s.contains('\'') {
         // Escape any existing double quotes and wrap in double quotes
         format!("\"{}\"", s.replace('"', "\\\""))
     } else {
@@ -322,18 +364,15 @@ fn quote_if_needed(s: &str) -> String {
 ///
 /// Shows ALL elements (with identifier OR label) and composes appropriate arguments:
 /// - Unique identifier → `"the-id"`
-/// - Non-unique id + unique label → `"The Label", label`
-/// - Non-unique id + non-unique label → `"The Label", label, Type`
-/// - Non-unique id + no label → `"the-id", , Type`
-/// - Unique label (no id) → `"The Label", label`
-/// - Non-unique label (no id) → `"The Label", label, Type`
-///
-/// For `wait_for` command, label-based selectors include default timeout:
-/// - By label → `"The Label", 5000, label`
+/// - Non-unique id + unique label → `"The Label" --label`
+/// - Non-unique id + non-unique label → `"The Label" --label --type Type`
+/// - Non-unique id + no label → `"the-id" --type Type`
+/// - Unique label (no id) → `"The Label" --label`
+/// - Non-unique label (no id) → `"The Label" --label --type Type`
 fn element_selector_candidates(
     prefix: &str,
     elements: &[UIElement],
-    command_name: &str,
+    _command_name: &str,
 ) -> Vec<Candidate> {
     use std::collections::HashMap;
 
@@ -353,8 +392,6 @@ fn element_selector_candidates(
             }
         }
     }
-
-    let is_wait_for = command_name == "wait_for" || command_name == "wait_for_not";
 
     let mut candidates: Vec<Candidate> = elements
         .iter()
@@ -382,43 +419,26 @@ fn element_selector_candidates(
                     // Non-unique ID but has label: use label-based selection
                     let quoted_label = quote_if_needed(label);
                     if label_is_unique {
-                        let composed = if is_wait_for {
-                            format!("{}, 5000, label", quoted_label)
-                        } else {
-                            format!("{}, label", quoted_label)
-                        };
+                        let composed = format!("{} --label", quoted_label);
                         (composed, CandidateKind::ElementSelectorByLabel)
                     } else {
-                        let composed = if is_wait_for {
-                            format!("{}, 5000, label, {}", quoted_label, elem_type)
-                        } else {
-                            format!("{}, label, {}", quoted_label, elem_type)
-                        };
+                        let composed = format!("{} --label --type {}", quoted_label, elem_type);
                         (composed, CandidateKind::ElementSelectorByLabel)
                     }
                 } else {
                     // Non-unique ID, no label: use type for disambiguation (best effort)
-                    let composed = format!("{}, , {}", id, elem_type);
+                    let composed = format!("{} --type {}", id, elem_type);
                     (composed, CandidateKind::ElementSelectorById)
                 }
             } else if let Some(label) = label {
                 let quoted_label = quote_if_needed(label);
                 if label_is_unique {
                     // Unique label: selector, label flag
-                    let composed = if is_wait_for {
-                        // wait_for has timeout as arg 2, label as arg 3
-                        format!("{}, 5000, label", quoted_label)
-                    } else {
-                        format!("{}, label", quoted_label)
-                    };
+                    let composed = format!("{} --label", quoted_label);
                     (composed, CandidateKind::ElementSelectorByLabel)
                 } else {
                     // Non-unique label: add type for disambiguation
-                    let composed = if is_wait_for {
-                        format!("{}, 5000, label, {}", quoted_label, elem_type)
-                    } else {
-                        format!("{}, label, {}", quoted_label, elem_type)
-                    };
+                    let composed = format!("{} --label --type {}", quoted_label, elem_type);
                     (composed, CandidateKind::ElementSelectorByLabel)
                 }
             } else {
@@ -462,6 +482,38 @@ fn element_selector_candidates(
         .collect();
 
     // Sort by score descending
+    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates
+}
+
+/// Generate flag/option completion candidates.
+fn option_candidates(prefix: &str, command: &'static CommandDef, input: &str) -> Vec<Candidate> {
+    let filter = FuzzyFilter::new();
+
+    // Find which flags are already used in the input
+    let tokens = shell_tokenize(input);
+    let used_flags: Vec<&str> = tokens
+        .iter()
+        .filter(|t| t.starts_with("--"))
+        .map(|s| s.as_str())
+        .collect();
+
+    let mut candidates: Vec<Candidate> = command
+        .options
+        .iter()
+        .filter(|opt| !used_flags.contains(&opt.flag))
+        .filter_map(|opt| {
+            let (score, indices) = filter.score(prefix, opt.flag)?;
+            Some(Candidate {
+                text: opt.flag.to_string(),
+                description: opt.description.to_string(),
+                kind: CandidateKind::Command, // reuse Command kind for flags display
+                score,
+                match_indices: indices,
+            })
+        })
+        .collect();
+
     candidates.sort_by(|a, b| b.score.cmp(&a.score));
     candidates
 }

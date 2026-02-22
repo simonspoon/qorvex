@@ -12,6 +12,8 @@ pub struct CommandDef {
     pub description: &'static str,
     /// Argument specifications for the command.
     pub args: &'static [ArgSpec],
+    /// Option (flag) specifications for the command.
+    pub options: &'static [OptionSpec],
 }
 
 /// Specification for a command argument.
@@ -40,104 +42,130 @@ pub enum ArgCompletion {
     None,
 }
 
+/// Specification for a command option (flag).
+#[derive(Debug, Clone)]
+pub struct OptionSpec {
+    /// The flag name (e.g. "--label").
+    pub flag: &'static str,
+    /// Whether this flag takes a value (e.g. --timeout takes a number).
+    pub takes_value: bool,
+    /// Short description for the completion popup.
+    pub description: &'static str,
+}
+
 /// All available REPL commands.
 pub static COMMANDS: &[CommandDef] = &[
     // Session commands
     CommandDef {
-        name: "start_session",
+        name: "start-session",
         description: "Start a new session",
         args: &[],
+        options: &[],
     },
     CommandDef {
-        name: "end_session",
+        name: "end-session",
         description: "End the current session",
         args: &[],
+        options: &[],
     },
     CommandDef {
-        name: "get_session_info",
+        name: "get-session-info",
         description: "Get session information",
         args: &[],
+        options: &[],
     },
     // Device commands
     CommandDef {
-        name: "list_devices",
+        name: "list-devices",
         description: "List available simulators",
         args: &[],
+        options: &[],
     },
     CommandDef {
-        name: "use_device",
+        name: "use-device",
         description: "Select a simulator by UDID",
         args: &[ArgSpec {
             name: "udid",
             completion: ArgCompletion::DeviceUdid,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "boot_device",
+        name: "boot-device",
         description: "Boot a simulator",
         args: &[ArgSpec {
             name: "udid",
             completion: ArgCompletion::DeviceUdid,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "start_agent",
+        name: "start-agent",
         description: "Build/launch Swift agent",
         args: &[ArgSpec {
             name: "project_dir",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "stop_agent",
+        name: "stop-agent",
         description: "Stop managed agent process",
         args: &[],
+        options: &[],
     },
     CommandDef {
-        name: "set_target",
+        name: "set-target",
         description: "Set target app bundle ID",
         args: &[ArgSpec {
             name: "bundle_id",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "set_timeout",
+        name: "set-timeout",
         description: "Set default wait timeout (ms)",
         args: &[ArgSpec {
             name: "ms",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     // Screen commands
     CommandDef {
-        name: "get_screenshot",
+        name: "get-screenshot",
         description: "Capture a screenshot",
         args: &[],
+        options: &[],
     },
     CommandDef {
-        name: "get_screen_info",
+        name: "get-screen-info",
         description: "Get UI hierarchy as JSON",
         args: &[],
+        options: &[],
     },
     CommandDef {
-        name: "start_watcher",
+        name: "start-watcher",
         description: "Start screen change detection",
         args: &[ArgSpec {
             name: "interval_ms",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "stop_watcher",
+        name: "stop-watcher",
         description: "Stop screen change detection",
         args: &[],
+        options: &[],
     },
     // UI commands
     CommandDef {
-        name: "list_elements",
+        name: "list-elements",
         description: "List all UI elements",
         args: &[],
+        options: &[],
     },
     CommandDef {
         name: "tap",
@@ -146,6 +174,12 @@ pub static COMMANDS: &[CommandDef] = &[
             name: "selector",
             completion: ArgCompletion::ElementSelector,
         }],
+        options: &[
+            OptionSpec { flag: "--label", takes_value: false, description: "Match by label instead of ID" },
+            OptionSpec { flag: "--type", takes_value: true, description: "Filter by element type" },
+            OptionSpec { flag: "--no-wait", takes_value: false, description: "Skip auto-wait" },
+            OptionSpec { flag: "--timeout", takes_value: true, description: "Wait timeout in ms" },
+        ],
     },
     CommandDef {
         name: "swipe",
@@ -154,9 +188,10 @@ pub static COMMANDS: &[CommandDef] = &[
             name: "direction",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "tap_location",
+        name: "tap-location",
         description: "Tap at screen coordinates",
         args: &[
             ArgSpec {
@@ -168,58 +203,78 @@ pub static COMMANDS: &[CommandDef] = &[
                 completion: ArgCompletion::None,
             },
         ],
+        options: &[],
     },
     CommandDef {
-        name: "get_value",
+        name: "get-value",
         description: "Get an element's value",
         args: &[ArgSpec {
             name: "selector",
             completion: ArgCompletion::ElementSelector,
         }],
+        options: &[
+            OptionSpec { flag: "--label", takes_value: false, description: "Match by label instead of ID" },
+            OptionSpec { flag: "--type", takes_value: true, description: "Filter by element type" },
+            OptionSpec { flag: "--no-wait", takes_value: false, description: "Skip auto-wait" },
+        ],
     },
     CommandDef {
-        name: "wait_for",
+        name: "wait-for",
         description: "Wait for element to appear",
         args: &[ArgSpec {
             name: "selector",
             completion: ArgCompletion::ElementSelector,
         }],
+        options: &[
+            OptionSpec { flag: "--label", takes_value: false, description: "Match by label instead of ID" },
+            OptionSpec { flag: "--type", takes_value: true, description: "Filter by element type" },
+            OptionSpec { flag: "--timeout", takes_value: true, description: "Wait timeout in ms" },
+        ],
     },
     CommandDef {
-        name: "wait_for_not",
+        name: "wait-for-not",
         description: "Wait for element to disappear",
         args: &[ArgSpec {
             name: "selector",
             completion: ArgCompletion::ElementSelector,
         }],
+        options: &[
+            OptionSpec { flag: "--label", takes_value: false, description: "Match by label instead of ID" },
+            OptionSpec { flag: "--type", takes_value: true, description: "Filter by element type" },
+            OptionSpec { flag: "--timeout", takes_value: true, description: "Wait timeout in ms" },
+        ],
     },
     // Input commands
     CommandDef {
-        name: "send_keys",
+        name: "send-keys",
         description: "Send keyboard input",
         args: &[ArgSpec {
             name: "text",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     CommandDef {
-        name: "log_comment",
+        name: "log-comment",
         description: "Log a comment to session",
         args: &[ArgSpec {
             name: "message",
             completion: ArgCompletion::None,
         }],
+        options: &[],
     },
     // General commands
     CommandDef {
         name: "help",
         description: "Show help message",
         args: &[],
+        options: &[],
     },
     CommandDef {
         name: "quit",
         description: "Exit the REPL",
         args: &[],
+        options: &[],
     },
 ];
 

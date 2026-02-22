@@ -273,25 +273,28 @@ impl App {
             let kind = candidate.kind;
             let current = self.input.value().to_string();
 
-            // Find where to insert the completion
-            let new_value = if let Some(paren_idx) = current.rfind('(') {
-                let before_paren = &current[..=paren_idx];
-                let args_part = &current[paren_idx + 1..];
-
-                // For ElementSelector kinds, replace ALL arguments (the composed text contains everything)
-                if matches!(kind, CandidateKind::ElementSelectorById | CandidateKind::ElementSelectorByLabel) {
-                    format!("{}{}", before_paren, text)
+            let new_value = if matches!(kind, CandidateKind::Command) {
+                // Completing a command name — replace entire input
+                text
+            } else if matches!(kind, CandidateKind::ElementSelectorById | CandidateKind::ElementSelectorByLabel) {
+                // Smart selector: replace everything after command name
+                if let Some(first_space) = current.find(' ') {
+                    format!("{} {}", &current[..first_space], text)
                 } else {
-                    // Find the last comma or start of args
-                    if let Some(comma_idx) = args_part.rfind(',') {
-                        format!("{}{}, {}", before_paren, &args_part[..comma_idx], text)
-                    } else {
-                        format!("{}{}", before_paren, text)
-                    }
+                    text
                 }
             } else {
-                // Completing a command name
-                text
+                // Completing a single argument or flag: replace last space-separated token
+                let quoted = if text.contains(' ') || text.contains('"') || text.contains('\'') {
+                    format!("\"{}\"", text.replace('"', "\\\""))
+                } else {
+                    text
+                };
+                if let Some(last_space) = current.rfind(' ') {
+                    format!("{} {}", &current[..last_space], quoted)
+                } else {
+                    quoted
+                }
             };
 
             self.input = Input::new(new_value);
@@ -402,65 +405,63 @@ impl App {
 
         // Map command to IPC request
         let request = match cmd.as_str() {
-            "start_session" => IpcRequest::StartSession,
-            "end_session" => IpcRequest::EndSession,
-            "list_devices" => IpcRequest::ListDevices,
-            "use_device" => IpcRequest::UseDevice {
-                udid: args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default(),
+            "start-session" => IpcRequest::StartSession,
+            "end-session" => IpcRequest::EndSession,
+            "list-devices" => IpcRequest::ListDevices,
+            "use-device" => IpcRequest::UseDevice {
+                udid: args.positional.first().cloned().unwrap_or_default(),
             },
-            "boot_device" => IpcRequest::BootDevice {
-                udid: args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default(),
+            "boot-device" => IpcRequest::BootDevice {
+                udid: args.positional.first().cloned().unwrap_or_default(),
             },
-            "start_agent" => IpcRequest::StartAgent {
-                project_dir: args.first().map(|s| strip_quotes(s).to_string()),
+            "start-agent" => IpcRequest::StartAgent {
+                project_dir: args.positional.first().cloned(),
             },
-            "stop_agent" => IpcRequest::StopAgent,
-            "set_target" => IpcRequest::SetTarget {
-                bundle_id: args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default(),
+            "stop-agent" => IpcRequest::StopAgent,
+            "set-target" => IpcRequest::SetTarget {
+                bundle_id: args.positional.first().cloned().unwrap_or_default(),
             },
-            "set_timeout" => {
-                let ms_str = args.first().map(|s| s.trim()).unwrap_or("");
+            "set-timeout" => {
+                let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
                     IpcRequest::GetTimeout
                 } else {
                     match ms_str.parse::<u64>() {
                         Ok(ms) => IpcRequest::SetTimeout { timeout_ms: ms },
                         Err(_) => {
-                            self.add_output(format_result(false, "set_timeout requires a number in milliseconds"));
+                            self.add_output(format_result(false, "set-timeout requires a number in milliseconds"));
                             return;
                         }
                     }
                 }
             },
-            "start_watcher" => IpcRequest::StartWatcher {
-                interval_ms: args.first().and_then(|s| s.parse().ok()),
+            "start-watcher" => IpcRequest::StartWatcher {
+                interval_ms: args.positional.first().and_then(|s| s.parse().ok()),
             },
-            "stop_watcher" => IpcRequest::StopWatcher,
-            "get_session_info" => IpcRequest::GetSessionInfo,
-            "get_screenshot" => IpcRequest::Execute {
+            "stop-watcher" => IpcRequest::StopWatcher,
+            "get-session-info" => IpcRequest::GetSessionInfo,
+            "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
             },
-            "list_elements" | "get_screen_info" => IpcRequest::Execute {
+            "list-elements" | "get-screen-info" => IpcRequest::Execute {
                 action: ActionType::GetScreenInfo,
             },
             "tap" => {
-                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
-                let filtered: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
-                let selector = filtered.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "tap requires at least 1 argument: tap(selector)"));
+                    self.add_output(format_result(false, "tap requires a selector: tap <selector>"));
                     return;
                 }
-                let by_label = filtered.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                let element_type = filtered.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-                if !no_wait {
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
+                if !args.no_wait {
                     if let Some(ref mut client) = self.client {
                         let wait_req = IpcRequest::Execute {
                             action: ActionType::WaitFor {
                                 selector: selector.clone(),
                                 by_label,
                                 element_type: element_type.clone(),
-                                timeout_ms: 5000,
+                                timeout_ms: args.timeout.unwrap_or(5000),
                                 require_stable: false,
                             },
                         };
@@ -487,15 +488,15 @@ impl App {
             },
             "swipe" => IpcRequest::Execute {
                 action: ActionType::Swipe {
-                    direction: args.first().map(|s| s.trim().to_lowercase()).unwrap_or_else(|| "up".to_string()),
+                    direction: args.positional.first().map(|s| s.to_lowercase()).unwrap_or_else(|| "up".to_string()),
                 },
             },
-            "tap_location" => {
-                if args.len() < 2 {
-                    self.add_output(format_result(false, "tap_location requires 2 arguments: tap_location(x, y)"));
+            "tap-location" => {
+                if args.positional.len() < 2 {
+                    self.add_output(format_result(false, "tap-location requires 2 arguments: tap-location <x> <y>"));
                     return;
                 }
-                match (args[0].parse::<i32>(), args[1].parse::<i32>()) {
+                match (args.positional[0].parse::<i32>(), args.positional[1].parse::<i32>()) {
                     (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
                         action: ActionType::TapLocation { x, y },
                     },
@@ -505,60 +506,58 @@ impl App {
                     }
                 }
             },
-            "wait_for" => {
-                let selector = args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+            "wait-for" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "wait_for requires at least 1 argument"));
+                    self.add_output(format_result(false, "wait-for requires a selector: wait-for <selector>"));
                     return;
                 }
-                let timeout_ms = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5000);
-                let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let timeout_ms = args.timeout.unwrap_or(5000);
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitFor { selector, by_label, element_type, timeout_ms, require_stable: true },
                 }
             },
-            "wait_for_not" => {
-                let selector = args.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+            "wait-for-not" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "wait_for_not requires at least 1 argument"));
+                    self.add_output(format_result(false, "wait-for-not requires a selector: wait-for-not <selector>"));
                     return;
                 }
-                let timeout_ms = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5000);
-                let by_label = args.get(2).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                let element_type = args.get(3).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let timeout_ms = args.timeout.unwrap_or(5000);
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitForNot { selector, by_label, element_type, timeout_ms },
                 }
             },
-            "send_keys" => {
-                let text = args.join(" ");
+            "send-keys" => {
+                let text = args.positional.join(" ");
                 if text.is_empty() {
-                    self.add_output(format_result(false, "send_keys requires text"));
+                    self.add_output(format_result(false, "send-keys requires text: send-keys <text>"));
                     return;
                 }
                 IpcRequest::Execute {
                     action: ActionType::SendKeys { text },
                 }
             },
-            "get_value" => {
-                let no_wait = args.iter().any(|s| s.trim() == "--no-wait");
-                let filtered: Vec<String> = args.iter().filter(|s| s.trim() != "--no-wait").cloned().collect();
-                let selector = filtered.first().map(|s| strip_quotes(s).to_string()).unwrap_or_default();
+            "get-value" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "get_value requires at least 1 argument"));
+                    self.add_output(format_result(false, "get-value requires a selector: get-value <selector>"));
                     return;
                 }
-                let by_label = filtered.get(1).map(|s| s.trim().to_lowercase() == "label").unwrap_or(false);
-                let element_type = filtered.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-                if !no_wait {
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
+                if !args.no_wait {
                     if let Some(ref mut client) = self.client {
                         let wait_req = IpcRequest::Execute {
                             action: ActionType::WaitFor {
                                 selector: selector.clone(),
                                 by_label,
                                 element_type: element_type.clone(),
-                                timeout_ms: 5000,
+                                timeout_ms: args.timeout.unwrap_or(5000),
                                 require_stable: false,
                             },
                         };
@@ -583,10 +582,10 @@ impl App {
                     action: ActionType::GetValue { selector, by_label, element_type },
                 }
             },
-            "log_comment" => {
-                let message = args.join(" ");
+            "log-comment" => {
+                let message = args.positional.join(" ");
                 if message.is_empty() {
-                    self.add_output(format_result(false, "log_comment requires a message"));
+                    self.add_output(format_result(false, "log-comment requires a message: log-comment <message>"));
                     return;
                 }
                 IpcRequest::Execute {
@@ -618,7 +617,7 @@ impl App {
             }
             IpcResponse::ActionResult { success, message, data, .. } => {
                 match cmd {
-                    "list_elements" | "get_screen_info" => {
+                    "list-elements" | "get-screen-info" => {
                         if success {
                             if let Some(ref data) = data {
                                 if let Ok(elements) = serde_json::from_str::<Vec<UIElement>>(data) {
@@ -633,7 +632,7 @@ impl App {
                         }
                         self.add_output(format_result(success, &message));
                     }
-                    "get_value" => {
+                    "get-value" => {
                         if success {
                             let value = data.unwrap_or_else(|| "(null)".to_string());
                             self.add_output(format_result(true, &format!("Value: {}", value)));
@@ -641,7 +640,7 @@ impl App {
                             self.add_output(format_result(false, &message));
                         }
                     }
-                    "get_screenshot" => {
+                    "get-screenshot" => {
                         if success {
                             let byte_count = data.as_ref().map(|d| d.len() * 3 / 4).unwrap_or(0);
                             self.add_output(format_result(true, &format!("{} bytes (base64 logged)", byte_count)));
@@ -649,7 +648,7 @@ impl App {
                             self.add_output(format_result(false, &message));
                         }
                     }
-                    "wait_for" | "wait_for_not" => {
+                    "wait-for" | "wait-for-not" => {
                         if success {
                             self.add_output(format_result(true, &format!("{} ({})", message, data.unwrap_or_default())));
                         } else {
@@ -695,52 +694,41 @@ impl App {
         let help_lines = [
             "",
             "Session:",
-            "  start_session          Start a new session",
-            "  end_session            End the current session",
-            "  get_session_info       Get current session information",
+            "  start-session            Start a new session",
+            "  end-session              End the current session",
+            "  get-session-info         Get current session information",
             "",
             "Device:",
-            "  list_devices           List available simulators",
-            "  use_device(udid)       Select a simulator by UDID",
-            "  boot_device(udid)      Boot a simulator",
-            "  start_agent            Connect to externally-started agent",
-            "  start_agent(path)      Build and launch agent from project dir",
-            "  stop_agent             Stop managed agent process",
-            "  set_target(bundle_id)  Set target app for automation",
-            "  set_timeout(ms)        Set default wait timeout (ms)",
+            "  list-devices             List available simulators",
+            "  use-device <udid>        Select a simulator by UDID",
+            "  boot-device <udid>       Boot a simulator",
+            "  start-agent [path]       Connect to / build+launch agent",
+            "  stop-agent               Stop managed agent process",
+            "  set-target <bundle_id>   Set target app for automation",
+            "  set-timeout [ms]         Set/get default wait timeout",
             "",
             "Screen:",
-            "  get_screenshot         Capture a screenshot (base64 PNG)",
-            "  get_screen_info        Get UI hierarchy",
-            "  start_watcher          Auto-detect screen changes (500ms)",
-            "  start_watcher(ms)      Auto-detect with custom interval",
-            "  stop_watcher           Stop screen change detection",
+            "  get-screenshot           Capture a screenshot (base64 PNG)",
+            "  get-screen-info          Get UI hierarchy",
+            "  start-watcher [ms]       Auto-detect screen changes (default 500ms)",
+            "  stop-watcher             Stop screen change detection",
             "",
             "UI:",
-            "  list_elements          List all UI elements",
-            "  tap(selector)          Tap element by ID (waits 5s)",
-            "  tap(sel, label)        Tap element by label (waits 5s)",
-            "  tap(sel, label, type)  Tap by label + type (waits 5s)",
-            "  tap(sel, --no-wait)    Tap without waiting",
-            "  swipe()                Swipe up (default)",
-            "  swipe(direction)       Swipe: up, down, left, right",
-            "  tap_location(x, y)     Tap at screen coordinates",
-            "  get_value(selector)    Get element value by ID (waits 5s)",
-            "  get_value(sel, label)  Get element value by label (waits 5s)",
-            "  get_value(s, --no-wait) Get value without waiting",
-            "  wait_for(selector)     Wait for element (5s timeout)",
-            "  wait_for(sel, ms)      Wait with custom timeout",
-            "  wait_for(sel,ms,label) Wait by label with timeout",
-            "  wait_for_not(selector) Wait for element to disappear (5s)",
-            "  wait_for_not(sel, ms)  Wait for disappearance with timeout",
+            "  list-elements            List all UI elements",
+            "  tap <sel> [--label] [--type T] [--no-wait] [--timeout ms]",
+            "  swipe [direction]        Swipe: up, down, left, right",
+            "  tap-location <x> <y>    Tap at screen coordinates",
+            "  get-value <sel> [--label] [--type T] [--no-wait]",
+            "  wait-for <sel> [--label] [--type T] [--timeout ms]",
+            "  wait-for-not <sel> [--label] [--type T] [--timeout ms]",
             "",
             "Input:",
-            "  send_keys(text)        Send keyboard input",
-            "  log_comment(message)   Log a comment to the session",
+            "  send-keys <text>         Send keyboard input",
+            "  log-comment <message>    Log a comment to the session",
             "",
             "General:",
-            "  help                   Show this help message",
-            "  quit                   Exit the REPL",
+            "  help                     Show this help message",
+            "  quit                     Exit the REPL",
             "",
         ];
 
@@ -750,72 +738,23 @@ impl App {
     }
 }
 
-/// Parse a command string into command name and arguments.
-pub(crate) fn parse_command(input: &str) -> (String, Vec<String>) {
-    let Some(paren_idx) = input.find('(') else {
-        return (input.to_string(), vec![]);
-    };
-
-    let cmd = input[..paren_idx].trim().to_string();
-    let after_paren = &input[paren_idx + 1..];
-    let args_str = find_matching_paren_content(after_paren);
-    let args_str = args_str.trim();
-
-    if args_str.is_empty() {
-        return (cmd, vec![]);
-    }
-
-    let args = split_args(args_str);
-    (cmd, args)
+/// Parsed arguments from CLI-style command input.
+pub(crate) struct ParsedArgs {
+    pub positional: Vec<String>,
+    pub label: bool,
+    pub no_wait: bool,
+    pub timeout: Option<u64>,
+    pub element_type: Option<String>,
 }
 
-pub(crate) fn find_matching_paren_content(s: &str) -> &str {
-    let mut depth = 1;
-    let mut in_double_quote = false;
-    let mut in_single_quote = false;
-    let mut prev_was_escape = false;
-
-    for (i, c) in s.char_indices() {
-        if prev_was_escape {
-            prev_was_escape = false;
-            continue;
-        }
-
-        match c {
-            '\\' if in_double_quote || in_single_quote => {
-                prev_was_escape = true;
-            }
-            '"' if !in_single_quote => {
-                in_double_quote = !in_double_quote;
-            }
-            '\'' if !in_double_quote => {
-                in_single_quote = !in_single_quote;
-            }
-            '(' if !in_double_quote && !in_single_quote => {
-                depth += 1;
-            }
-            ')' if !in_double_quote && !in_single_quote => {
-                depth -= 1;
-                if depth == 0 {
-                    return &s[..i];
-                }
-            }
-            _ => {}
-        }
-    }
-
-    s.trim_end_matches(')')
-}
-
-pub(crate) fn split_args(s: &str) -> Vec<String> {
-    let mut args = Vec::new();
+/// Tokenize input using shell-style rules: split on whitespace, respect double quotes.
+pub(crate) fn shell_tokenize(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
     let mut current = String::new();
-    let mut depth = 0;
-    let mut in_double_quote = false;
-    let mut in_single_quote = false;
+    let mut in_quote = false;
     let mut prev_was_escape = false;
 
-    for c in s.chars() {
+    for c in input.chars() {
         if prev_was_escape {
             current.push(c);
             prev_was_escape = false;
@@ -823,29 +762,16 @@ pub(crate) fn split_args(s: &str) -> Vec<String> {
         }
 
         match c {
-            '\\' if in_double_quote || in_single_quote => {
+            '\\' if in_quote => {
                 prev_was_escape = true;
-                current.push(c);
             }
-            '"' if !in_single_quote => {
-                in_double_quote = !in_double_quote;
-                current.push(c);
+            '"' => {
+                in_quote = !in_quote;
             }
-            '\'' if !in_double_quote => {
-                in_single_quote = !in_single_quote;
-                current.push(c);
-            }
-            '(' if !in_double_quote && !in_single_quote => {
-                depth += 1;
-                current.push(c);
-            }
-            ')' if !in_double_quote && !in_single_quote => {
-                depth -= 1;
-                current.push(c);
-            }
-            ',' if depth == 0 && !in_double_quote && !in_single_quote => {
-                args.push(current.trim().to_string());
-                current = String::new();
+            c if c.is_whitespace() && !in_quote => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
             }
             _ => {
                 current.push(c);
@@ -853,12 +779,44 @@ pub(crate) fn split_args(s: &str) -> Vec<String> {
         }
     }
 
-    let trimmed = current.trim().to_string();
-    if !trimmed.is_empty() {
-        args.push(trimmed);
+    if !current.is_empty() {
+        tokens.push(current);
     }
 
-    args
+    tokens
+}
+
+/// Parse a command string into command name and parsed arguments.
+pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
+    let tokens = shell_tokenize(input);
+    let cmd = tokens.first().cloned().unwrap_or_default();
+
+    let mut args = ParsedArgs {
+        positional: Vec::new(),
+        label: false,
+        no_wait: false,
+        timeout: None,
+        element_type: None,
+    };
+
+    let mut iter = tokens.into_iter().skip(1);
+    while let Some(tok) = iter.next() {
+        match tok.as_str() {
+            "--label" => args.label = true,
+            "--no-wait" => args.no_wait = true,
+            "--timeout" => {
+                if let Some(val) = iter.next() {
+                    args.timeout = val.parse().ok();
+                }
+            }
+            "--type" => {
+                args.element_type = iter.next();
+            }
+            _ => args.positional.push(tok),
+        }
+    }
+
+    (cmd, args)
 }
 
 /// Strip surrounding quotes from a string if present.
@@ -875,65 +833,46 @@ pub(crate) fn strip_quotes(s: &str) -> &str {
 mod tests {
     use super::*;
 
+    // --- parse_command tests (updated for new CLI-style syntax) ---
+
     #[test]
     fn test_parse_command_simple() {
         let (cmd, args) = parse_command("help");
         assert_eq!(cmd, "help");
-        assert!(args.is_empty());
+        assert!(args.positional.is_empty());
     }
 
     #[test]
     fn test_parse_command_single_arg() {
-        let (cmd, args) = parse_command("tap(button1)");
+        let (cmd, args) = parse_command("tap button1");
         assert_eq!(cmd, "tap");
-        assert_eq!(args, vec!["button1"]);
+        assert_eq!(args.positional, vec!["button1"]);
     }
 
     #[test]
     fn test_parse_command_multiple_args() {
-        let (cmd, args) = parse_command("wait_for(btn, 5000, label)");
-        assert_eq!(cmd, "wait_for");
-        assert_eq!(args, vec!["btn", "5000", "label"]);
+        let (cmd, args) = parse_command("wait-for btn --timeout 5000 --label");
+        assert_eq!(cmd, "wait-for");
+        assert_eq!(args.positional, vec!["btn"]);
+        assert_eq!(args.timeout, Some(5000));
+        assert!(args.label);
     }
 
     #[test]
-    fn test_parse_command_empty_parens() {
-        let (cmd, args) = parse_command("swipe()");
-        assert_eq!(cmd, "swipe");
-        assert!(args.is_empty());
-    }
-
-    #[test]
-    fn test_parse_command_nested_parens() {
-        // Nested parens should be handled by depth tracking
-        let (cmd, args) = parse_command("tap(foo(bar))");
+    fn test_parse_command_quoted_arg() {
+        let (cmd, args) = parse_command(r#"tap "my button""#);
         assert_eq!(cmd, "tap");
-        assert_eq!(args, vec!["foo(bar)"]);
+        assert_eq!(args.positional, vec!["my button"]);
     }
 
     #[test]
-    fn test_split_args_simple() {
-        let args = split_args("a, b, c");
-        assert_eq!(args, vec!["a", "b", "c"]);
+    fn test_parse_command_whitespace_around_cmd() {
+        let (cmd, args) = parse_command("  tap  button1");
+        assert_eq!(cmd, "tap");
+        assert_eq!(args.positional, vec!["button1"]);
     }
 
-    #[test]
-    fn test_split_args_quoted() {
-        let args = split_args(r#""quoted, arg", other"#);
-        assert_eq!(args, vec!["\"quoted, arg\"", "other"]);
-    }
-
-    #[test]
-    fn test_split_args_single() {
-        let args = split_args("only_one");
-        assert_eq!(args, vec!["only_one"]);
-    }
-
-    #[test]
-    fn test_split_args_empty() {
-        let args = split_args("");
-        assert!(args.is_empty());
-    }
+    // --- strip_quotes tests (kept as-is) ---
 
     #[test]
     fn test_strip_quotes_double() {
@@ -955,29 +894,77 @@ mod tests {
         assert_eq!(strip_quotes("  \"hello\"  "), "hello");
     }
 
+    // --- New flag / argument tests ---
+
     #[test]
-    fn test_parse_command_quoted_arg() {
-        let (cmd, args) = parse_command(r#"tap("my button")"#);
+    fn test_parse_command_label_flag() {
+        let (cmd, args) = parse_command("tap \"Sign In\" --label");
         assert_eq!(cmd, "tap");
-        assert_eq!(args, vec!["\"my button\""]);
+        assert_eq!(args.positional, vec!["Sign In"]);
+        assert!(args.label);
+        assert!(!args.no_wait);
     }
 
     #[test]
-    fn test_parse_command_whitespace_around_cmd() {
-        let (cmd, args) = parse_command("  tap  (button1)");
+    fn test_parse_command_all_flags() {
+        let (cmd, args) = parse_command("tap \"Sign In\" --label --type Button --no-wait --timeout 3000");
         assert_eq!(cmd, "tap");
-        assert_eq!(args, vec!["button1"]);
+        assert_eq!(args.positional, vec!["Sign In"]);
+        assert!(args.label);
+        assert!(args.no_wait);
+        assert_eq!(args.timeout, Some(3000));
+        assert_eq!(args.element_type, Some("Button".to_string()));
     }
 
     #[test]
-    fn test_find_matching_paren_content_nested() {
-        let content = find_matching_paren_content("foo(bar), baz)extra");
-        assert_eq!(content, "foo(bar), baz");
+    fn test_parse_command_no_flags() {
+        let (cmd, args) = parse_command("tap button1");
+        assert_eq!(cmd, "tap");
+        assert_eq!(args.positional, vec!["button1"]);
+        assert!(!args.label);
+        assert!(!args.no_wait);
+        assert_eq!(args.timeout, None);
+        assert_eq!(args.element_type, None);
     }
 
     #[test]
-    fn test_find_matching_paren_content_simple() {
-        let content = find_matching_paren_content("hello)world");
-        assert_eq!(content, "hello");
+    fn test_parse_command_timeout_flag() {
+        let (cmd, args) = parse_command("wait-for element --timeout 10000");
+        assert_eq!(cmd, "wait-for");
+        assert_eq!(args.positional, vec!["element"]);
+        assert_eq!(args.timeout, Some(10000));
+    }
+
+    // --- shell_tokenize tests ---
+
+    #[test]
+    fn test_shell_tokenize_basic() {
+        let tokens = shell_tokenize("tap button1");
+        assert_eq!(tokens, vec!["tap", "button1"]);
+    }
+
+    #[test]
+    fn test_shell_tokenize_quoted() {
+        let tokens = shell_tokenize(r#"tap "my button" --label"#);
+        assert_eq!(tokens, vec!["tap", "my button", "--label"]);
+    }
+
+    #[test]
+    fn test_shell_tokenize_empty() {
+        let tokens = shell_tokenize("");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_shell_tokenize_extra_spaces() {
+        let tokens = shell_tokenize("  tap   button1  ");
+        assert_eq!(tokens, vec!["tap", "button1"]);
+    }
+
+    #[test]
+    fn test_parse_command_send_keys_multiple_words() {
+        let (cmd, args) = parse_command("send-keys hello world");
+        assert_eq!(cmd, "send-keys");
+        assert_eq!(args.positional, vec!["hello", "world"]);
     }
 }

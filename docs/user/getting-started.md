@@ -49,8 +49,8 @@ qorvex-repl
 In the REPL:
 
 ```
-list_devices
-boot_device(<udid>)
+list-devices
+boot-device <udid>
 ```
 
 Or boot from Terminal first: `xcrun simctl boot "iPhone 16"`
@@ -58,19 +58,19 @@ Or boot from Terminal first: `xcrun simctl boot "iPhone 16"`
 ### 2. Start the Agent
 
 ```
-start_agent
+start-agent
 ```
 
 This auto-builds and launches the Swift agent if `install.sh` was run. Otherwise provide the path:
 
 ```
-start_agent(/path/to/qorvex/qorvex-agent)
+start-agent /path/to/qorvex/qorvex-agent
 ```
 
 ### 3. Start a Session
 
 ```
-start_session
+start-session
 ```
 
 This begins logging actions and enables the watcher and IPC server.
@@ -78,13 +78,13 @@ This begins logging actions and enables the watcher and IPC server.
 ### 4. Interact with the UI
 
 ```
-get_screen_info
-tap(some-button-id)
-send_keys(hello world)
-swipe(down)
-wait_for(loading-spinner, 10000)
-get_value(status-label)
-get_screenshot
+get-screen-info
+tap some-button-id
+send-keys "hello world"
+swipe down
+wait-for loading-spinner --timeout 10000
+get-value status-label
+get-screenshot
 ```
 
 ### 5. Monitor with Live TUI
@@ -104,7 +104,7 @@ Shows a live video feed of the Simulator window and the action log from your REP
 |---|---|---|
 | Connection | Direct TCP on localhost:8080 | USB tunnel via usbmuxd |
 | Setup | Boot simulator, start agent | Connect via USB, enable developer mode |
-| REPL command | `boot_device(udid)` | `use_device(udid)` |
+| REPL command | `boot-device <udid>` | `use-device <udid>` |
 | Performance | Fast | Slightly slower (USB overhead) |
 
 ## What Gets Created

@@ -57,7 +57,7 @@ qorvex-repl
 For non-interactive use (CI, scripting, testing), use batch mode:
 
 ```bash
-echo -e "help\nlist_devices\nquit" | qorvex-repl --batch -s default
+echo -e "help\nlist-devices\nquit" | qorvex-repl --batch -s default
 ```
 
 Batch mode reads commands from stdin, prints plain text to stdout, and exits on EOF or `quit`.
@@ -78,41 +78,42 @@ Controls:
 - Scroll wheel — Scroll output area
 
 Available commands:
-- `list_devices` — List all available simulators
-- `use_device(udid)` — Select a simulator to use
-- `boot_device(udid)` — Boot and select a simulator
-- `start_agent` — Start agent using configured source dir, or connect to external agent
-- `start_agent(path)` — Build and launch Swift agent from project directory
-- `stop_agent` — Stop a managed agent process
-- `set_target(bundle_id)` — Set target app bundle ID
-- `set_timeout(ms)` — Set default timeout for tap/wait operations (default: 5000ms); no arg prints current value
-- `start_session` — Begin a new session (auto-starts agent if configured)
-- `end_session` — End the current session
-- `get_session_info` — Get session status info
-- `tap(selector)` — Tap element by accessibility ID
-- `tap(selector, label)` — Tap element by label (pass "label" as 2nd arg)
-- `tap(selector, label, type)` — Tap element by label with type filter
-- `tap(selector, --no-wait)` — Tap without waiting for element
-- `tap_location(x, y)` — Tap at screen coordinates
-- `swipe()` — Swipe up (default)
-- `swipe(direction)` — Swipe in a direction: up, down, left, right
-- `send_keys(text)` — Type text into the focused field
-- `wait_for(selector)` — Wait for element by ID (5s default timeout)
-- `wait_for(selector, timeout_ms)` — Wait with custom timeout
-- `wait_for(selector, timeout_ms, label)` — Wait for element by label
-- `wait_for(selector, timeout_ms, label, type)` — Wait for element by label with type filter
-- `wait_for_not(selector)` — Wait for element to disappear (5s default timeout)
-- `wait_for_not(selector, timeout_ms)` — Wait for disappearance with custom timeout
-- `get_screenshot` — Capture current screen
-- `get_screen_info` — Get UI hierarchy information
-- `list_elements` — List actionable UI elements
-- `get_value(selector)` — Get element's value by ID
-- `get_value(selector, label)` — Get element's value by label
-- `get_value(selector, --no-wait)` — Get value without waiting for element
-- `log_comment(text)` — Add a comment to the action log
-- `start_watcher` — Start screen change detection (500ms default)
-- `start_watcher(interval_ms)` — Start with custom polling interval
-- `stop_watcher` — Stop screen change detection
+- `list-devices` — List all available simulators
+- `use-device <udid>` — Select a simulator to use
+- `boot-device <udid>` — Boot and select a simulator
+- `start-agent` — Start agent using configured source dir, or connect to external agent
+- `start-agent <path>` — Build and launch Swift agent from project directory
+- `stop-agent` — Stop a managed agent process
+- `set-target <bundle_id>` — Set target app bundle ID
+- `set-timeout <ms>` — Set default timeout for tap/wait operations (default: 5000ms); no arg prints current value
+- `start-session` — Begin a new session (auto-starts agent if configured)
+- `end-session` — End the current session
+- `get-session-info` — Get session status info
+- `tap <selector>` — Tap element by accessibility ID
+- `tap <selector> --label` — Tap element by label
+- `tap <selector> --label --type <type>` — Tap element by label with type filter
+- `tap <selector> --no-wait` — Tap without waiting for element
+- `tap <selector> --timeout <ms>` — Tap with custom timeout
+- `tap-location <x> <y>` — Tap at screen coordinates
+- `swipe` — Swipe up (default)
+- `swipe <direction>` — Swipe in a direction: up, down, left, right
+- `send-keys <text>` — Type text into the focused field
+- `wait-for <selector>` — Wait for element by ID (5s default timeout)
+- `wait-for <selector> --timeout <ms>` — Wait with custom timeout
+- `wait-for <selector> --label` — Wait for element by label
+- `wait-for <selector> --label --type <type>` — Wait for element by label with type filter
+- `wait-for-not <selector>` — Wait for element to disappear (5s default timeout)
+- `wait-for-not <selector> --timeout <ms>` — Wait for disappearance with custom timeout
+- `get-screenshot` — Capture current screen
+- `get-screen-info` — Get UI hierarchy information
+- `list-elements` — List actionable UI elements
+- `get-value <selector>` — Get element's value by ID
+- `get-value <selector> --label` — Get element's value by label
+- `get-value <selector> --no-wait` — Get value without waiting for element
+- `log-comment <text>` — Add a comment to the action log
+- `start-watcher` — Start screen change detection (500ms default)
+- `start-watcher <ms>` — Start with custom polling interval
+- `stop-watcher` — Stop screen change detection
 - `help` — Show available commands
 - `quit` — Exit
 
@@ -308,7 +309,7 @@ Qorvex stores runtime files in `~/.qorvex/`:
     └── my-session_20250101_130000.jsonl
 ```
 
-- **Config** (`~/.qorvex/config.json`) — Persistent settings. Currently stores `agent_source_dir` so that `start_session` and `start_agent` can auto-build the Swift agent. Written by `install.sh`.
+- **Config** (`~/.qorvex/config.json`) — Persistent settings. Currently stores `agent_source_dir` so that `start-session` and `start-agent` can auto-build the Swift agent. Written by `install.sh`.
 - **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Live TUI use these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.
 
