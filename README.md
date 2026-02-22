@@ -54,6 +54,14 @@ Start an interactive TUI session:
 qorvex-repl
 ```
 
+For non-interactive use (CI, scripting, testing), use batch mode:
+
+```bash
+echo -e "help\nlist_devices\nquit" | qorvex-repl --batch -s default
+```
+
+Batch mode reads commands from stdin, prints plain text to stdout, and exits on EOF or `quit`.
+
 The REPL provides a terminal UI with:
 - Tab completion for commands, element IDs, and device UDIDs
 - Output history with scrolling (arrow keys)
@@ -116,6 +124,7 @@ Monitor a session in real-time with a live video feed and action log:
 qorvex-live            # live feed at 15 fps (default)
 qorvex-live --fps 30   # higher frame rate
 qorvex-live --no-streamer  # polling fallback (no Screen Recording permission needed)
+qorvex-live --batch --duration 10  # print session events as JSONL for 10 seconds
 ```
 
 `qorvex-live` automatically launches `qorvex-streamer` to capture the Simulator window via ScreenCaptureKit — zero impact on the automation session. Falls back to polling if the streamer binary is not found or Screen Recording permission is denied.

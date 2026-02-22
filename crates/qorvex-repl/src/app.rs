@@ -380,7 +380,7 @@ impl App {
         }
     }
 
-    async fn process_command(&mut self, input: &str) {
+    pub(crate) async fn process_command(&mut self, input: &str) {
         let (cmd, args) = parse_command(input);
 
         // Local-only commands
@@ -751,7 +751,7 @@ impl App {
 }
 
 /// Parse a command string into command name and arguments.
-fn parse_command(input: &str) -> (String, Vec<String>) {
+pub(crate) fn parse_command(input: &str) -> (String, Vec<String>) {
     let Some(paren_idx) = input.find('(') else {
         return (input.to_string(), vec![]);
     };
@@ -769,7 +769,7 @@ fn parse_command(input: &str) -> (String, Vec<String>) {
     (cmd, args)
 }
 
-fn find_matching_paren_content(s: &str) -> &str {
+pub(crate) fn find_matching_paren_content(s: &str) -> &str {
     let mut depth = 1;
     let mut in_double_quote = false;
     let mut in_single_quote = false;
@@ -807,7 +807,7 @@ fn find_matching_paren_content(s: &str) -> &str {
     s.trim_end_matches(')')
 }
 
-fn split_args(s: &str) -> Vec<String> {
+pub(crate) fn split_args(s: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut depth = 0;
@@ -862,11 +862,122 @@ fn split_args(s: &str) -> Vec<String> {
 }
 
 /// Strip surrounding quotes from a string if present.
-fn strip_quotes(s: &str) -> &str {
+pub(crate) fn strip_quotes(s: &str) -> &str {
     let s = s.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
         &s[1..s.len() - 1]
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_command_simple() {
+        let (cmd, args) = parse_command("help");
+        assert_eq!(cmd, "help");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_parse_command_single_arg() {
+        let (cmd, args) = parse_command("tap(button1)");
+        assert_eq!(cmd, "tap");
+        assert_eq!(args, vec!["button1"]);
+    }
+
+    #[test]
+    fn test_parse_command_multiple_args() {
+        let (cmd, args) = parse_command("wait_for(btn, 5000, label)");
+        assert_eq!(cmd, "wait_for");
+        assert_eq!(args, vec!["btn", "5000", "label"]);
+    }
+
+    #[test]
+    fn test_parse_command_empty_parens() {
+        let (cmd, args) = parse_command("swipe()");
+        assert_eq!(cmd, "swipe");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_parse_command_nested_parens() {
+        // Nested parens should be handled by depth tracking
+        let (cmd, args) = parse_command("tap(foo(bar))");
+        assert_eq!(cmd, "tap");
+        assert_eq!(args, vec!["foo(bar)"]);
+    }
+
+    #[test]
+    fn test_split_args_simple() {
+        let args = split_args("a, b, c");
+        assert_eq!(args, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_split_args_quoted() {
+        let args = split_args(r#""quoted, arg", other"#);
+        assert_eq!(args, vec!["\"quoted, arg\"", "other"]);
+    }
+
+    #[test]
+    fn test_split_args_single() {
+        let args = split_args("only_one");
+        assert_eq!(args, vec!["only_one"]);
+    }
+
+    #[test]
+    fn test_split_args_empty() {
+        let args = split_args("");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_strip_quotes_double() {
+        assert_eq!(strip_quotes("\"hello\""), "hello");
+    }
+
+    #[test]
+    fn test_strip_quotes_single() {
+        assert_eq!(strip_quotes("'hello'"), "hello");
+    }
+
+    #[test]
+    fn test_strip_quotes_none() {
+        assert_eq!(strip_quotes("plain"), "plain");
+    }
+
+    #[test]
+    fn test_strip_quotes_with_spaces() {
+        assert_eq!(strip_quotes("  \"hello\"  "), "hello");
+    }
+
+    #[test]
+    fn test_parse_command_quoted_arg() {
+        let (cmd, args) = parse_command(r#"tap("my button")"#);
+        assert_eq!(cmd, "tap");
+        assert_eq!(args, vec!["\"my button\""]);
+    }
+
+    #[test]
+    fn test_parse_command_whitespace_around_cmd() {
+        let (cmd, args) = parse_command("  tap  (button1)");
+        assert_eq!(cmd, "tap");
+        assert_eq!(args, vec!["button1"]);
+    }
+
+    #[test]
+    fn test_find_matching_paren_content_nested() {
+        let content = find_matching_paren_content("foo(bar), baz)extra");
+        assert_eq!(content, "foo(bar), baz");
+    }
+
+    #[test]
+    fn test_find_matching_paren_content_simple() {
+        let content = find_matching_paren_content("hello)world");
+        assert_eq!(content, "hello");
     }
 }

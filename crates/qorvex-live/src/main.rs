@@ -45,6 +45,14 @@ struct Args {
     /// Disable the live streamer (use polling fallback)
     #[arg(long)]
     no_streamer: bool,
+
+    /// Run in batch mode: print session events as JSONL to stdout and exit
+    #[arg(long)]
+    batch: bool,
+
+    /// Duration in seconds for batch mode (exit after this many seconds)
+    #[arg(long)]
+    duration: Option<u64>,
 }
 
 /// Maximum number of consecutive IPC connection failures before giving up
@@ -345,6 +353,81 @@ fn which_streamer() -> Option<PathBuf> {
     None
 }
 
+/// Run in batch mode: connect to IPC, print session events as JSONL to stdout, exit after duration.
+async fn run_batch(args: Args) -> io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let session_name = &args.session;
+    let duration = args.duration.map(Duration::from_secs);
+
+    // Connect to IPC
+    let mut client = match qorvex_core::ipc::IpcClient::connect(session_name).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to connect to server for session '{}': {}", session_name, e);
+            return Err(io::Error::new(io::ErrorKind::ConnectionRefused, e.to_string()));
+        }
+    };
+
+    // Subscribe to events
+    if let Err(e) = client.subscribe().await {
+        eprintln!("Failed to subscribe to events: {}", e);
+        return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+    }
+
+    eprintln!("Connected to session '{}', streaming events...", session_name);
+
+    let mut stdout = tokio::io::stdout();
+    let deadline = duration.map(|d| tokio::time::Instant::now() + d);
+
+    loop {
+        let timeout_fut = async {
+            if let Some(dl) = deadline {
+                tokio::time::sleep_until(dl).await;
+            } else {
+                // No deadline — sleep forever (cancelled by other branches)
+                std::future::pending::<()>().await;
+            }
+        };
+
+        tokio::select! {
+            result = client.read_event() => {
+                match result {
+                    Ok(IpcResponse::Event { event }) => {
+                        match serde_json::to_string(&event) {
+                            Ok(json) => {
+                                let line = format!("{}\n", json);
+                                if stdout.write_all(line.as_bytes()).await.is_err() {
+                                    break; // stdout closed
+                                }
+                                let _ = stdout.flush().await;
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to serialize event: {}", e);
+                            }
+                        }
+                    }
+                    Ok(_) => {} // ignore non-event responses
+                    Err(e) => {
+                        eprintln!("IPC error: {}", e);
+                        break;
+                    }
+                }
+            }
+            _ = timeout_fut => {
+                eprintln!("Duration elapsed, exiting.");
+                break;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("Interrupted, exiting.");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let log_dir = dirs::home_dir()
@@ -363,6 +446,10 @@ async fn main() -> io::Result<()> {
         .init();
 
     let args = Args::parse();
+
+    if args.batch {
+        return run_batch(args).await;
+    }
 
     // Setup terminal
     enable_raw_mode()?;
@@ -646,4 +733,26 @@ fn ui(f: &mut Frame, app: &mut App) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     f.render_stateful_widget(list, chunks[1], &mut app.list_state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_args_defaults() {
+        let args = Args::parse_from(["qorvex-live"]);
+        assert_eq!(args.session, "default");
+        assert!(!args.batch);
+        assert!(args.duration.is_none());
+        assert!(!args.no_streamer);
+    }
+
+    #[test]
+    fn test_args_batch_mode() {
+        let args = Args::parse_from(["qorvex-live", "--batch", "--duration", "5", "-s", "test"]);
+        assert!(args.batch);
+        assert_eq!(args.duration, Some(5));
+        assert_eq!(args.session, "test");
+    }
 }

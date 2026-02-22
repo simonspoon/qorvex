@@ -56,6 +56,7 @@ Protocol changes must be symmetric between Rust and Swift. Both sides must agree
 cargo test                              # all crates
 cargo test -p qorvex-core               # core only
 cargo test -p qorvex-cli                # cli only
+cargo test -p qorvex-repl               # repl command parsing and arg tests
 ```
 
 ### Integration Tests

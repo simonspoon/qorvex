@@ -30,6 +30,10 @@ struct Args {
     /// Session name for IPC socket
     #[arg(short, long, default_value = "default")]
     session: String,
+
+    /// Run in batch mode: read commands from stdin, print results to stdout
+    #[arg(long)]
+    batch: bool,
 }
 
 #[tokio::main]
@@ -50,6 +54,10 @@ async fn main() -> io::Result<()> {
         .init();
 
     let args = Args::parse();
+
+    if args.batch {
+        return run_batch(args.session).await;
+    }
 
     // Setup terminal
     enable_raw_mode()?;
@@ -137,6 +145,49 @@ fn mouse_to_text_position(
     } else {
         None
     }
+}
+
+/// Run in batch mode: read commands line-by-line from stdin, print results to stdout.
+///
+/// No terminal setup (raw mode, alternate screen). Connects to IPC server,
+/// processes each line as a command, prints output as plain text, exits on EOF.
+async fn run_batch(session: String) -> io::Result<()> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut app = App::new(session).await;
+
+    // Drain and print startup messages
+    for line in app.output_history.drain(..) {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        println!("{}", text);
+    }
+
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut lines = stdin.lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "quit" || line == "exit" {
+            break;
+        }
+
+        app.process_command(&line).await;
+
+        // Drain output and print as plain text
+        for output_line in app.output_history.drain(..) {
+            let text: String = output_line.spans.iter().map(|s| s.content.as_ref()).collect();
+            println!("{}", text);
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 async fn run_app(
@@ -270,6 +321,19 @@ async fn run_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_args_batch_flag() {
+        let args = Args::parse_from(["qorvex-repl", "--batch", "-s", "test"]);
+        assert!(args.batch);
+        assert_eq!(args.session, "test");
+    }
+
+    #[test]
+    fn test_args_default_no_batch() {
+        let args = Args::parse_from(["qorvex-repl"]);
+        assert!(!args.batch);
+    }
 
     #[test]
     fn test_args_parsing() {

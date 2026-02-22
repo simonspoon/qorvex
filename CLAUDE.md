@@ -40,6 +40,7 @@ cargo install --path crates/qorvex-cli
 cargo test
 cargo test -p qorvex-core
 cargo test -p qorvex-cli
+cargo test -p qorvex-repl
 
 # Run integration tests
 cargo test -p qorvex-core --test ipc_integration
@@ -63,9 +64,19 @@ cargo run -p qorvex-live -- --fps 30
 # Run live TUI without streamer (polling fallback)
 cargo run -p qorvex-live -- --no-streamer
 
+# Run REPL in batch mode (non-interactive, stdin → stdout, no terminal)
+echo -e "help\nquit" | cargo run -p qorvex-repl -- --batch -s <session>
+
+# Run live TUI in batch mode (print session events as JSONL, exit after N secs)
+cargo run -p qorvex-live -- --batch -s <session> --duration 5
+
 # Install all Rust binaries
 ./install.sh
 ```
+
+## Required Reading
+
+Before starting any task, read `docs/INDEX.md` and the relevant topic file for the subsystem you are working on.
 
 ## Architecture
 
