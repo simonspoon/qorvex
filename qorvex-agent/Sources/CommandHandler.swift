@@ -188,7 +188,13 @@ final class CommandHandler {
                         return
                     }
                 }
-                fresh.tap()
+                // Use coordinate-based tap instead of element.tap() to bypass
+                // XCUITest's internal quiescence wait, which hangs when the app
+                // has ongoing animations elsewhere on screen.
+                let tapFrame = fresh.frame
+                let normalized = self.app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+                let target = normalized.withOffset(CGVector(dx: tapFrame.midX, dy: tapFrame.midY))
+                target.tap()
             }, &objcError)
             if !caught {
                 let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"

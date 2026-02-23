@@ -53,6 +53,8 @@ Set via KVC: `app.setValue(3, forKey: "currentInteractionOptions")`. Do **not** 
 
 The property and bitmask were confirmed by disassembling `XCUIAutomation.framework` and inspecting the `shouldSkipPreEventQuiescence`/`shouldSkipPostEventQuiescence` methods on `XCUIApplicationProcess`.
 
+**`XCUIElement.tap()` re-engages quiescence internally.** Setting `currentInteractionOptions = 3` only disables pre/post-event waits at the `XCUIApplication` level. `XCUIElement.tap()` routes through `XCUIElementProxy` which has its own quiescence path — this causes indefinite hangs when *any* animation (spinner, loader) is active in the app, even on a completely unrelated element. Use `XCUICoordinate.tap()` instead: compute the element's center from its `frame` and tap via `app.coordinate(withNormalizedOffset:).withOffset()`. This bypasses the proxy's quiescence wait entirely. The `handleTapCoord` handler already uses this pattern; `performTap` was updated to match.
+
 ---
 
 ## Build/Test Flow via `AgentLifecycle`
@@ -137,9 +139,9 @@ All commands are dispatched on the main thread via `AgentServer`.
 |---------|---------------|-------------|
 | `heartbeat` | inline | Returns `.ok` immediately |
 | `tapCoord` | `handleTapCoord` | Uses `app.coordinate(withNormalizedOffset:)` with absolute offset |
-| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before `.tap()` to get fresh coordinates |
-| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before `.tap()` to get fresh coordinates |
-| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before `.tap()` to get fresh coordinates |
+| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
+| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
+| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
 | `typeText` | `handleTypeText` | Finds element with `hasKeyboardFocus`, falls back to `app.keyboards.firstMatch` |
 | `swipe` | `handleSwipe` | Computes velocity from distance/duration (`distance / seconds`), passes to `press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)` |
 | `longPress` | `handleLongPress` | `coordinate.press(forDuration:)` at specified coordinates |
@@ -171,17 +173,19 @@ private func pollUntilFound(
 
 With quiescence waiting disabled, an element inside a modal sheet or page can resolve as `exists = true` and `isHittable = true` while its presentation animation is still in progress. The first query computes the element's frame from a mid-animation accessibility snapshot; calling `.tap()` on that reference lands the tap at stale coordinates (behind the modal or off-screen). The agent returns `Response::Ok` because the tap call itself didn't throw, but nothing visibly happens.
 
-**Fix — three-layer defense in `performTap` when `timeoutMs` is set:**
+**Fix — four-layer defense in `performTap` when `timeoutMs` is set:**
 
 1. **Frame stability check:** Each poll captures `element.frame` and tracks it across iterations (via captured `lastFrame`/`stableCount` variables in the action closure). The tap only proceeds when the same frame has been observed on 2 consecutive 50ms polls (~50ms of stability). This adds ~50ms overhead on static elements but correctly waits out modal animations (~500-700ms). Frame stability is skipped for zero-area elements (`frame == .zero`).
 
-2. **Re-query before tap:** After the frame is confirmed stable, the element is re-queried one final time (`queryFn()`) to get the freshest possible `XCUIElement` reference before calling `.tap()`. This costs one extra accessibility query per tap.
+2. **Re-query before tap:** After the frame is confirmed stable, the element is re-queried one final time (`queryFn()`) to get the freshest possible `XCUIElement` reference. This costs one extra accessibility query per tap.
 
-3. **Pre-tap frame drift check:** The re-queried element's frame is compared to the stable frame. If they differ (element moved between stability check and re-query), stability tracking resets and the poll retries. This catches mid-animation elements that briefly pause at an easing curve plateau — the re-query reveals the element has moved on. Near-zero cost since the frame is already resolved.
+3. **Pre-tap frame drift check:** The re-queried element's frame is compared to the stable frame. If they differ (element moved between stability check and re-query), stability tracking resets and the poll retries. This catches mid-animation elements that briefly pause at an easing curve plateau. Near-zero cost since the frame is already resolved.
 
-If any check fails, the action closure returns `nil` and `pollUntilFound` retries on the next 50ms interval.
+4. **Coordinate-based tap:** The final tap uses `XCUICoordinate.tap()` at the center of `fresh.frame` rather than `fresh.tap()` directly. `XCUIElement.tap()` routes through `XCUIElementProxy` and internally re-engages XCUITest's quiescence wait even when `currentInteractionOptions = 3` is set — causing indefinite hangs when unrelated animations (spinners, loaders) are active elsewhere in the app. `XCUICoordinate.tap()` bypasses this path. The frame coordinates are safe to use because layers 1-3 have already confirmed stability and freshness.
 
-When `timeoutMs` is `nil` (i.e., `--no-wait`), all checks are skipped and the tap fires immediately with a single attempt.
+If any check in layers 1-3 fails, the action closure returns `nil` and `pollUntilFound` retries on the next 50ms interval.
+
+When `timeoutMs` is `nil` (i.e., `--no-wait`), layers 1-3 are skipped and the tap fires immediately with a single attempt (layer 4 still applies).
 
 All three tap handlers (`handleTapElement`, `handleTapByLabel`, `handleTapWithType`) delegate to `performTap(queryFn:description:timeoutMs:)` which contains the shared defense logic.
 

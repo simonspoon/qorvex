@@ -77,6 +77,14 @@ If a read timeout occurs (e.g., while the watcher polls a slow UI hierarchy), th
 - Wait longer: increase `--timeout` (default: 5000ms)
 - `wait-for` additionally requires 3 stable frames (300ms of no movement), so animations must complete before it returns success
 
+## Tap Times Out With Ongoing Animations
+
+**Symptoms:** `tap` hangs for the full timeout duration (default 5s) when the app is showing a loading spinner or other continuous animation, even though the target element is visible and hittable in `get-screen-info`.
+
+**Cause:** XCUITest's internal quiescence wait activates during the tap even when it has been disabled. Ongoing animations (e.g., `ProgressView`, repeating `.animation` modifiers) anywhere in the app cause XCUITest to block the tap until the animation settles — which never happens for indefinite spinners.
+
+**The agent handles this automatically** using coordinate-based tapping (`XCUICoordinate.tap()`) rather than element-based tapping, which bypasses the quiescence pathway. If you are on an older agent build, rebuild with `make -C qorvex-agent build`.
+
 ## USB Tunnel Issues (Physical Devices)
 
 **Symptoms:** "USB tunnel error", device not found
