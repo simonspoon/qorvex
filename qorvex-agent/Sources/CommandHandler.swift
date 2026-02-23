@@ -93,7 +93,7 @@ final class CommandHandler {
             ).firstMatch
         }
 
-        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+        let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
             let caught = QVXTryCatch({
@@ -105,7 +105,15 @@ final class CommandHandler {
                     errorMsg = "Element with identifier '\(selector)' exists but is not hittable"
                     return
                 }
-                element.tap()
+                // Re-query to get a fresh element reference with up-to-date
+                // coordinates. Without this, taps on modals/sheets can land on
+                // stale positions when quiescence waiting is disabled.
+                let fresh = queryFn()
+                guard fresh.exists, fresh.isHittable else {
+                    errorMsg = "Element with identifier '\(selector)' became unavailable on re-query"
+                    return
+                }
+                fresh.tap()
             }, &objcError)
             if !caught {
                 let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
@@ -133,7 +141,7 @@ final class CommandHandler {
             ).firstMatch
         }
 
-        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+        let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
             let caught = QVXTryCatch({
@@ -145,7 +153,12 @@ final class CommandHandler {
                     errorMsg = "Element with label '\(label)' exists but is not hittable"
                     return
                 }
-                element.tap()
+                let fresh = queryFn()
+                guard fresh.exists, fresh.isHittable else {
+                    errorMsg = "Element with label '\(label)' became unavailable on re-query"
+                    return
+                }
+                fresh.tap()
             }, &objcError)
             if !caught {
                 let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
@@ -177,7 +190,7 @@ final class CommandHandler {
             ).firstMatch
         }
 
-        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+        let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
             let caught = QVXTryCatch({
@@ -191,7 +204,13 @@ final class CommandHandler {
                     errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' exists but is not hittable"
                     return
                 }
-                element.tap()
+                let fresh = queryFn()
+                guard fresh.exists, fresh.isHittable else {
+                    let lookupKind = byLabel ? "label" : "identifier"
+                    errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' became unavailable on re-query"
+                    return
+                }
+                fresh.tap()
             }, &objcError)
             if !caught {
                 let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"

@@ -41,6 +41,18 @@ The agent is an XCTest UI test: `QorvexAgentTests/testRunAgent`. On launch it:
 
 The agent does NOT launch any app. The Rust host manages app launching via `xcrun simctl`. The `SetTarget` protocol command switches the app context by replacing the `XCUIApplication` reference inside `CommandHandler`.
 
+### Quiescence API Notes
+
+`XCUIApplication.shouldWaitForQuiescence` **does not exist** in modern XCTest/XCUIAutomation (it is not in any public header). Quiescence is controlled via the private `currentInteractionOptions` property (ivar: `_currentInteractionOptions`, type `unsigned int`):
+
+- Bit 0 (`0x1`) — skip pre-event quiescence
+- Bit 1 (`0x2`) — skip post-event quiescence
+- Value `3` disables both
+
+Set via KVC: `app.setValue(3, forKey: "currentInteractionOptions")`. Do **not** use `perform(NSSelectorFromString("setCurrentInteractionOptions:"), with: value)` — this boxes the value as `NSNumber`, which is not the type the setter expects for a scalar ivar.
+
+The property and bitmask were confirmed by disassembling `XCUIAutomation.framework` and inspecting the `shouldSkipPreEventQuiescence`/`shouldSkipPostEventQuiescence` methods on `XCUIApplicationProcess`.
+
 ---
 
 ## Build/Test Flow via `AgentLifecycle`
@@ -125,9 +137,9 @@ All commands are dispatched on the main thread via `AgentServer`.
 |---------|---------------|-------------|
 | `heartbeat` | inline | Returns `.ok` immediately |
 | `tapCoord` | `handleTapCoord` | Uses `app.coordinate(withNormalizedOffset:)` with absolute offset |
-| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set |
-| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set |
-| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set |
+| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; re-queries element immediately before `.tap()` to get fresh coordinates |
+| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; re-queries element immediately before `.tap()` to get fresh coordinates |
+| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; re-queries element immediately before `.tap()` to get fresh coordinates |
 | `typeText` | `handleTypeText` | Finds element with `hasKeyboardFocus`, falls back to `app.keyboards.firstMatch` |
 | `swipe` | `handleSwipe` | Computes velocity from distance/duration (`distance / seconds`), passes to `press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)` |
 | `longPress` | `handleLongPress` | `coordinate.press(forDuration:)` at specified coordinates |
@@ -154,6 +166,14 @@ private func pollUntilFound(
 - When `timeoutMs` is `nil` or `0`, runs the action exactly once.
 - ObjC exceptions (caught by `QVXTryCatch`) are returned immediately — never retried.
 - Only "not found"/"not hittable" conditions (action returns `nil`) trigger the next poll.
+
+### Modal / Stale Coordinate Gotcha
+
+With quiescence waiting disabled, an element inside a modal sheet or page can resolve as `exists = true` and `isHittable = true` while its presentation animation is still in progress. The first query computes the element's frame from a mid-animation accessibility snapshot; calling `.tap()` on that reference lands the tap at the old (stale) coordinates, which may be behind the modal or off-screen. The agent returns `Response::Ok` because the tap call itself didn't throw, but nothing visibly happens.
+
+**Fix:** All three tap handlers (`handleTapElement`, `handleTapByLabel`, `handleTapWithType`) re-query the element immediately before calling `.tap()`. The second `firstMatch` evaluation forces XCUITest to rebuild the element reference from the current accessibility snapshot, picking up the final frame. This costs one extra accessibility query (~5-15ms) per tap but is otherwise transparent.
+
+If the re-query finds the element gone or not hittable (e.g., animation moved it off-screen), the action closure returns `nil` and `pollUntilFound` retries on the next 50ms interval.
 
 ### Tree Serialization Pruning
 
