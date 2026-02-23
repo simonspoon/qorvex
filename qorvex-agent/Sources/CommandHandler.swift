@@ -3,11 +3,20 @@
 
 import XCTest
 
+/// Disable XCUITest quiescence waiting on an app via private API.
+/// Quiescence waiting adds 1-2s per interaction as XCUITest waits for
+/// all animations/timers/network to settle. Bits: 0x1 = skip pre-event,
+/// 0x2 = skip post-event.
+private func disableQuiescenceWaiting(_ app: XCUIApplication) {
+    app.setValue(3, forKey: "currentInteractionOptions")
+}
+
 final class CommandHandler {
     private var app: XCUIApplication
 
     init(app: XCUIApplication) {
         self.app = app
+        disableQuiescenceWaiting(app)
     }
 
     /// Handle a decoded request and return a response.
@@ -400,6 +409,7 @@ final class CommandHandler {
 
     private func handleSetTarget(bundleId: String) -> AgentResponse {
         app = XCUIApplication(bundleIdentifier: bundleId)
+        disableQuiescenceWaiting(app)
         return .ok
     }
 

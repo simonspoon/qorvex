@@ -34,9 +34,10 @@ qorvex-agent/
 The agent is an XCTest UI test: `QorvexAgentTests/testRunAgent`. On launch it:
 
 1. Creates `XCUIApplication(bundleIdentifier: "com.apple.springboard")` -- defaults to SpringBoard.
-2. Creates `CommandHandler(app:)` and `AgentServer(port: 8080, handler:)`.
-3. Starts the TCP listener via `NWListener` (Network framework).
-4. Blocks indefinitely via `XCTestExpectation` with infinite timeout.
+2. Creates `CommandHandler(app:)`, which immediately disables XCUITest quiescence waiting via KVC (`currentInteractionOptions = 3`). This eliminates the 1-2s per-interaction delay that XCUITest adds waiting for animations and network to settle.
+3. Creates `AgentServer(port: 8080, handler:)`.
+4. Starts the TCP listener via `NWListener` (Network framework).
+5. Blocks indefinitely via `XCTestExpectation` with infinite timeout.
 
 The agent does NOT launch any app. The Rust host manages app launching via `xcrun simctl`. The `SetTarget` protocol command switches the app context by replacing the `XCUIApplication` reference inside `CommandHandler`.
 
@@ -133,7 +134,7 @@ All commands are dispatched on the main thread via `AgentServer`.
 | `getValue` | `handleGetValue` | Returns `element.value` as String, falls back to `element.label`; uses `pollUntilFound` when `timeoutMs` is set |
 | `dumpTree` | `handleDumpTree` | `app.snapshot()` via `QVXTryCatch`, serialized to JSON with empty-node pruning |
 | `screenshot` | `handleScreenshot` | `XCUIScreen.main.screenshot().pngRepresentation` -- full screen capture |
-| `setTarget` | `handleSetTarget` | Replaces `self.app = XCUIApplication(bundleIdentifier:)` for app context switching |
+| `setTarget` | `handleSetTarget` | Replaces `self.app = XCUIApplication(bundleIdentifier:)` for app context switching; disables quiescence on the new app |
 | `findElement` | `handleFindElement` | Queries live `XCUIElement` for `isHittable` (not from snapshot), overrides hittable field in response |
 
 ### `pollUntilFound` Helper
