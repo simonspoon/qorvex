@@ -198,3 +198,29 @@ async fn test_agent_error_response_propagates() {
         result.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// 7. Connection drop without lifecycle — error propagates, no recovery
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_connection_drop_without_lifecycle_no_recovery() {
+    // When no lifecycle is attached, a connection error should propagate
+    // directly without any recovery attempt.
+    let executor = programmable_executor(vec![
+        MockBehavior::Respond(Response::Ok), // heartbeat
+        MockBehavior::Drop,                  // first action: drop connection
+    ])
+    .await;
+
+    let result = executor.execute(tap_action()).await;
+    assert!(!result.success, "action should fail when connection drops");
+
+    // Verify the error is connection-related
+    let msg_lower = result.message.to_lowercase();
+    assert!(
+        msg_lower.contains("io error") || msg_lower.contains("not connected") || msg_lower.contains("connection"),
+        "error should be connection-related, got: {}",
+        result.message
+    );
+}

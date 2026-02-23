@@ -31,7 +31,7 @@ pub struct ServerState {
     pub simulator_udid: Option<String>,
     pub shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn AutomationDriver>>>>,
     pub executor: Option<ActionExecutor>,
-    pub agent_lifecycle: Option<AgentLifecycle>,
+    pub agent_lifecycle: Option<Arc<AgentLifecycle>>,
     pub watcher_handle: Option<WatcherHandle>,
     pub element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
     pub cached_elements: Vec<UIElement>,
@@ -157,12 +157,13 @@ impl ServerState {
                 if let Some(agent_source_dir) = config.agent_source_dir {
                     info!("Auto-starting agent");
                     let lc_config = AgentLifecycleConfig::new(agent_source_dir);
-                    let lifecycle = AgentLifecycle::new(udid.clone(), lc_config);
+                    let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
                     match lifecycle.ensure_agent_ready().await {
                         Ok(()) => {
+                            let mut driver = AgentDriver::direct("127.0.0.1", 8080)
+                                .with_lifecycle(lifecycle.clone());
                             self.agent_lifecycle = Some(lifecycle);
-                            let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                             match driver.connect().await {
                                 Ok(()) => {
                                     self.set_executor_with_driver(Arc::new(driver)).await;
@@ -281,12 +282,13 @@ impl ServerState {
             // With path: build, spawn, wait, store lifecycle
             let project_dir = PathBuf::from(strip_quotes(&project_dir_str));
             let config = AgentLifecycleConfig::new(project_dir);
-            let lifecycle = AgentLifecycle::new(udid, config);
+            let lifecycle = Arc::new(AgentLifecycle::new(udid, config));
 
             match lifecycle.ensure_running().await {
                 Ok(()) => {
+                    let mut driver = AgentDriver::direct("127.0.0.1", 8080)
+                        .with_lifecycle(lifecycle.clone());
                     self.agent_lifecycle = Some(lifecycle);
-                    let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                     match driver.connect().await {
                         Ok(()) => {
                             self.set_executor_with_driver(Arc::new(driver)).await;
@@ -311,12 +313,13 @@ impl ServerState {
             let config = QorvexConfig::load();
             if let Some(project_dir) = config.agent_source_dir {
                 let lc_config = AgentLifecycleConfig::new(project_dir);
-                let lifecycle = AgentLifecycle::new(udid, lc_config);
+                let lifecycle = Arc::new(AgentLifecycle::new(udid, lc_config));
 
                 match lifecycle.ensure_agent_ready().await {
                     Ok(()) => {
+                        let mut driver = AgentDriver::direct("127.0.0.1", 8080)
+                            .with_lifecycle(lifecycle.clone());
                         self.agent_lifecycle = Some(lifecycle);
-                        let mut driver = AgentDriver::direct("127.0.0.1", 8080);
                         match driver.connect().await {
                             Ok(()) => {
                                 self.set_executor_with_driver(Arc::new(driver)).await;

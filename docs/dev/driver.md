@@ -201,12 +201,40 @@ This provides accurate **live hittability** -- the `isHittable` property is only
 |-------------|----------------|
 | `AgentDriver::direct(host, port)` | Direct TCP for simulators |
 | `AgentDriver::usb_device(udid, port)` | USB tunnel for physical devices |
+| `.with_lifecycle(Arc<AgentLifecycle>)` | Builder — attaches a lifecycle manager for crash recovery |
+
+`with_lifecycle()` is a builder that takes ownership and returns `Self`, so it chains onto a constructor:
+
+```rust
+let driver = AgentDriver::direct("127.0.0.1", 8080)
+    .with_lifecycle(lifecycle.clone());
+```
+
+When a lifecycle is attached, the driver automatically recovers from connection drops (see [Crash Recovery](#crash-recovery) below).
 
 ### Connection Invalidation
 
-`AgentClient` enforces a read timeout on every response. The default is 30 seconds; calls routed through `send_with_timeout` use a caller-supplied deadline instead (used by the `*_with_timeout` driver methods when `timeout_ms` is set). If the timeout fires (or an I/O error occurs), the TCP stream is **dropped immediately** to prevent response desynchronization. All subsequent calls return `DriverError::NotConnected` until `connect()` is called again.
+`AgentClient` enforces a read timeout on every response. The default is 30 seconds; calls routed through `send_with_timeout` use a caller-supplied deadline instead (used by the `*_with_timeout` driver methods when `timeout_ms` is set). If the timeout fires (or an I/O error occurs), the TCP stream is **dropped immediately** to prevent response desynchronization.
 
 This matters when the watcher and executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
+
+### Crash Recovery
+
+When `with_lifecycle()` is set, `send()` and `send_with_read_timeout()` catch connection errors (`NotConnected`, `ConnectionLost`, `Io`) and attempt one automatic recovery cycle before propagating the error:
+
+1. Terminate the old agent process via `AgentLifecycle::terminate_agent()`
+2. Respawn via `AgentLifecycle::spawn_agent()` (skips rebuild — the XCTest bundle stays on disk)
+3. Wait for the new agent to accept connections via `AgentLifecycle::wait_for_ready()`
+4. Create a fresh `AgentClient`, verify with heartbeat, and replace the stored client
+5. Retry the original command once
+
+If recovery fails (e.g., `spawn_agent` or `wait_for_ready` errors), the error is returned and no further retry is attempted.
+
+**What recovery does NOT cover:**
+- `Timeout` errors — the agent is alive but slow; not a connection issue
+- `CommandFailed` / `JsonParse` — the agent responded with an error
+- USB device connections — `lifecycle` is `None` for physical devices, so recovery is skipped
+- `connect()` itself — recovery only activates during command sends, not the initial connect
 
 ## `flatten_elements(elements: &[UIElement]) -> Vec<UIElement>`
 

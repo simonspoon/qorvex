@@ -28,14 +28,16 @@
 //! # }
 //! ```
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use tracing::{debug, instrument};
+use tracing::{debug, info, warn, instrument};
 
 use crate::agent_client::{AgentClient, AgentClientError};
+use crate::agent_lifecycle::AgentLifecycle;
 use crate::element::UIElement;
 use crate::driver::{AutomationDriver, DriverError};
 use crate::protocol::{Request, Response};
@@ -105,7 +107,8 @@ pub enum ConnectionTarget {
 /// trait methods can acquire mutable access for sending requests.
 pub struct AgentDriver {
     target: ConnectionTarget,
-    client: Option<Mutex<AgentClient>>,
+    client: Mutex<Option<AgentClient>>,
+    lifecycle: Option<Arc<AgentLifecycle>>,
 }
 
 impl AgentDriver {
@@ -118,7 +121,8 @@ impl AgentDriver {
                 host: host.into(),
                 port,
             },
-            client: None,
+            client: Mutex::new(None),
+            lifecycle: None,
         }
     }
 
@@ -131,7 +135,8 @@ impl AgentDriver {
                 udid: udid.into(),
                 device_port,
             },
-            client: None,
+            client: Mutex::new(None),
+            lifecycle: None,
         }
     }
 
@@ -141,6 +146,15 @@ impl AgentDriver {
     /// backward compatibility with existing code.
     pub fn new(host: String, port: u16) -> Self {
         Self::direct(host, port)
+    }
+
+    /// Attaches a lifecycle manager for automatic crash recovery.
+    ///
+    /// When set, the driver will attempt to restart the agent and reconnect
+    /// if a connection error is detected during [`send`].
+    pub fn with_lifecycle(mut self, lifecycle: Arc<AgentLifecycle>) -> Self {
+        self.lifecycle = Some(lifecycle);
+        self
     }
 
     /// Returns the connection target.
@@ -164,43 +178,9 @@ impl AgentDriver {
         }
     }
 
-    /// Sends a request via the inner [`AgentClient`], mapping errors to
-    /// [`DriverError`].
-    async fn send(&self, request: &Request) -> Result<Response, DriverError> {
-        let mutex = self.client.as_ref().ok_or(DriverError::NotConnected)?;
-        let mut client = mutex.lock().await;
-        client.send(request).await.map_err(map_client_error)
-    }
-
-    /// Sends a request with a custom read timeout.
-    ///
-    /// When `timeout_ms` is `Some`, the read deadline is set to `timeout_ms + 5s`
-    /// so the Rust side waits longer than the agent's internal retry window.
-    /// When `None`, falls back to the default `send()`.
-    async fn send_with_read_timeout(
-        &self,
-        request: &Request,
-        timeout_ms: Option<u64>,
-    ) -> Result<Response, DriverError> {
-        match timeout_ms {
-            Some(ms) => {
-                let read_timeout = Duration::from_millis(ms + 5000);
-                let mutex = self.client.as_ref().ok_or(DriverError::NotConnected)?;
-                let mut client = mutex.lock().await;
-                client
-                    .send_with_timeout(request, read_timeout)
-                    .await
-                    .map_err(map_client_error)
-            }
-            None => self.send(request).await,
-        }
-    }
-}
-
-#[async_trait]
-impl AutomationDriver for AgentDriver {
-    #[instrument(skip(self), level = "debug")]
-    async fn connect(&mut self) -> Result<(), DriverError> {
+    /// Creates a new [`AgentClient`] for the current [`ConnectionTarget`]
+    /// and verifies it with a heartbeat.
+    async fn create_client(&self) -> Result<AgentClient, DriverError> {
         let mut client = match &self.target {
             ConnectionTarget::Direct { host, port } => {
                 let host_port = format!("{host}:{port}");
@@ -208,7 +188,9 @@ impl AutomationDriver for AgentDriver {
                     .await
                     .map_err(|e| DriverError::ConnectionLost(e.to_string()))?
                     .next()
-                    .ok_or_else(|| DriverError::ConnectionLost(format!("could not resolve {host_port}")))?;
+                    .ok_or_else(|| {
+                        DriverError::ConnectionLost(format!("could not resolve {host_port}"))
+                    })?;
                 let mut c = AgentClient::new(addr);
                 c.connect().await.map_err(map_client_error)?;
                 c
@@ -220,12 +202,136 @@ impl AutomationDriver for AgentDriver {
         };
 
         client.heartbeat().await.map_err(map_client_error)?;
-        self.client = Some(Mutex::new(client));
+        Ok(client)
+    }
+
+    /// Returns `true` if the error indicates a broken connection that may
+    /// be recoverable by restarting the agent.
+    fn is_connection_error(err: &DriverError) -> bool {
+        matches!(
+            err,
+            DriverError::NotConnected | DriverError::ConnectionLost(_) | DriverError::Io(_)
+        )
+    }
+
+    /// Attempt to recover from a dead agent connection.
+    ///
+    /// Terminates the agent, respawns it (skipping rebuild), waits for it to
+    /// become ready, then reconnects and replaces the stored client.
+    async fn attempt_recovery(&self) -> Result<(), DriverError> {
+        let lifecycle = self
+            .lifecycle
+            .as_ref()
+            .ok_or(DriverError::NotConnected)?;
+
+        info!("agent connection lost, attempting recovery");
+
+        // Terminate the old agent process.
+        lifecycle
+            .terminate_agent()
+            .map_err(|e| DriverError::CommandFailed(format!("recovery: terminate failed: {e}")))?;
+
+        // Respawn (skip rebuild — the XCTest bundle is still on disk).
+        lifecycle
+            .spawn_agent()
+            .map_err(|e| DriverError::CommandFailed(format!("recovery: spawn failed: {e}")))?;
+
+        // Wait for the new agent to become ready.
+        lifecycle
+            .wait_for_ready()
+            .await
+            .map_err(|e| DriverError::CommandFailed(format!("recovery: agent not ready: {e}")))?;
+
+        // Reconnect.
+        let client = self.create_client().await?;
+        *self.client.lock().await = Some(client);
+
+        info!("agent recovery successful");
+        Ok(())
+    }
+
+    /// Sends a request via the inner [`AgentClient`], mapping errors to
+    /// [`DriverError`].
+    ///
+    /// On connection error, if a lifecycle manager is attached, attempts
+    /// automatic recovery and retries once.
+    async fn send(&self, request: &Request) -> Result<Response, DriverError> {
+        let result = self.send_raw(request).await;
+
+        match &result {
+            Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
+                warn!(error = %e, "connection error, attempting recovery");
+                self.attempt_recovery().await?;
+                self.send_raw(request).await
+            }
+            _ => result,
+        }
+    }
+
+    /// Sends a request without recovery wrapping.
+    async fn send_raw(&self, request: &Request) -> Result<Response, DriverError> {
+        let mut guard = self.client.lock().await;
+        let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
+        client.send(request).await.map_err(map_client_error)
+    }
+
+    /// Sends a request with a custom read timeout.
+    ///
+    /// When `timeout_ms` is `Some`, the read deadline is set to `timeout_ms + 5s`
+    /// so the Rust side waits longer than the agent's internal retry window.
+    /// When `None`, falls back to the default `send()`.
+    ///
+    /// On connection error, if a lifecycle manager is attached, attempts
+    /// automatic recovery and retries once.
+    async fn send_with_read_timeout(
+        &self,
+        request: &Request,
+        timeout_ms: Option<u64>,
+    ) -> Result<Response, DriverError> {
+        let result = self.send_raw_with_read_timeout(request, timeout_ms).await;
+
+        match &result {
+            Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
+                warn!(error = %e, "connection error (with timeout), attempting recovery");
+                self.attempt_recovery().await?;
+                self.send_raw_with_read_timeout(request, timeout_ms).await
+            }
+            _ => result,
+        }
+    }
+
+    /// Sends a request with a custom read timeout, without recovery wrapping.
+    async fn send_raw_with_read_timeout(
+        &self,
+        request: &Request,
+        timeout_ms: Option<u64>,
+    ) -> Result<Response, DriverError> {
+        match timeout_ms {
+            Some(ms) => {
+                let read_timeout = Duration::from_millis(ms + 5000);
+                let mut guard = self.client.lock().await;
+                let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
+                client
+                    .send_with_timeout(request, read_timeout)
+                    .await
+                    .map_err(map_client_error)
+            }
+            None => self.send_raw(request).await,
+        }
+    }
+}
+
+#[async_trait]
+impl AutomationDriver for AgentDriver {
+    #[instrument(skip(self), level = "debug")]
+    async fn connect(&mut self) -> Result<(), DriverError> {
+        let client = self.create_client().await?;
+        *self.client.lock().await = Some(client);
         Ok(())
     }
 
     fn is_connected(&self) -> bool {
-        self.client.is_some()
+        self.client.try_lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
     async fn tap_location(&self, x: i32, y: i32) -> Result<(), DriverError> {
@@ -1102,5 +1208,70 @@ mod tests {
             }
             other => panic!("expected CommandFailed, got: {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // is_connection_error classifier
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_connection_error_classifier() {
+        // Connection errors — should return true
+        assert!(AgentDriver::is_connection_error(&DriverError::NotConnected));
+        assert!(AgentDriver::is_connection_error(&DriverError::ConnectionLost(
+            "reset".to_string()
+        )));
+        assert!(AgentDriver::is_connection_error(&DriverError::Io(
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken")
+        )));
+
+        // Non-connection errors — should return false
+        assert!(!AgentDriver::is_connection_error(&DriverError::Timeout));
+        assert!(!AgentDriver::is_connection_error(&DriverError::CommandFailed(
+            "element not found".to_string()
+        )));
+        assert!(!AgentDriver::is_connection_error(&DriverError::JsonParse(
+            "bad json".to_string()
+        )));
+    }
+
+    // -----------------------------------------------------------------------
+    // send without lifecycle propagates error
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_send_without_lifecycle_propagates_error() {
+        // Create a mock server that handles heartbeat then drops
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            // Heartbeat
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).await.unwrap();
+            let len = crate::protocol::read_frame_length(&header) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            let ok_bytes = encode_response(&Response::Ok);
+            stream.write_all(&ok_bytes).await.unwrap();
+            stream.flush().await.unwrap();
+
+            // Read next request then drop (simulating crash)
+            let _ = stream.read_exact(&mut header).await;
+            drop(stream);
+        });
+
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        // No lifecycle attached — recovery should NOT be attempted
+        assert!(driver.lifecycle.is_none());
+        driver.connect().await.unwrap();
+
+        // This should fail with a connection error and propagate directly
+        let result = driver.tap_element("btn").await;
+        assert!(result.is_err());
+        // The error should be a connection-type error
+        assert!(AgentDriver::is_connection_error(&result.unwrap_err()));
     }
 }

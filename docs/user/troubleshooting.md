@@ -27,13 +27,26 @@
 2. Try stopping and restarting: `stop-agent` then `start-agent`
 3. The agent binds to `127.0.0.1:8080` -- ensure nothing else is using that port
 
+**Auto-recovery:**
+
+For simulator sessions started via `start-session` or `start-agent` (managed agents), the server automatically recovers from connection drops. When a command fails with an I/O or connection error, the driver will:
+
+1. Kill the old agent process
+2. Respawn it (without rebuilding)
+3. Wait for it to become ready
+4. Retry the command once
+
+If you see a command succeed after a brief delay following a crash, recovery worked. If recovery itself fails, you'll see a message like `recovery: agent not ready: ...` — in that case, run `stop-agent` then `start-agent` manually.
+
+Auto-recovery does **not** apply to `connect` (direct connect via `connect <host> <port>`) or physical device connections.
+
 **Timeouts:**
 
 - Connection timeout: 5 seconds
 - Read timeout: 30 seconds (default) — if the agent doesn't respond within 30 seconds, the connection is closed to prevent response mismatches on subsequent commands. When `QORVEX_TIMEOUT` or `--timeout` is set, the read deadline is extended to `timeout + 5s` so long agent-side retries can complete
 - Agent startup timeout: 30 seconds (3 retries)
 
-If a read timeout occurs (e.g., while the watcher polls a slow UI hierarchy), the next command will report "Not connected". Use `connect` in the REPL or restart the agent to re-establish the connection.
+If a read timeout occurs (e.g., while the watcher polls a slow UI hierarchy), the next command will report "Not connected". For managed agents, auto-recovery will attempt to reconnect. For unmanaged agents, use `connect` in the REPL or restart the agent manually.
 
 ## Element Not Found
 

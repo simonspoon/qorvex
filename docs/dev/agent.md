@@ -94,6 +94,26 @@ Kills the child process. Falls back to `xcrun simctl terminate <udid> com.qorvex
 | Use case | Fresh start, known stale agent | Idempotent startup, skip rebuild if already running |
 | Retry behavior | Up to `max_retries + 1` attempts (build + spawn + health check) | Attempts health check first; delegates to `ensure_running` only if unreachable |
 
+## Crash Recovery (via `AgentDriver::with_lifecycle`)
+
+`AgentLifecycle` also participates in mid-session crash recovery. When an `AgentDriver` is constructed with `.with_lifecycle(Arc<AgentLifecycle>)`, any connection error during a command triggers an automatic recovery cycle:
+
+1. `terminate_agent()` — kill the old agent process
+2. `spawn_agent()` — respawn without rebuilding (XCTest bundle stays on disk)
+3. `wait_for_ready()` — poll until TCP accepts a heartbeat
+4. Reconnect `AgentClient` and retry the command once
+
+The server (`qorvex-server`) automatically passes the lifecycle to the driver whenever it starts a managed agent:
+
+```rust
+let lifecycle = Arc::new(AgentLifecycle::new(udid, config));
+lifecycle.ensure_agent_ready().await?;
+let driver = AgentDriver::direct("127.0.0.1", 8080)
+    .with_lifecycle(lifecycle.clone());
+```
+
+Recovery is skipped for physical device connections (no lifecycle is attached to USB-tunnelled drivers).
+
 ---
 
 ## `CommandHandler` Dispatch
