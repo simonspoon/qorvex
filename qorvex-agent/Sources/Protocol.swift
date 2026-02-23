@@ -45,12 +45,12 @@ enum ResponseType: UInt8 {
 enum AgentRequest {
     case heartbeat
     case tapCoord(x: Int32, y: Int32)
-    case tapElement(selector: String)
-    case tapByLabel(label: String)
-    case tapWithType(selector: String, byLabel: Bool, elementType: String)
+    case tapElement(selector: String, timeoutMs: UInt64?)
+    case tapByLabel(label: String, timeoutMs: UInt64?)
+    case tapWithType(selector: String, byLabel: Bool, elementType: String, timeoutMs: UInt64?)
     case typeText(text: String)
     case swipe(startX: Int32, startY: Int32, endX: Int32, endY: Int32, duration: Double?)
-    case getValue(selector: String, byLabel: Bool, elementType: String?)
+    case getValue(selector: String, byLabel: Bool, elementType: String?, timeoutMs: UInt64?)
     case longPress(x: Int32, y: Int32, duration: Double)
     case dumpTree
     case screenshot
@@ -155,11 +155,27 @@ final class ProtocolCursor {
         return string
     }
 
+    func readUInt64() throws -> UInt64 {
+        guard remaining >= 8 else { throw ProtocolError.insufficientData }
+        let start = data.startIndex + position
+        let bytes = data[start..<start + 8]
+        position += 8
+        return bytes.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
+    }
+
     /// Read an optional string: [u8 flag] then optional [string].
     func readOptionalString() throws -> String? {
         let flag = try readUInt8()
         if flag == 0 { return nil }
         return try readString()
+    }
+
+    /// Read an optional trailing timeout_ms. Returns nil if no bytes remain.
+    func readOptionalTimeoutMs() throws -> UInt64? {
+        guard remaining > 0 else { return nil }
+        let flag = try readUInt8()
+        if flag == 0 { return nil }
+        return try readUInt64()
     }
 }
 
@@ -184,17 +200,20 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
 
     case .tapElement:
         let selector = try cursor.readString()
-        return .tapElement(selector: selector)
+        let timeoutMs = try cursor.readOptionalTimeoutMs()
+        return .tapElement(selector: selector, timeoutMs: timeoutMs)
 
     case .tapByLabel:
         let label = try cursor.readString()
-        return .tapByLabel(label: label)
+        let timeoutMs = try cursor.readOptionalTimeoutMs()
+        return .tapByLabel(label: label, timeoutMs: timeoutMs)
 
     case .tapWithType:
         let selector = try cursor.readString()
         let byLabel = try cursor.readBool()
         let elementType = try cursor.readString()
-        return .tapWithType(selector: selector, byLabel: byLabel, elementType: elementType)
+        let timeoutMs = try cursor.readOptionalTimeoutMs()
+        return .tapWithType(selector: selector, byLabel: byLabel, elementType: elementType, timeoutMs: timeoutMs)
 
     case .typeText:
         let text = try cursor.readString()
@@ -213,7 +232,8 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
         let selector = try cursor.readString()
         let byLabel = try cursor.readBool()
         let elementType = try cursor.readOptionalString()
-        return .getValue(selector: selector, byLabel: byLabel, elementType: elementType)
+        let timeoutMs = try cursor.readOptionalTimeoutMs()
+        return .getValue(selector: selector, byLabel: byLabel, elementType: elementType, timeoutMs: timeoutMs)
 
     case .longPress:
         let x = try cursor.readInt32()

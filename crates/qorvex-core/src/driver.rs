@@ -316,6 +316,49 @@ pub trait AutomationDriver: Send + Sync {
         element_type: &str,
     ) -> Result<(), DriverError>;
 
+    /// Tap an element by its accessibility identifier, with agent-side retry.
+    ///
+    /// When `timeout_ms` is `Some`, the agent retries locally until the
+    /// element is found and tapped, or the timeout is reached. This avoids
+    /// per-attempt TCP round-trips compared to Rust-side polling.
+    ///
+    /// The default implementation ignores the timeout and delegates to
+    /// [`tap_element`](Self::tap_element).
+    async fn tap_element_with_timeout(
+        &self,
+        identifier: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let _ = timeout_ms;
+        self.tap_element(identifier).await
+    }
+
+    /// Tap an element by its accessibility label, with agent-side retry.
+    ///
+    /// See [`tap_element_with_timeout`](Self::tap_element_with_timeout) for details.
+    async fn tap_by_label_with_timeout(
+        &self,
+        label: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let _ = timeout_ms;
+        self.tap_by_label(label).await
+    }
+
+    /// Tap an element with a type filter, with agent-side retry.
+    ///
+    /// See [`tap_element_with_timeout`](Self::tap_element_with_timeout) for details.
+    async fn tap_with_type_with_timeout(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let _ = timeout_ms;
+        self.tap_with_type(selector, by_label, element_type).await
+    }
+
     /// Perform a swipe gesture from one point to another.
     ///
     /// # Arguments
@@ -469,6 +512,28 @@ pub trait AutomationDriver: Send + Sync {
         by_label: bool,
         element_type: &str,
     ) -> Result<Option<String>, DriverError>;
+
+    /// Get an element's value with agent-side retry.
+    ///
+    /// When `timeout_ms` is `Some`, the agent retries locally until the
+    /// element is found, or the timeout is reached.
+    ///
+    /// The default implementation ignores the timeout and delegates to
+    /// the appropriate get-value method.
+    async fn get_value_with_timeout(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        timeout_ms: Option<u64>,
+    ) -> Result<Option<String>, DriverError> {
+        let _ = timeout_ms;
+        match element_type {
+            Some(typ) => self.get_value_with_type(selector, by_label, typ).await,
+            None if by_label => self.get_element_value_by_label(selector).await,
+            None => self.get_element_value(selector).await,
+        }
+    }
 
     /// Capture a screenshot of the current simulator screen.
     ///

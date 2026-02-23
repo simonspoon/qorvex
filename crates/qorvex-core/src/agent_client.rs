@@ -353,6 +353,7 @@ mod tests {
         let result = client
             .send(&Request::TapElement {
                 selector: "missing".into(),
+                timeout_ms: None,
             })
             .await;
 

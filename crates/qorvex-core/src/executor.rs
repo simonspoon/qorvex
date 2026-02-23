@@ -96,6 +96,7 @@ pub struct ActionExecutor {
 }
 
 /// Returns true if the driver error is transient and the action should be retried.
+#[allow(dead_code)]
 fn is_retryable_error(err: &DriverError) -> bool {
     match err {
         DriverError::CommandFailed(msg) => {
@@ -199,38 +200,37 @@ impl ActionExecutor {
         match action {
             ActionType::Tap { ref selector, by_label, ref element_type, timeout_ms } => {
                 let start = Instant::now();
-                let timeout = timeout_ms.map(Duration::from_millis);
-                let poll_interval = Duration::from_millis(100);
 
-                loop {
-                    let tap_result = match element_type {
+                let tap_result = if timeout_ms.is_some() {
+                    // Forward timeout to agent — it handles retry internally.
+                    match element_type {
+                        Some(typ) => self.driver.tap_with_type_with_timeout(selector, by_label, typ, timeout_ms).await,
+                        None if by_label => self.driver.tap_by_label_with_timeout(selector, timeout_ms).await,
+                        None => self.driver.tap_element_with_timeout(selector, timeout_ms).await,
+                    }
+                } else {
+                    // No timeout — single attempt (no retry)
+                    match element_type {
                         Some(typ) => self.driver.tap_with_type(selector, by_label, typ).await,
                         None if by_label => self.driver.tap_by_label(selector).await,
                         None => self.driver.tap_element(selector).await,
-                    };
-
-                    match tap_result {
-                        Ok(_) => {
-                            let elapsed_ms = start.elapsed().as_millis() as u64;
-                            let msg = if by_label {
-                                format!("Tapped element with label '{}'", selector)
-                            } else {
-                                format!("Tapped element '{}'", selector)
-                            };
-                            return ExecutionResult::success(msg)
-                                .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
-                        }
-                        Err(ref e) if timeout.is_some() && is_retryable_error(e) => {
-                            if start.elapsed() >= timeout.unwrap() {
-                                let elapsed_ms = start.elapsed().as_millis();
-                                return ExecutionResult::failure(format!(
-                                    "Timeout after {}ms: {}", elapsed_ms, e
-                                ));
-                            }
-                            tokio::time::sleep(poll_interval).await;
-                        }
-                        Err(e) => return ExecutionResult::failure(e.to_string()),
                     }
+                };
+
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                match tap_result {
+                    Ok(_) => {
+                        let msg = if by_label {
+                            format!("Tapped element with label '{}'", selector)
+                        } else {
+                            format!("Tapped element '{}'", selector)
+                        };
+                        ExecutionResult::success(msg)
+                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms))
+                    }
+                    Err(e) => ExecutionResult::failure(format!(
+                        "Timeout after {}ms: {}", elapsed_ms, e
+                    )),
                 }
             }
 
@@ -317,44 +317,46 @@ impl ActionExecutor {
 
             ActionType::GetValue { ref selector, by_label, ref element_type, timeout_ms } => {
                 let start = Instant::now();
-                let timeout = timeout_ms.map(Duration::from_millis);
-                let poll_interval = Duration::from_millis(100);
 
-                loop {
-                    let value_result = match element_type {
+                let value_result = if timeout_ms.is_some() {
+                    // Forward timeout to agent — it handles retry internally.
+                    self.driver.get_value_with_timeout(
+                        selector,
+                        by_label,
+                        element_type.as_deref(),
+                        timeout_ms,
+                    ).await
+                        // Normalize into the same Result<Option<String>> shape
+                } else {
+                    // No timeout — single attempt (no retry)
+                    match element_type {
                         Some(typ) => self.driver.get_value_with_type(selector, by_label, typ).await,
                         None if by_label => self.driver.get_element_value_by_label(selector).await,
                         None => self.driver.get_element_value(selector).await,
-                    };
-
-                    match value_result {
-                        Ok(Some(value)) => {
-                            let msg = if by_label {
-                                format!("Got value for label '{}'", selector)
-                            } else {
-                                format!("Got value for '{}'", selector)
-                            };
-                            return ExecutionResult::success(msg).with_data(value);
-                        }
-                        Ok(None) => {
-                            let msg = if by_label {
-                                format!("Element with label '{}' has no value", selector)
-                            } else {
-                                format!("Element '{}' has no value", selector)
-                            };
-                            return ExecutionResult::success(msg).with_data("null".to_string());
-                        }
-                        Err(ref e) if timeout.is_some() && is_retryable_error(e) => {
-                            if start.elapsed() >= timeout.unwrap() {
-                                let elapsed_ms = start.elapsed().as_millis();
-                                return ExecutionResult::failure(format!(
-                                    "Timeout after {}ms: {}", elapsed_ms, e
-                                ));
-                            }
-                            tokio::time::sleep(poll_interval).await;
-                        }
-                        Err(e) => return ExecutionResult::failure(e.to_string()),
                     }
+                };
+
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                match value_result {
+                    Ok(Some(value)) => {
+                        let msg = if by_label {
+                            format!("Got value for label '{}'", selector)
+                        } else {
+                            format!("Got value for '{}'", selector)
+                        };
+                        ExecutionResult::success(msg).with_data(value)
+                    }
+                    Ok(None) => {
+                        let msg = if by_label {
+                            format!("Element with label '{}' has no value", selector)
+                        } else {
+                            format!("Element '{}' has no value", selector)
+                        };
+                        ExecutionResult::success(msg).with_data("null".to_string())
+                    }
+                    Err(e) => ExecutionResult::failure(format!(
+                        "Timeout after {}ms: {}", elapsed_ms, e
+                    )),
                 }
             }
 

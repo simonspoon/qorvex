@@ -19,14 +19,14 @@ final class CommandHandler {
         case .tapCoord(let x, let y):
             return handleTapCoord(x: x, y: y)
 
-        case .tapElement(let selector):
-            return handleTapElement(selector: selector)
+        case .tapElement(let selector, let timeoutMs):
+            return handleTapElement(selector: selector, timeoutMs: timeoutMs)
 
-        case .tapByLabel(let label):
-            return handleTapByLabel(label: label)
+        case .tapByLabel(let label, let timeoutMs):
+            return handleTapByLabel(label: label, timeoutMs: timeoutMs)
 
-        case .tapWithType(let selector, let byLabel, let elementType):
-            return handleTapWithType(selector: selector, byLabel: byLabel, elementType: elementType)
+        case .tapWithType(let selector, let byLabel, let elementType, let timeoutMs):
+            return handleTapWithType(selector: selector, byLabel: byLabel, elementType: elementType, timeoutMs: timeoutMs)
 
         case .typeText(let text):
             return handleTypeText(text: text)
@@ -41,8 +41,8 @@ final class CommandHandler {
         case .longPress(let x, let y, let duration):
             return handleLongPress(x: x, y: y, duration: duration)
 
-        case .getValue(let selector, let byLabel, let elementType):
-            return handleGetValue(selector: selector, byLabel: byLabel, elementType: elementType)
+        case .getValue(let selector, let byLabel, let elementType, let timeoutMs):
+            return handleGetValue(selector: selector, byLabel: byLabel, elementType: elementType, timeoutMs: timeoutMs)
 
         case .dumpTree:
             return handleDumpTree()
@@ -77,100 +77,128 @@ final class CommandHandler {
 
     // MARK: - Tap by accessibility identifier
 
-    private func handleTapElement(selector: String) -> AgentResponse {
-        let element = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier == %@", selector)
-        ).firstMatch
+    private func handleTapElement(selector: String, timeoutMs: UInt64?) -> AgentResponse {
+        let queryFn = { [app] () -> XCUIElement in
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier == %@", selector)
+            ).firstMatch
+        }
 
-        var errorMsg: String?
-        var objcError: NSError?
-        let caught = QVXTryCatch({
-            guard element.exists else {
-                errorMsg = "Element with identifier '\(selector)' not found"
-                return
+        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+            var errorMsg: String?
+            var objcError: NSError?
+            let caught = QVXTryCatch({
+                guard element.exists else {
+                    errorMsg = "Element with identifier '\(selector)' not found"
+                    return
+                }
+                guard element.isHittable else {
+                    errorMsg = "Element with identifier '\(selector)' exists but is not hittable"
+                    return
+                }
+                element.tap()
+            }, &objcError)
+            if !caught {
+                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+                return .error(message: "Tap failed: \(msg)")
             }
-            guard element.isHittable else {
-                errorMsg = "Element with identifier '\(selector)' exists but is not hittable"
-                return
+            if let errorMsg = errorMsg {
+                // Retryable error: return nil to poll again (if timeout allows)
+                return nil
             }
-            element.tap()
-        }, &objcError)
-        if !caught {
-            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
-            return .error(message: "Tap failed: \(msg)")
+            return .ok
         }
-        if let errorMsg = errorMsg {
-            return .error(message: errorMsg)
+
+        if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
+            return result
         }
-        return .ok
+        return .error(message: "Element with identifier '\(selector)' not found")
     }
 
     // MARK: - Tap by accessibility label
 
-    private func handleTapByLabel(label: String) -> AgentResponse {
-        let element = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", label)
-        ).firstMatch
+    private func handleTapByLabel(label: String, timeoutMs: UInt64?) -> AgentResponse {
+        let queryFn = { [app] () -> XCUIElement in
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "label == %@", label)
+            ).firstMatch
+        }
 
-        var errorMsg: String?
-        var objcError: NSError?
-        let caught = QVXTryCatch({
-            guard element.exists else {
-                errorMsg = "Element with label '\(label)' not found"
-                return
+        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+            var errorMsg: String?
+            var objcError: NSError?
+            let caught = QVXTryCatch({
+                guard element.exists else {
+                    errorMsg = "Element with label '\(label)' not found"
+                    return
+                }
+                guard element.isHittable else {
+                    errorMsg = "Element with label '\(label)' exists but is not hittable"
+                    return
+                }
+                element.tap()
+            }, &objcError)
+            if !caught {
+                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+                return .error(message: "Tap failed: \(msg)")
             }
-            guard element.isHittable else {
-                errorMsg = "Element with label '\(label)' exists but is not hittable"
-                return
+            if let errorMsg = errorMsg {
+                return nil
             }
-            element.tap()
-        }, &objcError)
-        if !caught {
-            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
-            return .error(message: "Tap failed: \(msg)")
+            return .ok
         }
-        if let errorMsg = errorMsg {
-            return .error(message: errorMsg)
+
+        if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
+            return result
         }
-        return .ok
+        return .error(message: "Element with label '\(label)' not found")
     }
 
     // MARK: - Tap with element type filter
 
-    private func handleTapWithType(selector: String, byLabel: Bool, elementType: String) -> AgentResponse {
+    private func handleTapWithType(selector: String, byLabel: Bool, elementType: String, timeoutMs: UInt64?) -> AgentResponse {
         guard let xcType = xcuiElementType(from: elementType) else {
             return .error(message: "Unknown element type '\(elementType)'")
         }
 
         let field = byLabel ? "label" : "identifier"
-        let query = app.descendants(matching: xcType).matching(
-            NSPredicate(format: "%K == %@", field, selector)
-        )
+        let queryFn = { [app] () -> XCUIElement in
+            app.descendants(matching: xcType).matching(
+                NSPredicate(format: "%K == %@", field, selector)
+            ).firstMatch
+        }
 
-        let element = query.firstMatch
-        var errorMsg: String?
-        var objcError: NSError?
-        let caught = QVXTryCatch({
-            guard element.exists else {
-                let lookupKind = byLabel ? "label" : "identifier"
-                errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found"
-                return
+        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+            var errorMsg: String?
+            var objcError: NSError?
+            let caught = QVXTryCatch({
+                guard element.exists else {
+                    let lookupKind = byLabel ? "label" : "identifier"
+                    errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found"
+                    return
+                }
+                guard element.isHittable else {
+                    let lookupKind = byLabel ? "label" : "identifier"
+                    errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' exists but is not hittable"
+                    return
+                }
+                element.tap()
+            }, &objcError)
+            if !caught {
+                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+                return .error(message: "Tap failed: \(msg)")
             }
-            guard element.isHittable else {
-                let lookupKind = byLabel ? "label" : "identifier"
-                errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' exists but is not hittable"
-                return
+            if let errorMsg = errorMsg {
+                return nil
             }
-            element.tap()
-        }, &objcError)
-        if !caught {
-            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
-            return .error(message: "Tap failed: \(msg)")
+            return .ok
         }
-        if let errorMsg = errorMsg {
-            return .error(message: errorMsg)
+
+        if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
+            return result
         }
-        return .ok
+        let lookupKind = byLabel ? "label" : "identifier"
+        return .error(message: "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found")
     }
 
     // MARK: - Type text
@@ -222,22 +250,20 @@ final class CommandHandler {
         ).withOffset(CGVector(dx: Double(endX), dy: Double(endY)))
 
         let swipeDuration = duration ?? 0.3
+        let dx = Double(endX - startX)
+        let dy = Double(endY - startY)
+        let distance = sqrt(dx * dx + dy * dy)
+        let velocity = distance / swipeDuration  // points per second
         var objcError: NSError?
         let caught = QVXTryCatch({
-            startCoord.press(forDuration: 0.05, thenDragTo: endCoord, withVelocity: .default,
+            startCoord.press(forDuration: 0.05, thenDragTo: endCoord,
+                             withVelocity: XCUIGestureVelocity(velocity),
                              thenHoldForDuration: 0)
         }, &objcError)
         if !caught {
             let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
             return .error(message: "Swipe failed: \(msg)")
         }
-        // Note: For more precise duration control, we use press+drag.
-        // The velocity-based API doesn't directly accept duration, so we approximate.
-        // An alternative for exact duration:
-        //   startCoord.press(forDuration: 0, thenDragTo: endCoord)
-        // which uses the system default duration.
-
-        _ = swipeDuration // Acknowledge the parameter for future use.
         return .ok
     }
 
@@ -260,45 +286,54 @@ final class CommandHandler {
 
     // MARK: - Get value
 
-    private func handleGetValue(selector: String, byLabel: Bool, elementType: String?) -> AgentResponse {
-        let element: XCUIElement
-
-        if let typeName = elementType, let xcType = xcuiElementType(from: typeName) {
-            let field = byLabel ? "label" : "identifier"
-            element = app.descendants(matching: xcType).matching(
-                NSPredicate(format: "%K == %@", field, selector)
-            ).firstMatch
-        } else {
-            let field = byLabel ? "label" : "identifier"
-            element = app.descendants(matching: .any).matching(
-                NSPredicate(format: "%K == %@", field, selector)
-            ).firstMatch
-        }
-
-        var result: AgentResponse?
-        var objcError: NSError?
-        let caught = QVXTryCatch({
-            guard element.exists else {
-                let lookupKind = byLabel ? "label" : "identifier"
-                let typeInfo = elementType.map { " and type '\($0)'" } ?? ""
-                result = .error(
-                    message: "Element with \(lookupKind) '\(selector)'\(typeInfo) not found"
-                )
-                return
-            }
-            let rawValue = element.value as? String ?? ""
-            let value = rawValue.isEmpty ? element.label : rawValue
-            if value.isEmpty {
-                result = .value(nil)
+    private func handleGetValue(selector: String, byLabel: Bool, elementType: String?, timeoutMs: UInt64?) -> AgentResponse {
+        let queryFn = { [app] () -> XCUIElement in
+            if let typeName = elementType, let xcType = xcuiElementType(from: typeName) {
+                let field = byLabel ? "label" : "identifier"
+                return app.descendants(matching: xcType).matching(
+                    NSPredicate(format: "%K == %@", field, selector)
+                ).firstMatch
             } else {
-                result = .value(value)
+                let field = byLabel ? "label" : "identifier"
+                return app.descendants(matching: .any).matching(
+                    NSPredicate(format: "%K == %@", field, selector)
+                ).firstMatch
             }
-        }, &objcError)
-        if !caught {
-            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
-            return .error(message: "GetValue failed: \(msg)")
         }
-        return result ?? .error(message: "GetValue produced no result")
+
+        let actionFn = { (element: XCUIElement) -> AgentResponse? in
+            var result: AgentResponse?
+            var notFound = false
+            var objcError: NSError?
+            let caught = QVXTryCatch({
+                guard element.exists else {
+                    notFound = true
+                    return
+                }
+                let rawValue = element.value as? String ?? ""
+                let value = rawValue.isEmpty ? element.label : rawValue
+                if value.isEmpty {
+                    result = .value(nil)
+                } else {
+                    result = .value(value)
+                }
+            }, &objcError)
+            if !caught {
+                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+                return .error(message: "GetValue failed: \(msg)")
+            }
+            if notFound {
+                return nil  // retryable
+            }
+            return result ?? .error(message: "GetValue produced no result")
+        }
+
+        if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
+            return result
+        }
+        let lookupKind = byLabel ? "label" : "identifier"
+        let typeInfo = elementType.map { " and type '\($0)'" } ?? ""
+        return .error(message: "Element with \(lookupKind) '\(selector)'\(typeInfo) not found")
     }
 
     // MARK: - Dump tree
@@ -323,7 +358,9 @@ final class CommandHandler {
             return .error(message: "Failed to capture accessibility tree: snapshot returned nil")
         }
 
-        let tree = serializeElement(snapshot)
+        guard let tree = serializeElement(snapshot) else {
+            return .tree(json: "[]")
+        }
 
         do {
             let jsonData = try JSONEncoder().encode(tree)
@@ -401,7 +438,10 @@ final class CommandHandler {
             }
 
             if let snap = snapshot {
-                var serialized = self.serializeElement(snap)
+                guard var serialized = self.serializeElement(snap) else {
+                    result = .element(json: "null")
+                    return
+                }
                 serialized = UIElementJSON(
                     AXUniqueId: serialized.AXUniqueId,
                     AXLabel: serialized.AXLabel,
@@ -461,10 +501,37 @@ final class CommandHandler {
         return result ?? .error(message: "FindElement produced no result")
     }
 
+    // MARK: - Poll helper
+
+    /// Poll until an element matching `query` satisfies `action`, with timeout.
+    /// Returns nil only when the timeout is reached without success.
+    private func pollUntilFound(
+        timeoutMs: UInt64?,
+        interval: TimeInterval = 0.050,
+        query: () -> XCUIElement,
+        action: (XCUIElement) -> AgentResponse?  // nil = retry, non-nil = done
+    ) -> AgentResponse? {
+        let timeout: TimeInterval = timeoutMs.map { Double($0) / 1000.0 } ?? 0
+        let deadline = CFAbsoluteTimeGetCurrent() + timeout
+
+        while true {
+            let element = query()
+            if let response = action(element) {
+                return response
+            }
+            // No timeout or deadline passed → give up
+            if timeout <= 0 || CFAbsoluteTimeGetCurrent() >= deadline {
+                return nil
+            }
+            Thread.sleep(forTimeInterval: interval)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Recursively serialize an XCUIElementSnapshot into our Codable tree structure.
-    private func serializeElement(_ snapshot: any XCUIElementSnapshot) -> UIElementJSON {
+    /// Returns nil for empty scaffolding nodes (no identity, no area, no surviving children).
+    private func serializeElement(_ snapshot: any XCUIElementSnapshot) -> UIElementJSON? {
         let frame = snapshot.frame
         let frameJSON = FrameJSON(
             x: Double(frame.origin.x),
@@ -473,8 +540,18 @@ final class CommandHandler {
             height: Double(frame.size.height)
         )
 
-        let children = snapshot.children.map { child -> UIElementJSON in
+        let children = snapshot.children.compactMap { child -> UIElementJSON? in
             serializeElement(child)
+        }
+
+        let hasIdentity = !snapshot.identifier.isEmpty
+            || !snapshot.label.isEmpty
+            || (snapshot.value as? String).map { !$0.isEmpty } ?? false
+        let hasArea = frame.width > 0 && frame.height > 0
+
+        // Prune empty scaffolding nodes
+        if !hasIdentity && !hasArea && children.isEmpty {
+            return nil
         }
 
         return UIElementJSON(
@@ -484,7 +561,7 @@ final class CommandHandler {
             type: elementTypeName(snapshot.elementType),
             frame: frameJSON,
             children: children,
-            role: nil, // XCUIElement doesn't directly expose role
+            role: nil,
             hittable: nil
         )
     }

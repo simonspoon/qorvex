@@ -212,6 +212,7 @@ impl AutomationDriver for AgentDriver {
         let response = self
             .send(&Request::TapElement {
                 selector: identifier.to_string(),
+                timeout_ms: None,
             })
             .await?;
         expect_ok(response)
@@ -222,6 +223,7 @@ impl AutomationDriver for AgentDriver {
         let response = self
             .send(&Request::TapByLabel {
                 label: label.to_string(),
+                timeout_ms: None,
             })
             .await?;
         expect_ok(response)
@@ -239,6 +241,7 @@ impl AutomationDriver for AgentDriver {
                 selector: selector.to_string(),
                 by_label,
                 element_type: element_type.to_string(),
+                timeout_ms: None,
             })
             .await?;
         expect_ok(response)
@@ -305,6 +308,7 @@ impl AutomationDriver for AgentDriver {
                 selector: identifier.to_string(),
                 by_label: false,
                 element_type: None,
+                timeout_ms: None,
             })
             .await?;
         match response {
@@ -324,6 +328,7 @@ impl AutomationDriver for AgentDriver {
                 selector: label.to_string(),
                 by_label: true,
                 element_type: None,
+                timeout_ms: None,
             })
             .await?;
         match response {
@@ -345,6 +350,7 @@ impl AutomationDriver for AgentDriver {
                 selector: selector.to_string(),
                 by_label,
                 element_type: Some(element_type.to_string()),
+                timeout_ms: None,
             })
             .await?;
         match response {
@@ -363,6 +369,75 @@ impl AutomationDriver for AgentDriver {
                 debug!(bytes = data.len(), "screenshot captured");
                 Ok(data)
             }
+            other => Err(DriverError::CommandFailed(format!(
+                "unexpected response: {other:?}"
+            ))),
+        }
+    }
+
+    async fn tap_element_with_timeout(
+        &self,
+        identifier: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let response = self
+            .send(&Request::TapElement {
+                selector: identifier.to_string(),
+                timeout_ms,
+            })
+            .await?;
+        expect_ok(response)
+    }
+
+    async fn tap_by_label_with_timeout(
+        &self,
+        label: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let response = self
+            .send(&Request::TapByLabel {
+                label: label.to_string(),
+                timeout_ms,
+            })
+            .await?;
+        expect_ok(response)
+    }
+
+    async fn tap_with_type_with_timeout(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let response = self
+            .send(&Request::TapWithType {
+                selector: selector.to_string(),
+                by_label,
+                element_type: element_type.to_string(),
+                timeout_ms,
+            })
+            .await?;
+        expect_ok(response)
+    }
+
+    async fn get_value_with_timeout(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        timeout_ms: Option<u64>,
+    ) -> Result<Option<String>, DriverError> {
+        let response = self
+            .send(&Request::GetValue {
+                selector: selector.to_string(),
+                by_label,
+                element_type: element_type.map(|s| s.to_string()),
+                timeout_ms,
+            })
+            .await?;
+        match response {
+            Response::Value { value } => Ok(value),
             other => Err(DriverError::CommandFailed(format!(
                 "unexpected response: {other:?}"
             ))),

@@ -13,7 +13,7 @@ This document covers the `AutomationDriver` trait, its implementations, and the 
 
 ## `AutomationDriver` Trait
 
-All methods grouped by category. The trait has 18 async methods and 1 sync method.
+All methods grouped by category. The trait has 22 async methods and 1 sync method.
 
 ### Connection
 
@@ -27,9 +27,12 @@ All methods grouped by category. The trait has 18 async methods and 1 sync metho
 | Method | Description |
 |--------|-------------|
 | `async fn tap_location(&self, x: i32, y: i32) -> Result<(), DriverError>` | Tap at screen coordinates |
-| `async fn tap_element(&self, identifier: &str) -> Result<(), DriverError>` | Tap by accessibility ID |
-| `async fn tap_by_label(&self, label: &str) -> Result<(), DriverError>` | Tap by accessibility label |
-| `async fn tap_with_type(&self, selector: &str, by_label: bool, element_type: &str) -> Result<(), DriverError>` | Tap with element type constraint |
+| `async fn tap_element(&self, identifier: &str) -> Result<(), DriverError>` | Tap by accessibility ID (single attempt) |
+| `async fn tap_by_label(&self, label: &str) -> Result<(), DriverError>` | Tap by accessibility label (single attempt) |
+| `async fn tap_with_type(&self, selector: &str, by_label: bool, element_type: &str) -> Result<(), DriverError>` | Tap with element type constraint (single attempt) |
+| `async fn tap_element_with_timeout(&self, identifier: &str, timeout_ms: Option<u64>) -> Result<(), DriverError>` | Tap by ID; forwards timeout to agent for agent-side retry |
+| `async fn tap_by_label_with_timeout(&self, label: &str, timeout_ms: Option<u64>) -> Result<(), DriverError>` | Tap by label; forwards timeout to agent for agent-side retry |
+| `async fn tap_with_type_with_timeout(&self, selector: &str, by_label: bool, element_type: &str, timeout_ms: Option<u64>) -> Result<(), DriverError>` | Tap with type constraint; forwards timeout to agent for agent-side retry |
 
 ### Gestures
 
@@ -49,9 +52,10 @@ All methods grouped by category. The trait has 18 async methods and 1 sync metho
 | Method | Description |
 |--------|-------------|
 | `async fn dump_tree(&self) -> Result<Vec<UIElement>, DriverError>` | Dump full accessibility hierarchy |
-| `async fn get_element_value(&self, identifier: &str) -> Result<Option<String>, DriverError>` | Get value by accessibility ID |
-| `async fn get_element_value_by_label(&self, label: &str) -> Result<Option<String>, DriverError>` | Get value by accessibility label |
-| `async fn get_value_with_type(&self, selector: &str, by_label: bool, element_type: &str) -> Result<Option<String>, DriverError>` | Get value with type constraint |
+| `async fn get_element_value(&self, identifier: &str) -> Result<Option<String>, DriverError>` | Get value by accessibility ID (single attempt) |
+| `async fn get_element_value_by_label(&self, label: &str) -> Result<Option<String>, DriverError>` | Get value by accessibility label (single attempt) |
+| `async fn get_value_with_type(&self, selector: &str, by_label: bool, element_type: &str) -> Result<Option<String>, DriverError>` | Get value with type constraint (single attempt) |
+| `async fn get_value_with_timeout(&self, selector: &str, by_label: bool, element_type: Option<&str>, timeout_ms: Option<u64>) -> Result<Option<String>, DriverError>` | Get value; forwards timeout to agent for agent-side retry |
 | `async fn screenshot(&self) -> Result<Vec<u8>, DriverError>` | Capture screenshot as raw PNG bytes |
 
 ### Search (Default Implementations)
@@ -175,6 +179,17 @@ It overrides the default search methods to use the `FindElement` protocol comman
 | `find_element(identifier)` | Sends `FindElement` with `by_label=false` |
 | `find_element_by_label(label)` | Sends `FindElement` with `by_label=true` |
 | `find_element_with_type(selector, by_label, element_type)` | Sends `FindElement` with all three fields |
+
+It also overrides the timeout-aware tap/get-value methods to forward `timeout_ms` through the protocol:
+
+| Override | Behavior |
+|----------|----------|
+| `tap_element_with_timeout(identifier, timeout_ms)` | Sends `TapElement` with `timeout_ms` field |
+| `tap_by_label_with_timeout(label, timeout_ms)` | Sends `TapByLabel` with `timeout_ms` field |
+| `tap_with_type_with_timeout(selector, by_label, element_type, timeout_ms)` | Sends `TapWithType` with `timeout_ms` field |
+| `get_value_with_timeout(selector, by_label, element_type, timeout_ms)` | Sends `GetValue` with `timeout_ms` field |
+
+When `timeout_ms` is forwarded, the Swift agent handles the retry loop locally (50ms poll interval), eliminating one TCP round-trip per retry attempt. The default trait implementations for these methods ignore `timeout_ms` and delegate to the single-attempt versions (for backends that don't support agent-side retry).
 
 This provides accurate **live hittability** -- the `isHittable` property is only available from live `XCUIElement` queries on the Swift side, not from accessibility tree snapshots returned by `DumpTree`.
 

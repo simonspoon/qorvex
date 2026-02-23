@@ -138,14 +138,15 @@ pub enum Request {
     /// Tap at absolute screen coordinates.
     TapCoord { x: i32, y: i32 },
     /// Tap an element by its accessibility identifier.
-    TapElement { selector: String },
+    TapElement { selector: String, timeout_ms: Option<u64> },
     /// Tap an element by its accessibility label.
-    TapByLabel { label: String },
+    TapByLabel { label: String, timeout_ms: Option<u64> },
     /// Tap an element with an explicit type filter.
     TapWithType {
         selector: String,
         by_label: bool,
         element_type: String,
+        timeout_ms: Option<u64>,
     },
     /// Send keyboard input text.
     TypeText { text: String },
@@ -162,6 +163,7 @@ pub enum Request {
         selector: String,
         by_label: bool,
         element_type: Option<String>,
+        timeout_ms: Option<u64>,
     },
     /// Perform a long press at specific screen coordinates.
     LongPress { x: i32, y: i32, duration: f64 },
@@ -279,6 +281,20 @@ fn write_optional_string(buf: &mut Vec<u8>, opt: &Option<String>) {
     }
 }
 
+/// Write an optional u64 as a trailing field.
+///
+/// Format: `[u8 flag]` where flag=0 means None, flag=1 means Some followed by
+/// a u64 LE.
+fn write_optional_u64(buf: &mut Vec<u8>, opt: Option<u64>) {
+    match opt {
+        None => buf.push(0u8),
+        Some(v) => {
+            buf.push(1u8);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+}
+
 /// Write a bool as a single `u8` (0 = false, 1 = true).
 fn write_bool(buf: &mut Vec<u8>, v: bool) {
     buf.push(if v { 1u8 } else { 0u8 });
@@ -377,6 +393,31 @@ impl<'a> Cursor<'a> {
             Ok(Some(self.read_string()?))
         }
     }
+
+    /// Read an optional trailing u64. Returns None if no bytes remain.
+    fn read_optional_trailing_u64(&mut self) -> Result<Option<u64>, ProtocolError> {
+        if self.remaining() == 0 {
+            return Ok(None);
+        }
+        let flag = self.read_u8()?;
+        if flag == 0 {
+            Ok(None)
+        } else {
+            let v = self.read_u64()?;
+            Ok(Some(v))
+        }
+    }
+
+    fn read_u64(&mut self) -> Result<u64, ProtocolError> {
+        if self.remaining() < 8 {
+            return Err(ProtocolError::InsufficientData);
+        }
+        let bytes: [u8; 8] = self.data[self.pos..self.pos + 8]
+            .try_into()
+            .map_err(|_| ProtocolError::InsufficientData)?;
+        self.pos += 8;
+        Ok(u64::from_le_bytes(bytes))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -418,23 +459,27 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
             payload.extend_from_slice(&x.to_le_bytes());
             payload.extend_from_slice(&y.to_le_bytes());
         }
-        Request::TapElement { selector } => {
+        Request::TapElement { selector, timeout_ms } => {
             payload.push(OpCode::TapElement as u8);
             write_string(&mut payload, selector);
+            write_optional_u64(&mut payload, *timeout_ms);
         }
-        Request::TapByLabel { label } => {
+        Request::TapByLabel { label, timeout_ms } => {
             payload.push(OpCode::TapByLabel as u8);
             write_string(&mut payload, label);
+            write_optional_u64(&mut payload, *timeout_ms);
         }
         Request::TapWithType {
             selector,
             by_label,
             element_type,
+            timeout_ms,
         } => {
             payload.push(OpCode::TapWithType as u8);
             write_string(&mut payload, selector);
             write_bool(&mut payload, *by_label);
             write_string(&mut payload, element_type);
+            write_optional_u64(&mut payload, *timeout_ms);
         }
         Request::TypeText { text } => {
             payload.push(OpCode::TypeText as u8);
@@ -464,11 +509,13 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
             selector,
             by_label,
             element_type,
+            timeout_ms,
         } => {
             payload.push(OpCode::GetValue as u8);
             write_string(&mut payload, selector);
             write_bool(&mut payload, *by_label);
             write_optional_string(&mut payload, element_type);
+            write_optional_u64(&mut payload, *timeout_ms);
         }
         Request::LongPress { x, y, duration } => {
             payload.push(OpCode::LongPress as u8);
@@ -524,22 +571,26 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
 
         OpCode::TapElement => {
             let selector = cur.read_string()?;
-            Ok(Request::TapElement { selector })
+            let timeout_ms = cur.read_optional_trailing_u64()?;
+            Ok(Request::TapElement { selector, timeout_ms })
         }
 
         OpCode::TapByLabel => {
             let label = cur.read_string()?;
-            Ok(Request::TapByLabel { label })
+            let timeout_ms = cur.read_optional_trailing_u64()?;
+            Ok(Request::TapByLabel { label, timeout_ms })
         }
 
         OpCode::TapWithType => {
             let selector = cur.read_string()?;
             let by_label = cur.read_bool()?;
             let element_type = cur.read_string()?;
+            let timeout_ms = cur.read_optional_trailing_u64()?;
             Ok(Request::TapWithType {
                 selector,
                 by_label,
                 element_type,
+                timeout_ms,
             })
         }
 
@@ -572,10 +623,12 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
             let selector = cur.read_string()?;
             let by_label = cur.read_bool()?;
             let element_type = cur.read_optional_string()?;
+            let timeout_ms = cur.read_optional_trailing_u64()?;
             Ok(Request::GetValue {
                 selector,
                 by_label,
                 element_type,
+                timeout_ms,
             })
         }
 
@@ -755,6 +808,7 @@ mod tests {
     fn request_tap_element() {
         round_trip_request(&Request::TapElement {
             selector: "login-button".into(),
+            timeout_ms: None,
         });
     }
 
@@ -762,6 +816,7 @@ mod tests {
     fn request_tap_element_empty_selector() {
         round_trip_request(&Request::TapElement {
             selector: String::new(),
+            timeout_ms: None,
         });
     }
 
@@ -769,6 +824,7 @@ mod tests {
     fn request_tap_by_label() {
         round_trip_request(&Request::TapByLabel {
             label: "Sign In".into(),
+            timeout_ms: None,
         });
     }
 
@@ -778,6 +834,7 @@ mod tests {
             selector: "submit-btn".into(),
             by_label: false,
             element_type: "Button".into(),
+            timeout_ms: None,
         });
     }
 
@@ -787,6 +844,7 @@ mod tests {
             selector: "Next".into(),
             by_label: true,
             element_type: "Button".into(),
+            timeout_ms: None,
         });
     }
 
@@ -832,6 +890,7 @@ mod tests {
             selector: "email-field".into(),
             by_label: false,
             element_type: None,
+            timeout_ms: None,
         });
     }
 
@@ -841,6 +900,7 @@ mod tests {
             selector: "Email".into(),
             by_label: true,
             element_type: Some("TextField".into()),
+            timeout_ms: None,
         });
     }
 
@@ -876,6 +936,42 @@ mod tests {
     fn request_set_target() {
         round_trip_request(&Request::SetTarget {
             bundle_id: "com.example.myapp".into(),
+        });
+    }
+
+    #[test]
+    fn request_tap_element_with_timeout() {
+        round_trip_request(&Request::TapElement {
+            selector: "login-button".into(),
+            timeout_ms: Some(5000),
+        });
+    }
+
+    #[test]
+    fn request_tap_by_label_with_timeout() {
+        round_trip_request(&Request::TapByLabel {
+            label: "Sign In".into(),
+            timeout_ms: Some(3000),
+        });
+    }
+
+    #[test]
+    fn request_tap_with_type_with_timeout() {
+        round_trip_request(&Request::TapWithType {
+            selector: "submit-btn".into(),
+            by_label: false,
+            element_type: "Button".into(),
+            timeout_ms: Some(2000),
+        });
+    }
+
+    #[test]
+    fn request_get_value_with_timeout() {
+        round_trip_request(&Request::GetValue {
+            selector: "email-field".into(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: Some(1000),
         });
     }
 

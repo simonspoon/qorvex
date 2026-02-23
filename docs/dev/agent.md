@@ -104,17 +104,39 @@ All commands are dispatched on the main thread via `AgentServer`.
 |---------|---------------|-------------|
 | `heartbeat` | inline | Returns `.ok` immediately |
 | `tapCoord` | `handleTapCoord` | Uses `app.coordinate(withNormalizedOffset:)` with absolute offset |
-| `tapElement` | `handleTapElement` | NSPredicate on `identifier`, checks `exists` + `isHittable` before tapping |
-| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`, checks `exists` + `isHittable` before tapping |
-| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`, filters descendants by `label` or `identifier` |
+| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set |
+| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set |
+| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set |
 | `typeText` | `handleTypeText` | Finds element with `hasKeyboardFocus`, falls back to `app.keyboards.firstMatch` |
-| `swipe` | `handleSwipe` | Uses `press(forDuration:thenDragTo:)` for precise swipe control |
+| `swipe` | `handleSwipe` | Computes velocity from distance/duration (`distance / seconds`), passes to `press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)` |
 | `longPress` | `handleLongPress` | `coordinate.press(forDuration:)` at specified coordinates |
-| `getValue` | `handleGetValue` | Returns `element.value` as String, falls back to `element.label` |
-| `dumpTree` | `handleDumpTree` | `app.snapshot()` via `QVXTryCatch`, serialized to JSON via `UITreeSerializer` |
+| `getValue` | `handleGetValue` | Returns `element.value` as String, falls back to `element.label`; uses `pollUntilFound` when `timeoutMs` is set |
+| `dumpTree` | `handleDumpTree` | `app.snapshot()` via `QVXTryCatch`, serialized to JSON with empty-node pruning |
 | `screenshot` | `handleScreenshot` | `XCUIScreen.main.screenshot().pngRepresentation` -- full screen capture |
 | `setTarget` | `handleSetTarget` | Replaces `self.app = XCUIApplication(bundleIdentifier:)` for app context switching |
 | `findElement` | `handleFindElement` | Queries live `XCUIElement` for `isHittable` (not from snapshot), overrides hittable field in response |
+
+### `pollUntilFound` Helper
+
+Used by `handleTapElement`, `handleTapByLabel`, `handleTapWithType`, and `handleGetValue` when `timeoutMs > 0`:
+
+```swift
+private func pollUntilFound(
+    timeoutMs: UInt64?,
+    interval: TimeInterval = 0.050,
+    query: () -> XCUIElement,
+    action: (XCUIElement) -> AgentResponse?  // nil = retry, non-nil = done
+) -> AgentResponse?
+```
+
+- Polls at 50ms intervals until the action closure returns a non-nil response, or the timeout is reached.
+- When `timeoutMs` is `nil` or `0`, runs the action exactly once.
+- ObjC exceptions (caught by `QVXTryCatch`) are returned immediately — never retried.
+- Only "not found"/"not hittable" conditions (action returns `nil`) trigger the next poll.
+
+### Tree Serialization Pruning
+
+`serializeElement` returns `UIElementJSON?` and prunes empty scaffolding nodes bottom-up: a node is omitted if it has **no identity** (empty identifier, label, and value), **no area** (zero-size frame), **and no surviving children**. Nodes with any identity or visible area are always kept. This reduces JSON payload size without losing actionable elements.
 
 ---
 
