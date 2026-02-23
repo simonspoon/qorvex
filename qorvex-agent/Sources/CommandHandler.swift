@@ -93,6 +93,13 @@ final class CommandHandler {
             ).firstMatch
         }
 
+        // Track frame position across polls to avoid tapping mid-animation.
+        // When timeout_ms is set, require 2 consecutive polls with the same
+        // frame before tapping (adds ~50ms for static elements, correctly
+        // waits for animating ones).
+        var lastFrame: CGRect?
+        var stableCount: Int = 0
+
         let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
@@ -104,6 +111,22 @@ final class CommandHandler {
                 guard element.isHittable else {
                     errorMsg = "Element with identifier '\(selector)' exists but is not hittable"
                     return
+                }
+                // Wait for frame stability when retrying is enabled.
+                if timeoutMs != nil {
+                    let currentFrame = element.frame
+                    if currentFrame != .zero {
+                        if currentFrame == lastFrame {
+                            stableCount += 1
+                        } else {
+                            lastFrame = currentFrame
+                            stableCount = 1
+                        }
+                        if stableCount < 2 {
+                            errorMsg = "frame-unstable"
+                            return
+                        }
+                    }
                 }
                 // Re-query to get a fresh element reference with up-to-date
                 // coordinates. Without this, taps on modals/sheets can land on
@@ -141,6 +164,9 @@ final class CommandHandler {
             ).firstMatch
         }
 
+        var lastFrame: CGRect?
+        var stableCount: Int = 0
+
         let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
@@ -152,6 +178,21 @@ final class CommandHandler {
                 guard element.isHittable else {
                     errorMsg = "Element with label '\(label)' exists but is not hittable"
                     return
+                }
+                if timeoutMs != nil {
+                    let currentFrame = element.frame
+                    if currentFrame != .zero {
+                        if currentFrame == lastFrame {
+                            stableCount += 1
+                        } else {
+                            lastFrame = currentFrame
+                            stableCount = 1
+                        }
+                        if stableCount < 2 {
+                            errorMsg = "frame-unstable"
+                            return
+                        }
+                    }
                 }
                 let fresh = queryFn()
                 guard fresh.exists, fresh.isHittable else {
@@ -190,6 +231,9 @@ final class CommandHandler {
             ).firstMatch
         }
 
+        var lastFrame: CGRect?
+        var stableCount: Int = 0
+
         let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
@@ -203,6 +247,21 @@ final class CommandHandler {
                     let lookupKind = byLabel ? "label" : "identifier"
                     errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' exists but is not hittable"
                     return
+                }
+                if timeoutMs != nil {
+                    let currentFrame = element.frame
+                    if currentFrame != .zero {
+                        if currentFrame == lastFrame {
+                            stableCount += 1
+                        } else {
+                            lastFrame = currentFrame
+                            stableCount = 1
+                        }
+                        if stableCount < 2 {
+                            errorMsg = "frame-unstable"
+                            return
+                        }
+                    }
                 }
                 let fresh = queryFn()
                 guard fresh.exists, fresh.isHittable else {

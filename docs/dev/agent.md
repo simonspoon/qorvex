@@ -137,9 +137,9 @@ All commands are dispatched on the main thread via `AgentServer`.
 |---------|---------------|-------------|
 | `heartbeat` | inline | Returns `.ok` immediately |
 | `tapCoord` | `handleTapCoord` | Uses `app.coordinate(withNormalizedOffset:)` with absolute offset |
-| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; re-queries element immediately before `.tap()` to get fresh coordinates |
-| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; re-queries element immediately before `.tap()` to get fresh coordinates |
-| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; re-queries element immediately before `.tap()` to get fresh coordinates |
+| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before `.tap()` to get fresh coordinates |
+| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before `.tap()` to get fresh coordinates |
+| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before `.tap()` to get fresh coordinates |
 | `typeText` | `handleTypeText` | Finds element with `hasKeyboardFocus`, falls back to `app.keyboards.firstMatch` |
 | `swipe` | `handleSwipe` | Computes velocity from distance/duration (`distance / seconds`), passes to `press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)` |
 | `longPress` | `handleLongPress` | `coordinate.press(forDuration:)` at specified coordinates |
@@ -169,11 +169,17 @@ private func pollUntilFound(
 
 ### Modal / Stale Coordinate Gotcha
 
-With quiescence waiting disabled, an element inside a modal sheet or page can resolve as `exists = true` and `isHittable = true` while its presentation animation is still in progress. The first query computes the element's frame from a mid-animation accessibility snapshot; calling `.tap()` on that reference lands the tap at the old (stale) coordinates, which may be behind the modal or off-screen. The agent returns `Response::Ok` because the tap call itself didn't throw, but nothing visibly happens.
+With quiescence waiting disabled, an element inside a modal sheet or page can resolve as `exists = true` and `isHittable = true` while its presentation animation is still in progress. The first query computes the element's frame from a mid-animation accessibility snapshot; calling `.tap()` on that reference lands the tap at stale coordinates (behind the modal or off-screen). The agent returns `Response::Ok` because the tap call itself didn't throw, but nothing visibly happens.
 
-**Fix:** All three tap handlers (`handleTapElement`, `handleTapByLabel`, `handleTapWithType`) re-query the element immediately before calling `.tap()`. The second `firstMatch` evaluation forces XCUITest to rebuild the element reference from the current accessibility snapshot, picking up the final frame. This costs one extra accessibility query (~5-15ms) per tap but is otherwise transparent.
+**Fix — two-layer defense when `timeoutMs` is set:**
 
-If the re-query finds the element gone or not hittable (e.g., animation moved it off-screen), the action closure returns `nil` and `pollUntilFound` retries on the next 50ms interval.
+1. **Frame stability check:** Each poll captures `element.frame` and tracks it across iterations (via captured `lastFrame`/`stableCount` variables in the action closure). The tap only proceeds when the same frame has been observed on 2 consecutive 50ms polls. This adds ~50ms overhead on static elements but correctly waits out modal animations (~500-700ms) before tapping. Frame stability is skipped for zero-area elements (`frame == .zero`).
+
+2. **Re-query before tap:** After the frame is confirmed stable, the element is re-queried one final time (`queryFn()`) to get the freshest possible `XCUIElement` reference before calling `.tap()`. This costs one extra accessibility query (~5-15ms) per tap.
+
+If either check fails (frame still moving, or re-queried element gone/not hittable), the action closure returns `nil` and `pollUntilFound` retries on the next 50ms interval.
+
+When `timeoutMs` is `nil` (i.e., `--no-wait`), both checks are skipped and the tap fires immediately with a single attempt.
 
 ### Tree Serialization Pruning
 

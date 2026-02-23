@@ -45,7 +45,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
-Tap retry behavior (unless `--no-wait`): attempts the tap immediately. If the agent reports the element is not found or not hittable, retries every 100ms until the timeout elapses. Fails with timeout if the element never becomes tappable. Use explicit `wait-for` when you need frame-stability guarantees before tapping.
+Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On each poll, the element must be found and hittable, and its frame must be stable across 2 consecutive polls before the tap fires. This makes tap animation-aware — tapping immediately after a modal transition works without manual sleeps. Fails with timeout if the element never becomes tappable and stable. Use explicit `wait-for` if you need to assert stability before chaining other operations.
 
 ### Tap at Coordinates
 
