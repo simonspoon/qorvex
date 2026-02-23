@@ -28,6 +28,8 @@
 //! # }
 //! ```
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
@@ -168,6 +170,30 @@ impl AgentDriver {
         let mutex = self.client.as_ref().ok_or(DriverError::NotConnected)?;
         let mut client = mutex.lock().await;
         client.send(request).await.map_err(map_client_error)
+    }
+
+    /// Sends a request with a custom read timeout.
+    ///
+    /// When `timeout_ms` is `Some`, the read deadline is set to `timeout_ms + 5s`
+    /// so the Rust side waits longer than the agent's internal retry window.
+    /// When `None`, falls back to the default `send()`.
+    async fn send_with_read_timeout(
+        &self,
+        request: &Request,
+        timeout_ms: Option<u64>,
+    ) -> Result<Response, DriverError> {
+        match timeout_ms {
+            Some(ms) => {
+                let read_timeout = Duration::from_millis(ms + 5000);
+                let mutex = self.client.as_ref().ok_or(DriverError::NotConnected)?;
+                let mut client = mutex.lock().await;
+                client
+                    .send_with_timeout(request, read_timeout)
+                    .await
+                    .map_err(map_client_error)
+            }
+            None => self.send(request).await,
+        }
     }
 }
 
@@ -381,10 +407,13 @@ impl AutomationDriver for AgentDriver {
         timeout_ms: Option<u64>,
     ) -> Result<(), DriverError> {
         let response = self
-            .send(&Request::TapElement {
-                selector: identifier.to_string(),
+            .send_with_read_timeout(
+                &Request::TapElement {
+                    selector: identifier.to_string(),
+                    timeout_ms,
+                },
                 timeout_ms,
-            })
+            )
             .await?;
         expect_ok(response)
     }
@@ -395,10 +424,13 @@ impl AutomationDriver for AgentDriver {
         timeout_ms: Option<u64>,
     ) -> Result<(), DriverError> {
         let response = self
-            .send(&Request::TapByLabel {
-                label: label.to_string(),
+            .send_with_read_timeout(
+                &Request::TapByLabel {
+                    label: label.to_string(),
+                    timeout_ms,
+                },
                 timeout_ms,
-            })
+            )
             .await?;
         expect_ok(response)
     }
@@ -411,12 +443,15 @@ impl AutomationDriver for AgentDriver {
         timeout_ms: Option<u64>,
     ) -> Result<(), DriverError> {
         let response = self
-            .send(&Request::TapWithType {
-                selector: selector.to_string(),
-                by_label,
-                element_type: element_type.to_string(),
+            .send_with_read_timeout(
+                &Request::TapWithType {
+                    selector: selector.to_string(),
+                    by_label,
+                    element_type: element_type.to_string(),
+                    timeout_ms,
+                },
                 timeout_ms,
-            })
+            )
             .await?;
         expect_ok(response)
     }
@@ -429,12 +464,15 @@ impl AutomationDriver for AgentDriver {
         timeout_ms: Option<u64>,
     ) -> Result<Option<String>, DriverError> {
         let response = self
-            .send(&Request::GetValue {
-                selector: selector.to_string(),
-                by_label,
-                element_type: element_type.map(|s| s.to_string()),
+            .send_with_read_timeout(
+                &Request::GetValue {
+                    selector: selector.to_string(),
+                    by_label,
+                    element_type: element_type.map(|s| s.to_string()),
+                    timeout_ms,
+                },
                 timeout_ms,
-            })
+            )
             .await?;
         match response {
             Response::Value { value } => Ok(value),

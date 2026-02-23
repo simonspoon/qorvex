@@ -191,6 +191,8 @@ It also overrides the timeout-aware tap/get-value methods to forward `timeout_ms
 
 When `timeout_ms` is forwarded, the Swift agent handles the retry loop locally (50ms poll interval), eliminating one TCP round-trip per retry attempt. The default trait implementations for these methods ignore `timeout_ms` and delegate to the single-attempt versions (for backends that don't support agent-side retry).
 
+When `timeout_ms` is `Some(ms)`, the Rust-side TCP read deadline is set to `ms + 5000ms` so the connection is not dropped before the agent finishes retrying. When `timeout_ms` is `None`, the default 30-second read timeout applies.
+
 This provides accurate **live hittability** -- the `isHittable` property is only available from live `XCUIElement` queries on the Swift side, not from accessibility tree snapshots returned by `DumpTree`.
 
 ### Connection Constructors
@@ -202,7 +204,7 @@ This provides accurate **live hittability** -- the `isHittable` property is only
 
 ### Connection Invalidation
 
-`AgentClient` enforces a 30-second read timeout on every response. If the timeout fires (or an I/O error occurs), the TCP stream is **dropped immediately** to prevent response desynchronization. All subsequent calls return `DriverError::NotConnected` until `connect()` is called again.
+`AgentClient` enforces a read timeout on every response. The default is 30 seconds; calls routed through `send_with_timeout` use a caller-supplied deadline instead (used by the `*_with_timeout` driver methods when `timeout_ms` is set). If the timeout fires (or an I/O error occurs), the TCP stream is **dropped immediately** to prevent response desynchronization. All subsequent calls return `DriverError::NotConnected` until `connect()` is called again.
 
 This matters when the watcher and executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
 

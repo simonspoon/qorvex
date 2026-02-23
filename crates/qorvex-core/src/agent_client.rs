@@ -167,13 +167,26 @@ impl AgentClient {
     /// an [`AgentClientError::AgentError`] so callers can treat all failures
     /// uniformly via the error type.
     pub async fn send(&mut self, request: &Request) -> Result<Response, AgentClientError> {
+        self.send_with_timeout(request, READ_TIMEOUT).await
+    }
+
+    /// Like [`send`](Self::send), but with a custom read timeout.
+    ///
+    /// Use this when the agent is expected to retry internally (e.g., when
+    /// `timeout_ms` is set on a tap/get-value request) and may take longer
+    /// than the default [`READ_TIMEOUT`] to respond.
+    pub async fn send_with_timeout(
+        &mut self,
+        request: &Request,
+        read_timeout: Duration,
+    ) -> Result<Response, AgentClientError> {
         let opcode = request.opcode_name();
         let span = debug_span!("agent_send", opcode);
         async {
             let frame = encode_request(request);
             self.write_frame(&frame).await?;
 
-            let payload = self.read_frame().await?;
+            let payload = self.read_frame(read_timeout).await?;
             let response = decode_response(&payload)?;
 
             match response {
@@ -210,11 +223,12 @@ impl AgentClient {
     /// Reads the 4-byte length header, then reads exactly that many bytes of
     /// payload. Returns the payload bytes (opcode + data, without the header).
     ///
-    /// Applies a 30-second timeout to the entire read operation.
-    async fn read_frame(&mut self) -> Result<Vec<u8>, AgentClientError> {
+    /// The caller-supplied `read_timeout` controls how long to wait for the
+    /// agent's response before giving up.
+    async fn read_frame(&mut self, read_timeout: Duration) -> Result<Vec<u8>, AgentClientError> {
         let stream = self.stream.as_mut().ok_or(AgentClientError::NotConnected)?;
 
-        let result = timeout(READ_TIMEOUT, async {
+        let result = timeout(read_timeout, async {
             // Read the 4-byte length header.
             let mut header = [0u8; 4];
             stream.read_exact(&mut header).await?;

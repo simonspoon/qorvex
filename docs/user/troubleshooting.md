@@ -30,7 +30,7 @@
 **Timeouts:**
 
 - Connection timeout: 5 seconds
-- Read timeout: 30 seconds — if the agent doesn't respond within 30 seconds, the connection is closed to prevent response mismatches on subsequent commands
+- Read timeout: 30 seconds (default) — if the agent doesn't respond within 30 seconds, the connection is closed to prevent response mismatches on subsequent commands. When `QORVEX_TIMEOUT` or `--timeout` is set, the read deadline is extended to `timeout + 5s` so long agent-side retries can complete
 - Agent startup timeout: 30 seconds (3 retries)
 
 If a read timeout occurs (e.g., while the watcher polls a slow UI hierarchy), the next command will report "Not connected". Use `connect` in the REPL or restart the agent to re-establish the connection.
