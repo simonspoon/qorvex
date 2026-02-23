@@ -119,6 +119,7 @@ struct TextInputView: View {
             }
             .padding()
         }
+        .scrollDismissesKeyboard(.immediately)
         .navigationTitle("Text Input")
     }
 }

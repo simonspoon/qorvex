@@ -101,6 +101,33 @@ cargo test -p qorvex-cli  --test cli_integration       # CLI binary behavior
 - `MockBehavior` enum + `programmable_mock_agent(behaviors)` — scriptable mock that can simulate delays, connection drops, garbage bytes, or hangs
 - `TestHarness::start(responses)` — full-stack fixture: Session + ActionExecutor + mock agent + IPC server in one call
 
+### Simulator Suite (Real Device)
+
+`crates/qorvex-cli/tests/simulator_suite.rs` exercises the full stack against an actual iOS Simulator running `qorvex-testapp`. All 31 tests are `#[ignore]` by default.
+
+**Prerequisites:**
+1. Boot a simulator: `xcrun simctl boot <UDID>`
+2. Install testapp: `make -C qorvex-testapp run`
+
+**Run:**
+```bash
+cargo test -p qorvex-cli --test simulator_suite -- --ignored --test-threads=1
+```
+
+`--test-threads=1` is required — all tests share one simulator and one session via `OnceLock`.
+
+The suite covers all five testapp tabs: Controls, Text Input, Navigation, Gestures, and Dynamic.
+
+#### XCUITest gotchas (learned while building this suite)
+
+**LaunchScreen is required for native resolution.** Without `INFOPLIST_KEY_UILaunchScreen_Generation: YES` in the app's build settings (or a LaunchScreen storyboard), iOS runs the app in 320×480 compatibility mode instead of native resolution. This invalidates all tap coordinates, scroll counts, and element visibility assumptions. The fix is in `qorvex-testapp/project.yml`.
+
+**`tap` vs `screen-info` see different things.** `screen-info` uses `snapshot()` which captures the full accessibility tree including off-screen elements. `tap` (and `wait-for`) uses `.descendants().matching()` which only finds elements that are on-screen and hittable. An element visible in `screen-info` output may still fail to tap if it's outside the visible area or behind an overlay like the tab bar.
+
+**The iOS keyboard covers the tab bar.** When a text field is focused, the keyboard slides up and overlaps the tab bar. Attempting to tap tab bar buttons by label fails because they're not hittable. Use `.scrollDismissesKeyboard(.immediately)` on the containing `ScrollView` and swipe down to dismiss the keyboard before navigating tabs. Tapping static text does not dismiss the keyboard.
+
+**Elements near the tab bar need extra scroll.** The tab bar at ~y=791 makes elements within ~50pt above it non-hittable (they're overlapped). After scrolling to the bottom of a view, check element Y positions against the tab bar Y — if less than ~50pt of clearance, scroll one more time.
+
 ### Swift Agent Tests
 
 ```bash

@@ -19,6 +19,7 @@ targets:
       CURRENT_PROJECT_VERSION: "1"
       CODE_SIGN_IDENTITY: ""
       CODE_SIGNING_ALLOWED: "NO"
+      INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
 schemes:
   QorvexTestApp:
     build:

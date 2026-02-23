@@ -49,6 +49,11 @@ cargo test -p qorvex-core --test e2e_pipeline
 cargo test -p qorvex-core --test error_recovery
 cargo test -p qorvex-cli  --test cli_integration
 
+# Run simulator integration tests (requires booted simulator + installed testapp)
+# Boot a simulator first: xcrun simctl boot <UDID>
+# Install testapp first: make -C qorvex-testapp run
+cargo test -p qorvex-cli --test simulator_suite -- --ignored --test-threads=1
+
 # Build Swift agent (requires Xcode)
 make -C qorvex-agent build
 
