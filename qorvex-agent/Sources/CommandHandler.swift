@@ -92,24 +92,64 @@ final class CommandHandler {
                 NSPredicate(format: "identifier == %@", selector)
             ).firstMatch
         }
+        return performTap(queryFn: queryFn, description: "identifier '\(selector)'", timeoutMs: timeoutMs)
+    }
 
+    // MARK: - Tap by accessibility label
+
+    private func handleTapByLabel(label: String, timeoutMs: UInt64?) -> AgentResponse {
+        let queryFn = { [app] () -> XCUIElement in
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "label == %@", label)
+            ).firstMatch
+        }
+        return performTap(queryFn: queryFn, description: "label '\(label)'", timeoutMs: timeoutMs)
+    }
+
+    // MARK: - Tap with element type filter
+
+    private func handleTapWithType(selector: String, byLabel: Bool, elementType: String, timeoutMs: UInt64?) -> AgentResponse {
+        guard let xcType = xcuiElementType(from: elementType) else {
+            return .error(message: "Unknown element type '\(elementType)'")
+        }
+        let field = byLabel ? "label" : "identifier"
+        let queryFn = { [app] () -> XCUIElement in
+            app.descendants(matching: xcType).matching(
+                NSPredicate(format: "%K == %@", field, selector)
+            ).firstMatch
+        }
+        let lookupKind = byLabel ? "label" : "identifier"
+        return performTap(queryFn: queryFn, description: "\(lookupKind) '\(selector)' and type '\(elementType)'", timeoutMs: timeoutMs)
+    }
+
+    // MARK: - Shared tap helper
+
+    /// Polls for an element, waits for frame stability, re-queries for fresh
+    /// coordinates, validates no frame drift, then taps.
+    private func performTap(
+        queryFn: @escaping () -> XCUIElement,
+        description: String,
+        timeoutMs: UInt64?
+    ) -> AgentResponse {
         // Track frame position across polls to avoid tapping mid-animation.
         // When timeout_ms is set, require 2 consecutive polls with the same
-        // frame before tapping (adds ~50ms for static elements, correctly
-        // waits for animating ones).
+        // frame before tapping (~50ms of stability for static elements,
+        // correctly waits out modal animations). The pre-tap drift check
+        // provides additional safety without an extra poll cycle.
         var lastFrame: CGRect?
         var stableCount: Int = 0
+        let requiredStablePolls = 2
 
         let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
             var errorMsg: String?
             var objcError: NSError?
             let caught = QVXTryCatch({
                 guard element.exists else {
-                    errorMsg = "Element with identifier '\(selector)' not found"
+                    errorMsg = "Element with \(description) not found"
                     return
                 }
                 guard element.isHittable else {
-                    errorMsg = "Element with identifier '\(selector)' exists but is not hittable"
+                    errorMsg = "Element with \(description) exists but is not hittable"
                     return
                 }
                 // Wait for frame stability when retrying is enabled.
@@ -122,7 +162,7 @@ final class CommandHandler {
                             lastFrame = currentFrame
                             stableCount = 1
                         }
-                        if stableCount < 2 {
+                        if stableCount < requiredStablePolls {
                             errorMsg = "frame-unstable"
                             return
                         }
@@ -133,8 +173,20 @@ final class CommandHandler {
                 // stale positions when quiescence waiting is disabled.
                 let fresh = queryFn()
                 guard fresh.exists, fresh.isHittable else {
-                    errorMsg = "Element with identifier '\(selector)' became unavailable on re-query"
+                    errorMsg = "Element with \(description) became unavailable on re-query"
                     return
+                }
+                // Verify fresh element's frame matches the stable frame.
+                // If the element drifted between stability check and re-query,
+                // the tap would land at wrong coordinates.
+                if let stable = lastFrame {
+                    let freshFrame = fresh.frame
+                    if freshFrame != stable {
+                        lastFrame = freshFrame
+                        stableCount = 1
+                        errorMsg = "frame-drifted"
+                        return
+                    }
                 }
                 fresh.tap()
             }, &objcError)
@@ -152,140 +204,7 @@ final class CommandHandler {
         if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
             return result
         }
-        return .error(message: "Element with identifier '\(selector)' not found")
-    }
-
-    // MARK: - Tap by accessibility label
-
-    private func handleTapByLabel(label: String, timeoutMs: UInt64?) -> AgentResponse {
-        let queryFn = { [app] () -> XCUIElement in
-            app.descendants(matching: .any).matching(
-                NSPredicate(format: "label == %@", label)
-            ).firstMatch
-        }
-
-        var lastFrame: CGRect?
-        var stableCount: Int = 0
-
-        let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
-            var errorMsg: String?
-            var objcError: NSError?
-            let caught = QVXTryCatch({
-                guard element.exists else {
-                    errorMsg = "Element with label '\(label)' not found"
-                    return
-                }
-                guard element.isHittable else {
-                    errorMsg = "Element with label '\(label)' exists but is not hittable"
-                    return
-                }
-                if timeoutMs != nil {
-                    let currentFrame = element.frame
-                    if currentFrame != .zero {
-                        if currentFrame == lastFrame {
-                            stableCount += 1
-                        } else {
-                            lastFrame = currentFrame
-                            stableCount = 1
-                        }
-                        if stableCount < 2 {
-                            errorMsg = "frame-unstable"
-                            return
-                        }
-                    }
-                }
-                let fresh = queryFn()
-                guard fresh.exists, fresh.isHittable else {
-                    errorMsg = "Element with label '\(label)' became unavailable on re-query"
-                    return
-                }
-                fresh.tap()
-            }, &objcError)
-            if !caught {
-                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
-                return .error(message: "Tap failed: \(msg)")
-            }
-            if let errorMsg = errorMsg {
-                return nil
-            }
-            return .ok
-        }
-
-        if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
-            return result
-        }
-        return .error(message: "Element with label '\(label)' not found")
-    }
-
-    // MARK: - Tap with element type filter
-
-    private func handleTapWithType(selector: String, byLabel: Bool, elementType: String, timeoutMs: UInt64?) -> AgentResponse {
-        guard let xcType = xcuiElementType(from: elementType) else {
-            return .error(message: "Unknown element type '\(elementType)'")
-        }
-
-        let field = byLabel ? "label" : "identifier"
-        let queryFn = { [app] () -> XCUIElement in
-            app.descendants(matching: xcType).matching(
-                NSPredicate(format: "%K == %@", field, selector)
-            ).firstMatch
-        }
-
-        var lastFrame: CGRect?
-        var stableCount: Int = 0
-
-        let actionFn = { [queryFn] (element: XCUIElement) -> AgentResponse? in
-            var errorMsg: String?
-            var objcError: NSError?
-            let caught = QVXTryCatch({
-                guard element.exists else {
-                    let lookupKind = byLabel ? "label" : "identifier"
-                    errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found"
-                    return
-                }
-                guard element.isHittable else {
-                    let lookupKind = byLabel ? "label" : "identifier"
-                    errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' exists but is not hittable"
-                    return
-                }
-                if timeoutMs != nil {
-                    let currentFrame = element.frame
-                    if currentFrame != .zero {
-                        if currentFrame == lastFrame {
-                            stableCount += 1
-                        } else {
-                            lastFrame = currentFrame
-                            stableCount = 1
-                        }
-                        if stableCount < 2 {
-                            errorMsg = "frame-unstable"
-                            return
-                        }
-                    }
-                }
-                let fresh = queryFn()
-                guard fresh.exists, fresh.isHittable else {
-                    let lookupKind = byLabel ? "label" : "identifier"
-                    errorMsg = "Element with \(lookupKind) '\(selector)' and type '\(elementType)' became unavailable on re-query"
-                    return
-                }
-                fresh.tap()
-            }, &objcError)
-            if !caught {
-                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
-                return .error(message: "Tap failed: \(msg)")
-            }
-            if let errorMsg = errorMsg {
-                return nil
-            }
-            return .ok
-        }
-
-        if let result = pollUntilFound(timeoutMs: timeoutMs, query: queryFn, action: actionFn) {
-            return result
-        }
-        let lookupKind = byLabel ? "label" : "identifier"
-        return .error(message: "Element with \(lookupKind) '\(selector)' and type '\(elementType)' not found")
+        return .error(message: "Element with \(description) not found")
     }
 
     // MARK: - Type text

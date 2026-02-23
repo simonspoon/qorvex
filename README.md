@@ -13,6 +13,7 @@ Qorvex provides programmatic control over iOS Simulators and physical devices th
 - **qorvex-cli** — Scriptable CLI client for automation pipelines, including JSONL log-to-script conversion
 - **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
 - **qorvex-streamer** — ScreenCaptureKit-based live video streamer for Simulator windows (Swift, macOS 13+)
+- **qorvex-testapp** — SwiftUI iOS test app covering all automation actions; use it to verify qorvex locally
 
 ### Automation backend
 

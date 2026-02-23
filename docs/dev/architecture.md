@@ -22,6 +22,7 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 | `qorvex-cli` | Scriptable CLI client for automation pipelines, includes JSONL log-to-script converter |
 | `qorvex-agent` | Swift XCTest agent for native iOS accessibility (not a Cargo crate) |
 | `qorvex-streamer` | Swift standalone binary; captures Simulator window via ScreenCaptureKit and streams JPEG frames over a Unix socket (macOS 13+, not a Cargo crate) |
+| `qorvex-testapp` | SwiftUI iOS test app (bundle ID: `com.qorvex.testapp`) with 5 tabs covering all automation actions; built with XcodeGen, not a Cargo crate |
 
 ## Data Flow
 

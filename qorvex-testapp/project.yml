@@ -1,0 +1,28 @@
+name: QorvexTestApp
+options:
+  bundleIdPrefix: com.qorvex
+  deploymentTarget:
+    iOS: "16.0"
+  generateEmptyDirectories: true
+targets:
+  QorvexTestApp:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/
+    resources:
+      - Assets.xcassets
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.qorvex.testapp
+      GENERATE_INFOPLIST_FILE: "YES"
+      MARKETING_VERSION: "1.0"
+      CURRENT_PROJECT_VERSION: "1"
+      CODE_SIGN_IDENTITY: ""
+      CODE_SIGNING_ALLOWED: "NO"
+schemes:
+  QorvexTestApp:
+    build:
+      targets:
+        QorvexTestApp: all
+    run:
+      config: Debug

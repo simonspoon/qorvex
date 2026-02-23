@@ -20,3 +20,5 @@ Thumbs.db
 qorvex-agent/QorvexAgent.xcodeproj/
 qorvex-agent/.build/
 qorvex-streamer/.build/
+qorvex-testapp/QorvexTestApp.xcodeproj/
+qorvex-testapp/.build/

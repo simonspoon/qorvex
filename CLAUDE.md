@@ -52,6 +52,15 @@ cargo test -p qorvex-cli  --test cli_integration
 # Build Swift agent (requires Xcode)
 make -C qorvex-agent build
 
+# Build test app (requires Xcode + xcodegen)
+make -C qorvex-testapp build
+
+# Install test app on booted Simulator
+make -C qorvex-testapp install
+
+# Install test app and launch
+make -C qorvex-testapp run
+
 # Build streamer (macOS only, requires macOS 13+)
 make -C qorvex-streamer build
 
@@ -90,6 +99,7 @@ qorvex-live    - TUI client with screenshot rendering (ratatui-image) and IPC re
 qorvex-cli     - Scriptable CLI client for automation pipelines, JSONL log converter
 qorvex-agent   - Swift XCTest agent for native iOS accessibility (not a Cargo crate)
 qorvex-streamer - ScreenCaptureKit-based live video streamer for Simulator windows (Swift, macOS only)
+qorvex-testapp - SwiftUI iOS test app for verifying qorvex automation (not a Cargo crate)
 ```
 
 Qorvex uses a native Swift XCTest-based agent communicating over a TCP binary protocol (port 8080). Supports simulators (direct TCP) and physical devices (via USB tunnel).
