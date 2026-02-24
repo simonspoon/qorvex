@@ -621,6 +621,13 @@ impl ServerState {
                 } else {
                     ActionResult::Failure(result.message.clone())
                 };
+                // Sync server state when target is set via Execute path
+                if result.success {
+                    if let ActionType::SetTarget { ref bundle_id } = action {
+                        self.target_bundle_id = Some(bundle_id.clone());
+                    }
+                }
+
                 let duration_ms = result
                     .data
                     .as_ref()

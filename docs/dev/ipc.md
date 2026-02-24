@@ -216,6 +216,8 @@ This function is used throughout the codebase for socket paths, log directories,
 
 The IPC server exists so that all clients — REPL, Live TUI, and CLI — can interact with any running session in real-time, regardless of how that session was started.
 
+> **Pitfall — dual paths for `SetTarget`:** Configuration commands like `SetTarget` can arrive via two IPC paths: the direct `IpcRequest::SetTarget` variant (used by the REPL), or wrapped inside `IpcRequest::Execute { action: ActionType::SetTarget }` (used by the CLI). The `handle_execute` path delegates to `ActionExecutor` which calls `driver.set_target()`, but it must also update `ServerState::target_bundle_id` — otherwise `StartTarget`/`StopTarget` will return "No target set" even after a successful `set-target`. Any configuration action that mutates server state must be mirrored in `handle_execute` after a successful result.
+
 - **`qorvex-server`** runs an `IpcServer` with a `RequestHandler` attached. It owns the `ActionExecutor`, `Session`, and agent lifecycle. After the agent connects, the server populates the IPC shared driver slot so `Execute` requests reuse the existing TCP connection.
 - **`qorvex-repl`** is an IPC client. It auto-launches `qorvex-server` if the session socket is absent, then connects and sends management and `Execute` requests.
 - **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` and management requests.
