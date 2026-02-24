@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tracing::{info_span, debug, Instrument};
+use tracing::{info, info_span, debug, Instrument};
 
 use crate::action::ActionType;
 use crate::driver::{AutomationDriver, DriverError};
@@ -365,12 +365,13 @@ impl ActionExecutor {
             }
 
             ActionType::WaitFor { ref selector, by_label, ref element_type, timeout_ms, require_stable } => {
-                let start = Instant::now();
+                let mut start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
                 let stable_polls_required = 3;
                 let mut last_frame: Option<(f64, f64, f64, f64)> = None;
                 let mut stable_count: u32 = 0;
+                let mut last_recovery = self.driver.recovery_count();
 
                 loop {
                     if let Ok(found) = self.driver.find_element_with_type(
@@ -460,6 +461,14 @@ impl ActionExecutor {
                             stable_count = 0;
                         }
                     }
+                    let current_recovery = self.driver.recovery_count();
+                    if current_recovery != last_recovery {
+                        info!("agent recovered during wait_for, resetting timer");
+                        start = Instant::now();
+                        stable_count = 0;
+                        last_frame = None;
+                        last_recovery = current_recovery;
+                    }
                     if start.elapsed() >= timeout {
                         let elapsed_ms = start.elapsed().as_millis() as u64;
                         let msg = if by_label {
@@ -475,9 +484,10 @@ impl ActionExecutor {
             }
 
             ActionType::WaitForNot { ref selector, by_label, ref element_type, timeout_ms } => {
-                let start = Instant::now();
+                let mut start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
+                let mut last_recovery = self.driver.recovery_count();
 
                 loop {
                     let found = self.driver.find_element_with_type(
@@ -505,6 +515,12 @@ impl ActionExecutor {
                         }
                     }
 
+                    let current_recovery = self.driver.recovery_count();
+                    if current_recovery != last_recovery {
+                        info!("agent recovered during wait_for_not, resetting timer");
+                        start = Instant::now();
+                        last_recovery = current_recovery;
+                    }
                     if start.elapsed() >= timeout {
                         let elapsed_ms = start.elapsed().as_millis() as u64;
                         let msg = if by_label {

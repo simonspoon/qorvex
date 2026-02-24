@@ -29,6 +29,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -109,6 +110,7 @@ pub struct AgentDriver {
     target: ConnectionTarget,
     client: Mutex<Option<AgentClient>>,
     lifecycle: Option<Arc<AgentLifecycle>>,
+    recovery_count: AtomicU64,
 }
 
 impl AgentDriver {
@@ -123,6 +125,7 @@ impl AgentDriver {
             },
             client: Mutex::new(None),
             lifecycle: None,
+            recovery_count: AtomicU64::new(0),
         }
     }
 
@@ -137,6 +140,7 @@ impl AgentDriver {
             },
             client: Mutex::new(None),
             lifecycle: None,
+            recovery_count: AtomicU64::new(0),
         }
     }
 
@@ -176,6 +180,14 @@ impl AgentDriver {
             ConnectionTarget::Direct { port, .. } => *port,
             ConnectionTarget::UsbDevice { device_port, .. } => *device_port,
         }
+    }
+
+    /// Returns the number of successful recovery events since creation.
+    ///
+    /// The executor can poll this to detect when the agent was restarted
+    /// mid-action and reset its timeout accordingly.
+    pub fn recovery_count(&self) -> u64 {
+        self.recovery_count.load(Ordering::Relaxed)
     }
 
     /// Creates a new [`AgentClient`] for the current [`ConnectionTarget`]
@@ -246,6 +258,7 @@ impl AgentDriver {
         let client = self.create_client().await?;
         *self.client.lock().await = Some(client);
 
+        self.recovery_count.fetch_add(1, Ordering::Relaxed);
         info!("agent recovery successful");
         Ok(())
     }
@@ -283,6 +296,7 @@ impl AgentDriver {
             Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
                 warn!(error = %e, "connection error, trying reconnect before recovery");
                 if self.try_reconnect().await.is_ok() {
+                    self.recovery_count.fetch_add(1, Ordering::Relaxed);
                     return self.send_raw(request).await;
                 }
                 self.attempt_recovery().await?;
@@ -318,6 +332,7 @@ impl AgentDriver {
             Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
                 warn!(error = %e, "connection error (with timeout), trying reconnect before recovery");
                 if self.try_reconnect().await.is_ok() {
+                    self.recovery_count.fetch_add(1, Ordering::Relaxed);
                     return self.send_raw_with_read_timeout(request, timeout_ms).await;
                 }
                 self.attempt_recovery().await?;
@@ -359,6 +374,10 @@ impl AutomationDriver for AgentDriver {
 
     fn is_connected(&self) -> bool {
         self.client.try_lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    fn recovery_count(&self) -> u64 {
+        self.recovery_count.load(Ordering::Relaxed)
     }
 
     async fn tap_location(&self, x: i32, y: i32) -> Result<(), DriverError> {

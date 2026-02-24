@@ -535,6 +535,16 @@ pub trait AutomationDriver: Send + Sync {
         }
     }
 
+    /// Returns the number of successful recovery events since creation.
+    ///
+    /// Backends that support automatic reconnection / respawn should override
+    /// this to expose their recovery counter so the executor can reset
+    /// wait timers after a recovery.  The default returns `0` (no recovery
+    /// tracking).
+    fn recovery_count(&self) -> u64 {
+        0
+    }
+
     /// Capture a screenshot of the current simulator screen.
     ///
     /// # Returns

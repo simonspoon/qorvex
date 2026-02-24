@@ -75,6 +75,12 @@ These methods have default implementations that dump the full tree and search lo
 |--------|-------------|
 | `async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError>` | Switch the target application bundle ID |
 
+### Recovery Observability (Default Returns 0)
+
+| Method | Description |
+|--------|-------------|
+| `fn recovery_count(&self) -> u64` | Number of successful recovery events since creation; `0` for backends without recovery tracking |
+
 ## `DriverConfig`
 
 ```rust
@@ -238,6 +244,8 @@ This handles the common case where a read timeout dropped the stream but the age
 5. Retry the original command once
 
 If full recovery also fails (e.g., `spawn_agent` or `wait_for_ready` errors), the error is returned and no further retry is attempted.
+
+**Recovery counter:** every successful recovery (both TCP reconnect and full kill/respawn) increments an internal `AtomicU64` accessible via `recovery_count()`. The executor's `WaitFor` and `WaitForNot` loops poll this counter after each iteration — when it changes, the loop resets its timeout start time (`Instant::now()`) and stability counters, giving the action a fresh timeout budget post-recovery.
 
 **What recovery does NOT cover:**
 - `Timeout` errors — the agent is alive but slow; not a connection issue
