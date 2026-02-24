@@ -250,17 +250,41 @@ impl AgentDriver {
         Ok(())
     }
 
+    /// Try to re-establish the TCP connection without killing the agent.
+    ///
+    /// After a read timeout the stream is dropped, but the agent process may
+    /// still be alive — just slow.  A fresh TCP connect is much cheaper than
+    /// a full kill-and-respawn cycle.
+    async fn try_reconnect(&self) -> Result<(), DriverError> {
+        info!("attempting TCP reconnect (agent may still be alive)");
+        match self.create_client().await {
+            Ok(new_client) => {
+                *self.client.lock().await = Some(new_client);
+                info!("TCP reconnect succeeded");
+                Ok(())
+            }
+            Err(e) => {
+                warn!(error = %e, "TCP reconnect failed");
+                Err(e)
+            }
+        }
+    }
+
     /// Sends a request via the inner [`AgentClient`], mapping errors to
     /// [`DriverError`].
     ///
-    /// On connection error, if a lifecycle manager is attached, attempts
-    /// automatic recovery and retries once.
+    /// On connection error, if a lifecycle manager is attached, tries a cheap
+    /// TCP reconnect first; only falls through to full agent recovery if the
+    /// reconnect fails.
     async fn send(&self, request: &Request) -> Result<Response, DriverError> {
         let result = self.send_raw(request).await;
 
         match &result {
             Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
-                warn!(error = %e, "connection error, attempting recovery");
+                warn!(error = %e, "connection error, trying reconnect before recovery");
+                if self.try_reconnect().await.is_ok() {
+                    return self.send_raw(request).await;
+                }
                 self.attempt_recovery().await?;
                 self.send_raw(request).await
             }
@@ -292,7 +316,10 @@ impl AgentDriver {
 
         match &result {
             Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
-                warn!(error = %e, "connection error (with timeout), attempting recovery");
+                warn!(error = %e, "connection error (with timeout), trying reconnect before recovery");
+                if self.try_reconnect().await.is_ok() {
+                    return self.send_raw_with_read_timeout(request, timeout_ms).await;
+                }
                 self.attempt_recovery().await?;
                 self.send_raw_with_read_timeout(request, timeout_ms).await
             }
@@ -417,7 +444,12 @@ impl AutomationDriver for AgentDriver {
 
     #[instrument(skip(self), level = "debug")]
     async fn dump_tree(&self) -> Result<Vec<UIElement>, DriverError> {
-        let response = self.send(&Request::DumpTree).await?;
+        // Large pages can take well over 30s to snapshot; use a generous timeout
+        // to avoid dropping the connection while the agent is still working.
+        const DUMP_TREE_TIMEOUT_MS: u64 = 120_000;
+        let response = self
+            .send_with_read_timeout(&Request::DumpTree, Some(DUMP_TREE_TIMEOUT_MS))
+            .await?;
         match response {
             Response::Tree { json } => {
                 let elements: Vec<UIElement> = serde_json::from_str(&json)
@@ -1273,5 +1305,189 @@ mod tests {
         assert!(result.is_err());
         // The error should be a connection-type error
         assert!(AgentDriver::is_connection_error(&result.unwrap_err()));
+    }
+
+    // -----------------------------------------------------------------------
+    // try_reconnect path
+    // -----------------------------------------------------------------------
+
+    /// Helper: handle one connection (heartbeat + one request/response).
+    async fn handle_one_connection(
+        stream: &mut tokio::net::TcpStream,
+        response: &Response,
+    ) {
+        let mut header = [0u8; 4];
+
+        // Heartbeat
+        stream.read_exact(&mut header).await.unwrap();
+        let len = crate::protocol::read_frame_length(&header) as usize;
+        let mut payload = vec![0u8; len];
+        stream.read_exact(&mut payload).await.unwrap();
+        let ok_bytes = encode_response(&Response::Ok);
+        stream.write_all(&ok_bytes).await.unwrap();
+        stream.flush().await.unwrap();
+
+        // Actual request
+        stream.read_exact(&mut header).await.unwrap();
+        let len = crate::protocol::read_frame_length(&header) as usize;
+        let mut payload = vec![0u8; len];
+        stream.read_exact(&mut payload).await.unwrap();
+        let response_bytes = encode_response(response);
+        stream.write_all(&response_bytes).await.unwrap();
+        stream.flush().await.unwrap();
+    }
+
+    /// When the first send fails with a connection error and a lifecycle is
+    /// attached, the driver should try a TCP reconnect before falling through
+    /// to full agent recovery. If the reconnect succeeds, the retry should
+    /// succeed without recovery.
+    #[tokio::test]
+    async fn reconnect_succeeds_avoids_recovery() {
+        use crate::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+        use std::path::PathBuf;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            // --- First connection (initial connect) ---
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            // Heartbeat during connect()
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).await.unwrap();
+            let len = crate::protocol::read_frame_length(&header) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            let ok_bytes = encode_response(&Response::Ok);
+            stream.write_all(&ok_bytes).await.unwrap();
+            stream.flush().await.unwrap();
+
+            // Read the tap request then drop the connection (simulate timeout drop)
+            let _ = stream.read_exact(&mut header).await;
+            drop(stream);
+
+            // --- Second connection (reconnect attempt) ---
+            let (mut stream2, _) = listener.accept().await.unwrap();
+            handle_one_connection(&mut stream2, &Response::Ok).await;
+        });
+
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+
+        // Attach a dummy lifecycle so the reconnect path is entered.
+        // Recovery will never be called if reconnect succeeds.
+        let dummy_lifecycle = Arc::new(AgentLifecycle::new(
+            "FAKE-UDID".to_string(),
+            AgentLifecycleConfig::new(PathBuf::from("/nonexistent")),
+        ));
+        driver = driver.with_lifecycle(dummy_lifecycle);
+
+        driver.connect().await.unwrap();
+
+        // First send_raw fails (dropped connection) → try_reconnect succeeds
+        // → retry via send_raw succeeds → no recovery needed.
+        driver.tap_location(50, 50).await.unwrap();
+    }
+
+    /// When the first send fails and the reconnect also fails (nothing
+    /// listening), the driver falls through to attempt_recovery. With a
+    /// dummy lifecycle that can't actually spawn an agent, recovery fails
+    /// and the error propagates.
+    #[tokio::test]
+    async fn reconnect_fails_falls_through_to_recovery() {
+        use crate::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+        use std::path::PathBuf;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            // Only one connection — the initial connect.
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            // Heartbeat
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).await.unwrap();
+            let len = crate::protocol::read_frame_length(&header) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            let ok_bytes = encode_response(&Response::Ok);
+            stream.write_all(&ok_bytes).await.unwrap();
+            stream.flush().await.unwrap();
+
+            // Read the tap request then drop.
+            let _ = stream.read_exact(&mut header).await;
+            drop(stream);
+
+            // Drop the listener so reconnect gets "connection refused".
+            drop(listener);
+        });
+
+        // Small delay to ensure the listener is ready
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        let dummy_lifecycle = Arc::new(AgentLifecycle::new(
+            "FAKE-UDID".to_string(),
+            AgentLifecycleConfig::new(PathBuf::from("/nonexistent")),
+        ));
+        driver = driver.with_lifecycle(dummy_lifecycle);
+
+        driver.connect().await.unwrap();
+
+        // send_raw fails → try_reconnect fails (listener dropped) →
+        // attempt_recovery fails (dummy lifecycle) → error propagates.
+        let result = driver.tap_location(50, 50).await;
+        assert!(result.is_err());
+    }
+
+    /// Same as reconnect_succeeds_avoids_recovery but exercises the
+    /// send_with_read_timeout path (used by dump_tree).
+    #[tokio::test]
+    async fn reconnect_succeeds_with_read_timeout_path() {
+        use crate::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+        use std::path::PathBuf;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let tree_json = r#"[{"type":"Application","frame":{"x":0,"y":0,"width":390,"height":844},"children":[]}]"#;
+        let tree_response = Response::Tree { json: tree_json.to_string() };
+
+        tokio::spawn(async move {
+            // --- First connection (initial connect) ---
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            // Heartbeat during connect()
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).await.unwrap();
+            let len = crate::protocol::read_frame_length(&header) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            let ok_bytes = encode_response(&Response::Ok);
+            stream.write_all(&ok_bytes).await.unwrap();
+            stream.flush().await.unwrap();
+
+            // Read the DumpTree request then drop (simulate timeout → stream dropped)
+            let _ = stream.read_exact(&mut header).await;
+            drop(stream);
+
+            // --- Second connection (reconnect) ---
+            let (mut stream2, _) = listener.accept().await.unwrap();
+            handle_one_connection(&mut stream2, &tree_response).await;
+        });
+
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        let dummy_lifecycle = Arc::new(AgentLifecycle::new(
+            "FAKE-UDID".to_string(),
+            AgentLifecycleConfig::new(PathBuf::from("/nonexistent")),
+        ));
+        driver = driver.with_lifecycle(dummy_lifecycle);
+
+        driver.connect().await.unwrap();
+
+        // dump_tree uses send_with_read_timeout internally.
+        let elements = driver.dump_tree().await.unwrap();
+        assert_eq!(elements.len(), 1);
     }
 }

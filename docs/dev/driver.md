@@ -218,17 +218,26 @@ When a lifecycle is attached, the driver automatically recovers from connection 
 
 This matters when the watcher and executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
 
+`dump_tree` uses `send_with_read_timeout` with a fixed 120s deadline (125s total with the +5s buffer) rather than the default 30s, to prevent the connection from being dropped on large accessibility trees.
+
 ### Crash Recovery
 
-When `with_lifecycle()` is set, `send()` and `send_with_read_timeout()` catch connection errors (`NotConnected`, `ConnectionLost`, `Io`) and attempt one automatic recovery cycle before propagating the error:
+When `with_lifecycle()` is set, `send()` and `send_with_read_timeout()` catch connection errors (`NotConnected`, `ConnectionLost`, `Io`) and first attempt a cheap TCP reconnect before falling back to a full kill-and-respawn recovery cycle:
 
+**Step 1 — Try TCP reconnect (`try_reconnect`):**
+1. Call `create_client()` — open a new TCP socket and verify with heartbeat
+2. If successful, replace the stored client and retry the original command once — no agent kill needed
+
+This handles the common case where a read timeout dropped the stream but the agent process is still alive (just slow on a large page).
+
+**Step 2 — Full recovery (only if reconnect fails):**
 1. Terminate the old agent process via `AgentLifecycle::terminate_agent()`
 2. Respawn via `AgentLifecycle::spawn_agent()` (skips rebuild — the XCTest bundle stays on disk)
 3. Wait for the new agent to accept connections via `AgentLifecycle::wait_for_ready()`
 4. Create a fresh `AgentClient`, verify with heartbeat, and replace the stored client
 5. Retry the original command once
 
-If recovery fails (e.g., `spawn_agent` or `wait_for_ready` errors), the error is returned and no further retry is attempted.
+If full recovery also fails (e.g., `spawn_agent` or `wait_for_ready` errors), the error is returned and no further retry is attempted.
 
 **What recovery does NOT cover:**
 - `Timeout` errors — the agent is alive but slow; not a connection issue

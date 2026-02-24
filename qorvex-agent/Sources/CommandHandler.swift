@@ -370,7 +370,8 @@ final class CommandHandler {
             return .error(message: "Failed to capture accessibility tree: snapshot returned nil")
         }
 
-        guard let tree = serializeElement(snapshot) else {
+        var elementCount = 0
+        guard let tree = serializeElement(snapshot, depth: 0, elementCount: &elementCount) else {
             return .tree(json: "[]")
         }
 
@@ -451,7 +452,8 @@ final class CommandHandler {
             }
 
             if let snap = snapshot {
-                guard var serialized = self.serializeElement(snap) else {
+                var findElementCount = 0
+                guard var serialized = self.serializeElement(snap, depth: 0, elementCount: &findElementCount) else {
                     result = .element(json: "null")
                     return
                 }
@@ -542,9 +544,23 @@ final class CommandHandler {
 
     // MARK: - Helpers
 
+    // Defense-in-depth limits to prevent pathological tree serialization.
+    private static let maxTreeDepth = 30
+    private static let maxTreeElements = 5000
+
     /// Recursively serialize an XCUIElementSnapshot into our Codable tree structure.
-    /// Returns nil for empty scaffolding nodes (no identity, no area, no surviving children).
-    private func serializeElement(_ snapshot: any XCUIElementSnapshot) -> UIElementJSON? {
+    /// Returns nil for empty scaffolding nodes (no identity, no area, no surviving children),
+    /// or when depth/element-count limits are exceeded.
+    private func serializeElement(
+        _ snapshot: any XCUIElementSnapshot,
+        depth: Int = 0,
+        elementCount: inout Int
+    ) -> UIElementJSON? {
+        guard depth < Self.maxTreeDepth, elementCount < Self.maxTreeElements else {
+            return nil
+        }
+        elementCount += 1
+
         let frame = snapshot.frame
         let frameJSON = FrameJSON(
             x: Double(frame.origin.x),
@@ -554,7 +570,7 @@ final class CommandHandler {
         )
 
         let children = snapshot.children.compactMap { child -> UIElementJSON? in
-            serializeElement(child)
+            serializeElement(child, depth: depth + 1, elementCount: &elementCount)
         }
 
         let hasIdentity = !snapshot.identifier.isEmpty

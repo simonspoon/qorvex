@@ -32,6 +32,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -128,19 +129,35 @@ impl ScreenWatcher {
     ) {
         let base_interval = tokio::time::Duration::from_millis(config.interval_ms);
         let mut consecutive_errors: u32 = 0;
+        let mut adaptive_interval = base_interval;
+        const MAX_ADAPTIVE: tokio::time::Duration = tokio::time::Duration::from_secs(30);
 
         loop {
-            let sleep_duration = Self::backoff_interval(base_interval, consecutive_errors);
+            let sleep_duration = Self::backoff_interval(adaptive_interval, consecutive_errors);
 
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     break;
                 }
                 _ = tokio::time::sleep(sleep_duration) => {
+                    let poll_start = Instant::now();
                     let ok = {
                         let span = debug_span!("watcher_poll");
                         Self::check_for_changes(&session, &driver).instrument(span).await
                     };
+                    let elapsed = poll_start.elapsed();
+
+                    // Adapt interval to avoid hammering a slow agent on large pages.
+                    if elapsed > base_interval {
+                        let new_interval = std::cmp::min(elapsed * 2, MAX_ADAPTIVE);
+                        if new_interval != adaptive_interval {
+                            debug!(?elapsed, ?new_interval, "watcher adapting interval for slow poll");
+                        }
+                        adaptive_interval = new_interval;
+                    } else {
+                        adaptive_interval = base_interval;
+                    }
+
                     let prev_errors = consecutive_errors;
                     if ok {
                         consecutive_errors = 0;

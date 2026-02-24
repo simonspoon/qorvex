@@ -115,8 +115,13 @@ Kills the child process. Falls back to `xcrun simctl terminate <udid> com.qorvex
 
 ## Crash Recovery (via `AgentDriver::with_lifecycle`)
 
-`AgentLifecycle` also participates in mid-session crash recovery. When an `AgentDriver` is constructed with `.with_lifecycle(Arc<AgentLifecycle>)`, any connection error during a command triggers an automatic recovery cycle:
+`AgentLifecycle` also participates in mid-session crash recovery. When an `AgentDriver` is constructed with `.with_lifecycle(Arc<AgentLifecycle>)`, any connection error during a command first tries a cheap TCP reconnect, then falls back to a full kill-and-respawn cycle if reconnect fails:
 
+**Reconnect attempt (agent may still be alive — just slow):**
+1. Open a new TCP socket to the agent and verify with heartbeat
+2. If heartbeat succeeds, replace the stored client and retry the command — no process kill needed
+
+**Full recovery (only if reconnect fails):**
 1. `terminate_agent()` — kill the old agent process
 2. `spawn_agent()` — respawn without rebuilding (XCTest bundle stays on disk)
 3. `wait_for_ready()` — poll until TCP accepts a heartbeat
@@ -196,6 +201,15 @@ All three tap handlers (`handleTapElement`, `handleTapByLabel`, `handleTapWithTy
 ### Tree Serialization Pruning
 
 `serializeElement` returns `UIElementJSON?` and prunes empty scaffolding nodes bottom-up: a node is omitted if it has **no identity** (empty identifier, label, and value), **no area** (zero-size frame), **and no surviving children**. Nodes with any identity or visible area are always kept. This reduces JSON payload size without losing actionable elements.
+
+**Depth and element-count limits** are applied as defense-in-depth against pathologically large trees:
+
+| Constant | Value | Effect when exceeded |
+|----------|-------|----------------------|
+| `maxTreeDepth` | 30 | Children at depth ≥ 30 return `nil` (parent still serialized) |
+| `maxTreeElements` | 5000 | Once 5000 nodes have been visited, all remaining nodes return `nil` |
+
+The element count is incremented on entry (before pruning), so it measures work done rather than output size. Both limits are checked at the start of each `serializeElement` call; hitting either causes that subtree to be silently omitted — there is no error or signal to the Rust side that the tree was truncated. These limits affect `handleDumpTree` and `handleFindElement` (both call `serializeElement`).
 
 ---
 
