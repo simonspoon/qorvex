@@ -779,16 +779,6 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
     (cmd, args)
 }
 
-/// Strip surrounding quotes from a string if present.
-pub(crate) fn strip_quotes(s: &str) -> &str {
-    let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        &s[1..s.len() - 1]
-    } else {
-        s
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -830,28 +820,6 @@ mod tests {
         let (cmd, args) = parse_command("  tap  button1");
         assert_eq!(cmd, "tap");
         assert_eq!(args.positional, vec!["button1"]);
-    }
-
-    // --- strip_quotes tests (kept as-is) ---
-
-    #[test]
-    fn test_strip_quotes_double() {
-        assert_eq!(strip_quotes("\"hello\""), "hello");
-    }
-
-    #[test]
-    fn test_strip_quotes_single() {
-        assert_eq!(strip_quotes("'hello'"), "hello");
-    }
-
-    #[test]
-    fn test_strip_quotes_none() {
-        assert_eq!(strip_quotes("plain"), "plain");
-    }
-
-    #[test]
-    fn test_strip_quotes_with_spaces() {
-        assert_eq!(strip_quotes("  \"hello\"  "), "hello");
     }
 
     // --- New flag / argument tests ---
