@@ -33,7 +33,7 @@ For simulator sessions started via `start-session` or `start-agent` (managed age
 
 1. Open a fresh TCP connection and verify with a heartbeat
 2. If the heartbeat succeeds, retry the command immediately — no process kill
-3. If the reconnect fails: kill the old agent, respawn (without rebuilding), wait for it to become ready, then retry the command once
+3. If the reconnect fails: kill the old agent, respawn (without rebuilding), wait for it to become ready, re-send `set-target` if one was previously set (the fresh agent has no target state), then retry the command once
 
 If you see a command succeed after a brief delay following a crash, recovery worked. If recovery itself fails, you'll see a message like `recovery: agent not ready: ...` — in that case, run `stop-agent` then `start-agent` manually.
 

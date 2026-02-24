@@ -111,6 +111,8 @@ pub struct AgentDriver {
     client: Mutex<Option<AgentClient>>,
     lifecycle: Option<Arc<AgentLifecycle>>,
     recovery_count: AtomicU64,
+    /// Remembered target bundle ID so it can be re-sent after agent recovery.
+    target_bundle_id: Mutex<Option<String>>,
 }
 
 impl AgentDriver {
@@ -126,6 +128,7 @@ impl AgentDriver {
             client: Mutex::new(None),
             lifecycle: None,
             recovery_count: AtomicU64::new(0),
+            target_bundle_id: Mutex::new(None),
         }
     }
 
@@ -141,6 +144,7 @@ impl AgentDriver {
             client: Mutex::new(None),
             lifecycle: None,
             recovery_count: AtomicU64::new(0),
+            target_bundle_id: Mutex::new(None),
         }
     }
 
@@ -258,8 +262,27 @@ impl AgentDriver {
         let client = self.create_client().await?;
         *self.client.lock().await = Some(client);
 
+        // Restore target app so the fresh agent knows which app to automate.
+        self.restore_target().await?;
+
         self.recovery_count.fetch_add(1, Ordering::Relaxed);
         info!("agent recovery successful");
+        Ok(())
+    }
+
+    /// Re-send the `SetTarget` command if one was previously set.
+    ///
+    /// Called after recovery or reconnect so the fresh agent knows which
+    /// app to target.
+    async fn restore_target(&self) -> Result<(), DriverError> {
+        let bundle_id = self.target_bundle_id.lock().await.clone();
+        if let Some(ref bid) = bundle_id {
+            info!(bundle_id = %bid, "restoring target after recovery");
+            let response = self.send_raw(&Request::SetTarget {
+                bundle_id: bid.clone(),
+            }).await?;
+            expect_ok(response)?;
+        }
         Ok(())
     }
 
@@ -680,7 +703,10 @@ impl AutomationDriver for AgentDriver {
         let response = self.send(&Request::SetTarget {
             bundle_id: bundle_id.to_string(),
         }).await?;
-        expect_ok(response)
+        expect_ok(response)?;
+        // Remember for restore after recovery.
+        *self.target_bundle_id.lock().await = Some(bundle_id.to_string());
+        Ok(())
     }
 }
 
