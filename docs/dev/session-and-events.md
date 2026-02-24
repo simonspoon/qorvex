@@ -26,7 +26,6 @@ The `Session` is the central state object for a qorvex session. It is always wra
 | `log_writer` | `Mutex<Option<BufWriter<File>>>` | JSONL file writer |
 | `screen_hash` | `RwLock<u64>` | Accessibility tree hash |
 | `current_elements` | `RwLock<Option<Arc<Vec<UIElement>>>>` | Cached element tree |
-| `screenshot_hash` | `RwLock<u64>` | Perceptual dHash of screenshot |
 
 ## Constructors
 
@@ -47,7 +46,6 @@ enum SessionEvent {
     ScreenshotUpdated(Arc<String>),       // base64-encoded PNG
     ScreenInfoUpdated {
         elements: Arc<Vec<UIElement>>,
-        screenshot: Option<Arc<String>>,
     },
     Started { session_id: Uuid },
     Ended,
@@ -58,7 +56,7 @@ enum SessionEvent {
 |---------|-------------|
 | `ActionLogged` | An action is logged via `log_action` or `log_action_timed` |
 | `ScreenshotUpdated` | A new screenshot is captured and stored |
-| `ScreenInfoUpdated` | Accessibility tree or visual content changes are detected |
+| `ScreenInfoUpdated` | Accessibility tree changes are detected |
 | `Started` | A session begins |
 | `Ended` | A session ends |
 
@@ -153,7 +151,7 @@ When the buffer is full, the oldest entries are dropped from the front of the de
 
 ## Change Detection
 
-The `Session` maintains two hash values for detecting changes between screen updates.
+The `Session` maintains a hash of the accessibility tree for detecting changes between screen updates.
 
 ### `screen_hash` -- Accessibility Tree Changes
 
@@ -165,34 +163,20 @@ The `Session` maintains two hash values for detecting changes between screen upd
 
 Hashes the structural content of the accessibility tree. Any change to element identifiers, labels, values, types, or positions will produce a different hash.
 
-### `screenshot_hash` -- Visual Changes
-
-| Property | Value |
-|----------|-------|
-| Hash algorithm | Perceptual dHash (difference hash) |
-| Process | Resize image to 9x8 grayscale, compare adjacent pixel brightness |
-| Output | 64-bit hash |
-| Change condition | `(old XOR new).count_ones() > visual_threshold` |
-
-Detects visual changes such as animations, scrolling, and content updates that may not affect the accessibility tree structure. The hamming distance threshold is configurable via the watcher's `visual_change_threshold` parameter (range 0-64).
-
 ### Detection in `update_screen_info`
 
 When `update_screen_info` is called:
 
 1. Compute `screen_hash` of the new element tree
-2. Compute `screenshot_hash` of the new screenshot (if available)
-3. Compare with stored hashes:
-   - **Element change:** `old_screen_hash != new_screen_hash`
-   - **Visual change:** `(old_screenshot_hash XOR new_screenshot_hash).count_ones() > visual_threshold`
-4. If **either** condition is true, broadcast `ScreenInfoUpdated` event
-5. Update stored hashes and cached elements
+2. Compare with stored hash: `old_screen_hash != new_screen_hash`
+3. If changed, broadcast `ScreenInfoUpdated` event
+4. Update stored hash and cached elements
 
 ## Watcher Integration
 
-The `Watcher` (defined in `crates/qorvex-core/src/watcher.rs`) drives change detection by polling the accessibility tree and capturing screenshots at regular intervals.
+The `Watcher` (defined in `crates/qorvex-core/src/watcher.rs`) drives change detection by polling the accessibility tree at regular intervals.
 
 Key behaviors:
 - Returns a `WatcherHandle` with `stop()`, `cancel()`, and `is_running()` methods
-- Configurable `visual_change_threshold` (hamming distance, 0-64)
+- Polls the element tree at a configurable interval (default: 1000ms)
 - Includes exponential backoff on errors to avoid overwhelming the agent

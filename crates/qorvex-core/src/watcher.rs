@@ -45,22 +45,14 @@ use crate::session::Session;
 /// Configuration for the screen watcher.
 #[derive(Debug, Clone)]
 pub struct WatcherConfig {
-    /// Polling interval in milliseconds (default: 500).
+    /// Polling interval in milliseconds (default: 1000).
     pub interval_ms: u64,
-    /// Whether to capture screenshots on change (default: true).
-    pub capture_screenshots: bool,
-    /// Hamming distance threshold for visual change detection (0-64, default: 5).
-    /// Lower values are more sensitive to changes. A value of 0 means any visual
-    /// change triggers an event. A value of 64 effectively disables visual detection.
-    pub visual_change_threshold: u32,
 }
 
 impl Default for WatcherConfig {
     fn default() -> Self {
         Self {
-            interval_ms: 500,
-            capture_screenshots: true,
-            visual_change_threshold: 5,
+            interval_ms: 1000,
         }
     }
 }
@@ -147,7 +139,7 @@ impl ScreenWatcher {
                 _ = tokio::time::sleep(sleep_duration) => {
                     let ok = {
                         let span = debug_span!("watcher_poll");
-                        Self::check_for_changes(&session, &driver, &config).instrument(span).await
+                        Self::check_for_changes(&session, &driver).instrument(span).await
                     };
                     let prev_errors = consecutive_errors;
                     if ok {
@@ -169,7 +161,6 @@ impl ScreenWatcher {
     async fn check_for_changes(
         session: &Arc<Session>,
         driver: &Arc<dyn AutomationDriver>,
-        config: &WatcherConfig,
     ) -> bool {
         let hierarchy = match driver.dump_tree().await {
             Ok(h) => h,
@@ -181,27 +172,9 @@ impl ScreenWatcher {
         // Compute hash of elements
         let element_hash = Self::hash_elements(&elements);
 
-        // Capture screenshot and compute visual hash
-        let (screenshot, screenshot_hash) = if config.capture_screenshots {
-            match driver.screenshot().await {
-                Ok(bytes) => {
-                    let dhash = {
-                        let span = debug_span!("dhash");
-                        span.in_scope(|| Self::dhash_screenshot(&bytes))
-                    };
-                    use base64::Engine;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    (Some(b64), dhash)
-                }
-                Err(_) => return false,
-            }
-        } else {
-            (None, None)
-        };
-
         // Update session (this handles hash comparison internally)
         session
-            .update_screen_info(elements, element_hash, screenshot, screenshot_hash, config.visual_change_threshold)
+            .update_screen_info(elements, element_hash)
             .await;
 
         true
@@ -237,57 +210,6 @@ impl ScreenWatcher {
 
         hasher.finish()
     }
-
-    /// Computes a perceptual difference hash (dHash) of a screenshot.
-    ///
-    /// This creates a 64-bit hash that captures the visual structure of the image.
-    /// Similar images will have similar hashes, allowing detection of visual changes
-    /// like animations or scroll position that don't affect the accessibility tree.
-    ///
-    /// # Algorithm
-    /// 1. Resize image to 9x8 grayscale
-    /// 2. For each pixel, compare to its right neighbor
-    /// 3. Set bit to 1 if left pixel is brighter than right
-    ///
-    /// # Arguments
-    /// * `png_bytes` - Raw PNG image data
-    ///
-    /// # Returns
-    /// `Some(u64)` containing the perceptual hash, or `None` if decoding fails.
-    fn dhash_screenshot(png_bytes: &[u8]) -> Option<u64> {
-        use image::imageops::FilterType;
-
-        // Decode PNG
-        let img = image::load_from_memory(png_bytes).ok()?;
-
-        // Resize to 9x8 grayscale (9 wide to get 8 horizontal differences)
-        let small = img
-            .resize_exact(9, 8, FilterType::Triangle)
-            .to_luma8();
-
-        // Compute difference hash
-        let mut hash: u64 = 0;
-        for y in 0..8 {
-            for x in 0..8 {
-                let left = small.get_pixel(x, y).0[0];
-                let right = small.get_pixel(x + 1, y).0[0];
-                if left > right {
-                    hash |= 1 << (y * 8 + x);
-                }
-            }
-        }
-
-        Some(hash)
-    }
-
-    /// Computes the Hamming distance between two hashes.
-    ///
-    /// The Hamming distance is the number of bit positions where the hashes differ.
-    /// For 64-bit hashes, the distance ranges from 0 (identical) to 64 (completely different).
-    #[cfg(test)]
-    fn hamming_distance(a: u64, b: u64) -> u32 {
-        (a ^ b).count_ones()
-    }
 }
 
 #[cfg(test)]
@@ -297,9 +219,7 @@ mod tests {
     #[test]
     fn test_watcher_config_default() {
         let config = WatcherConfig::default();
-        assert_eq!(config.interval_ms, 500);
-        assert!(config.capture_screenshots);
-        assert_eq!(config.visual_change_threshold, 5);
+        assert_eq!(config.interval_ms, 1000);
     }
 
     #[test]
@@ -357,133 +277,6 @@ mod tests {
         let hash2 = ScreenWatcher::hash_elements(&[element2]);
 
         assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_hamming_distance_identical() {
-        assert_eq!(ScreenWatcher::hamming_distance(0, 0), 0);
-        assert_eq!(ScreenWatcher::hamming_distance(u64::MAX, u64::MAX), 0);
-        assert_eq!(ScreenWatcher::hamming_distance(0x12345678, 0x12345678), 0);
-    }
-
-    #[test]
-    fn test_hamming_distance_single_bit() {
-        assert_eq!(ScreenWatcher::hamming_distance(0, 1), 1);
-        assert_eq!(ScreenWatcher::hamming_distance(0, 2), 1);
-        assert_eq!(ScreenWatcher::hamming_distance(0, 0x8000000000000000), 1);
-    }
-
-    #[test]
-    fn test_hamming_distance_max() {
-        // All bits different
-        assert_eq!(ScreenWatcher::hamming_distance(0, u64::MAX), 64);
-    }
-
-    #[test]
-    fn test_hamming_distance_symmetric() {
-        let a = 0x123456789ABCDEF0u64;
-        let b = 0xFEDCBA9876543210u64;
-        assert_eq!(
-            ScreenWatcher::hamming_distance(a, b),
-            ScreenWatcher::hamming_distance(b, a)
-        );
-    }
-
-    #[test]
-    fn test_dhash_screenshot_invalid_data() {
-        // Invalid PNG data should return None
-        assert!(ScreenWatcher::dhash_screenshot(&[]).is_none());
-        assert!(ScreenWatcher::dhash_screenshot(&[0, 1, 2, 3]).is_none());
-        assert!(ScreenWatcher::dhash_screenshot(b"not a png").is_none());
-    }
-
-    #[test]
-    fn test_dhash_screenshot_valid_png() {
-        use image::{ImageBuffer, Rgb};
-
-        // Create a small valid PNG using the image crate
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(2, 2, |_, _| {
-            Rgb([255, 255, 255]) // White
-        });
-
-        let mut png_bytes = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
-
-        let result = ScreenWatcher::dhash_screenshot(&png_bytes);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_dhash_deterministic() {
-        // Create a simple valid PNG using the image crate
-        use image::{ImageBuffer, Rgb};
-
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, y| {
-            // Create a gradient pattern
-            Rgb([(x as u8), (y as u8), 128])
-        });
-
-        let mut png_bytes = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut png_bytes);
-        img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
-
-        let hash1 = ScreenWatcher::dhash_screenshot(&png_bytes);
-        let hash2 = ScreenWatcher::dhash_screenshot(&png_bytes);
-
-        assert!(hash1.is_some());
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_dhash_different_images() {
-        use image::{ImageBuffer, Rgb};
-
-        // Create two different images
-        let img1: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |_, _| {
-            Rgb([0, 0, 0]) // All black
-        });
-
-        let img2: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |_, _| {
-            Rgb([255, 255, 255]) // All white
-        });
-
-        let mut png1 = Vec::new();
-        let mut png2 = Vec::new();
-        img1.write_to(&mut std::io::Cursor::new(&mut png1), image::ImageFormat::Png).unwrap();
-        img2.write_to(&mut std::io::Cursor::new(&mut png2), image::ImageFormat::Png).unwrap();
-
-        let hash1 = ScreenWatcher::dhash_screenshot(&png1).unwrap();
-        let hash2 = ScreenWatcher::dhash_screenshot(&png2).unwrap();
-
-        // Solid colors will produce 0 hash since all adjacent pixels are equal
-        // But the hashes should be computed successfully
-        assert!(hash1 == 0 || hash2 == 0 || hash1 != hash2);
-    }
-
-    #[test]
-    fn test_dhash_similar_images_low_distance() {
-        use image::{ImageBuffer, Rgb};
-
-        // Create two very similar images (slight difference)
-        let img1: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, _| {
-            Rgb([(x as u8), 128, 128])
-        });
-
-        let img2: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(100, 100, |x, _| {
-            Rgb([((x + 1) as u8), 128, 128]) // Slightly shifted
-        });
-
-        let mut png1 = Vec::new();
-        let mut png2 = Vec::new();
-        img1.write_to(&mut std::io::Cursor::new(&mut png1), image::ImageFormat::Png).unwrap();
-        img2.write_to(&mut std::io::Cursor::new(&mut png2), image::ImageFormat::Png).unwrap();
-
-        let hash1 = ScreenWatcher::dhash_screenshot(&png1).unwrap();
-        let hash2 = ScreenWatcher::dhash_screenshot(&png2).unwrap();
-
-        // Similar images should have low Hamming distance
-        let distance = ScreenWatcher::hamming_distance(hash1, hash2);
-        assert!(distance <= 10, "Expected low distance for similar images, got {}", distance);
     }
 
     #[test]

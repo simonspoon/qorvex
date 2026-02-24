@@ -84,7 +84,7 @@ enum IpcRequest {
 | `SetTarget` | Set the target app bundle ID. |
 | `SetTimeout` | Set the default wait timeout in milliseconds. |
 | `GetTimeout` | Get the current default wait timeout. |
-| `StartWatcher` | Start the screen change watcher; `interval_ms` defaults to 500ms. |
+| `StartWatcher` | Start the screen change watcher; `interval_ms` defaults to 1000ms. |
 | `StopWatcher` | Stop the screen change watcher. |
 | `GetSessionInfo` | Get current session status. |
 | `GetCompletionData` | Get cached elements and devices for client-side tab completion. |

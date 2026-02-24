@@ -85,12 +85,10 @@ pub enum SessionEvent {
 
     /// The screen info was updated (from screen watcher).
     ///
-    /// Contains the current UI elements and optionally a screenshot.
+    /// Contains the current UI elements on screen.
     ScreenInfoUpdated {
         /// The current UI elements on screen.
         elements: Arc<Vec<UIElement>>,
-        /// Optional base64-encoded PNG screenshot.
-        screenshot: Option<Arc<String>>,
     },
 
     /// The session has started.
@@ -144,8 +142,6 @@ pub struct Session {
     /// Current UI elements on screen (cached from last screen info update).
     current_elements: RwLock<Option<Arc<Vec<UIElement>>>>,
 
-    /// Perceptual hash of the current screenshot for visual change detection.
-    screenshot_hash: RwLock<u64>,
 }
 
 impl Session {
@@ -201,7 +197,6 @@ impl Session {
             log_writer: Mutex::new(log_writer),
             screen_hash: RwLock::new(0),
             current_elements: RwLock::new(None),
-            screenshot_hash: RwLock::new(0),
         })
     }
 
@@ -367,84 +362,47 @@ impl Session {
         let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(screenshot_arc));
     }
 
-    /// Updates the screen info if either the element hash or visual hash has changed.
+    /// Updates the screen info if the element hash has changed.
     ///
     /// This method is called by the screen watcher to update the cached
-    /// screen elements and broadcast changes to subscribers. It detects changes
-    /// via two mechanisms:
-    /// 1. Element hash - detects accessibility tree changes
-    /// 2. Screenshot hash - detects visual changes (animations, scroll position)
+    /// screen elements and broadcast changes to subscribers.
     ///
     /// # Arguments
     ///
     /// * `elements` - The current UI elements on screen
     /// * `element_hash` - The computed hash of the elements
-    /// * `screenshot` - Optional base64-encoded PNG screenshot
-    /// * `screenshot_hash` - Optional perceptual hash (dHash) of the screenshot
-    /// * `visual_threshold` - Hamming distance threshold for visual change detection (0-64)
     ///
     /// # Returns
     ///
-    /// `true` if the screen info changed (either hash was different), `false` otherwise.
+    /// `true` if the screen info changed (hash was different), `false` otherwise.
     ///
     /// # Events
     ///
-    /// If either hash changed significantly, broadcasts a [`SessionEvent::ScreenInfoUpdated`] event.
-    /// If a screenshot is provided and changed, also broadcasts [`SessionEvent::ScreenshotUpdated`].
+    /// If the hash changed, broadcasts a [`SessionEvent::ScreenInfoUpdated`] event.
     pub async fn update_screen_info(
         &self,
         elements: Vec<UIElement>,
         element_hash: u64,
-        screenshot: Option<String>,
-        screenshot_hash: Option<u64>,
-        visual_threshold: u32,
     ) -> bool {
         // Check if element hash changed
         let mut screen_hash = self.screen_hash.write().await;
-        let element_changed = *screen_hash != element_hash;
-
-        // Check if visual hash changed significantly
-        let mut stored_screenshot_hash = self.screenshot_hash.write().await;
-        let visual_changed = if let Some(new_hash) = screenshot_hash {
-            let old_hash = *stored_screenshot_hash;
-            // Hamming distance: number of differing bits
-            let distance = (old_hash ^ new_hash).count_ones();
-            distance > visual_threshold
-        } else {
-            false
-        };
-
-        // If neither changed, nothing to do
-        if !element_changed && !visual_changed {
+        if *screen_hash == element_hash {
             return false;
         }
 
-        // Update hashes
+        // Update hash
         *screen_hash = element_hash;
-        if let Some(new_hash) = screenshot_hash {
-            *stored_screenshot_hash = new_hash;
-        }
         drop(screen_hash);
-        drop(stored_screenshot_hash);
 
         // Wrap in Arc for efficient sharing
         let elements_arc = Arc::new(elements);
-        let screenshot_arc = screenshot.map(Arc::new);
 
         // Update cached elements
         *self.current_elements.write().await = Some(elements_arc.clone());
 
-        // Update screenshot if provided
-        if let Some(ref ss) = screenshot_arc {
-            *self.current_screenshot.write().await = Some(ss.clone());
-            // Also send ScreenshotUpdated for watchers that only listen to that
-            let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(ss.clone()));
-        }
-
         // Broadcast screen info updated event
         let _ = self.event_tx.send(SessionEvent::ScreenInfoUpdated {
             elements: elements_arc,
-            screenshot: screenshot_arc,
         });
 
         true

@@ -65,7 +65,7 @@ See [driver.md](driver.md) for the full method listing.
 
 ### `Session`
 
-Async session state with broadcast channels for `SessionEvent`s. Maintains a ring buffer (1000 max entries), persistent JSONL log file in `~/.qorvex/logs/`, cached `current_elements`, and dual hashes (`screen_hash`, `screenshot_hash`) for change detection.
+Async session state with broadcast channels for `SessionEvent`s. Maintains a ring buffer (1000 max entries), persistent JSONL log file in `~/.qorvex/logs/`, cached `current_elements`, and a `screen_hash` for change detection.
 
 Constructors:
 - `Session::new(simulator_udid, session_name)` -- logs to `~/.qorvex/logs/`

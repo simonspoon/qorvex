@@ -120,7 +120,7 @@ Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 | Start watcher | `start-watcher` or `start-watcher <ms>` |
 | Stop watcher | `stop-watcher` |
 
-Default interval: 500ms. Detects both accessibility tree changes and visual changes (via perceptual hashing).
+Default interval: 1000ms. Detects accessibility tree changes.
 
 ## Log Conversion
 

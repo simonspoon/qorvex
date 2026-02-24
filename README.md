@@ -112,7 +112,7 @@ Available commands:
 - `get-value <selector> --label` — Get element's value by label
 - `get-value <selector> --no-wait` — Get value without waiting for element
 - `log-comment <text>` — Add a comment to the action log
-- `start-watcher` — Start screen change detection (500ms default)
+- `start-watcher` — Start screen change detection (1000ms default)
 - `start-watcher <ms>` — Start with custom polling interval
 - `stop-watcher` — Stop screen change detection
 - `help` — Show available commands

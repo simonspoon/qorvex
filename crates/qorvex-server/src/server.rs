@@ -511,11 +511,9 @@ impl ServerState {
             };
         }
 
-        let interval = interval_ms.unwrap_or(500);
+        let interval = interval_ms.unwrap_or(1000);
         let config = WatcherConfig {
             interval_ms: interval,
-            capture_screenshots: true,
-            visual_change_threshold: 5,
         };
 
         let session = self.session.as_ref().unwrap().clone();

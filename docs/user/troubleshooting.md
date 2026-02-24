@@ -157,6 +157,4 @@ The server cleans up old sockets on startup, but manual removal may be needed af
 
 ## Performance
 
-- **Watcher polling:** Default 500ms. Lower values increase CPU usage. Set via `start-watcher <ms>`.
-- **Visual change threshold:** Default 5 (hamming distance 0-64). Lower = more sensitive to visual changes.
-- **Screenshot capture:** Enabled by default in watcher. Disable if you only need accessibility tree changes.
+- **Watcher polling:** Default 1000ms. Lower values increase CPU usage. Set via `start-watcher <ms>`.
