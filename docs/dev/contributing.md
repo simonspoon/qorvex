@@ -88,6 +88,7 @@ cargo test -p qorvex-cli  --test cli_integration       # CLI binary behavior
 - Agent hangs trigger the read timeout (~30 s) and surface as an error
 - Garbage bytes from the agent produce a protocol error
 - Normal operation after delayed agent responses
+- `wait-for-not` propagates connection errors as failures (not "element gone")
 
 **`cli_integration` verifies:**
 - `qorvex --help`, `qorvex convert`, `qorvex list-devices`, and unknown subcommand exit codes and output
@@ -173,6 +174,27 @@ The retry classification lives in `is_retryable_error()` in `executor.rs`. Only 
 - **`require_stable: true`** (used by explicit `wait_for` / `qorvex wait-for`): requires the element to be hittable and requires **3 consecutive polls** (at 100ms intervals) where the frame coordinates are identical before reporting success. Prevents tapping elements still animating into position.
 
 - **`require_stable: false`**: returns as soon as the element exists and is hittable. Used when you want to wait-without-acting with a looser stability requirement.
+
+### Poll-Loop Error Handling
+
+When implementing a poll loop that calls a fallible driver method (e.g., `find_element_with_type`), always handle `Err` explicitly before checking the result value. A common pitfall is using `matches!` to test the happy-path condition:
+
+```rust
+// WRONG: Err(...) also evaluates to false — treated as "element absent"
+let element_present = matches!(found, Ok(Some(ref el)) if el.hittable != Some(false));
+```
+
+Use a `match` instead so errors are surfaced as failures rather than silently misinterpreted:
+
+```rust
+// CORRECT
+match found {
+    Err(e) => return ExecutionResult::failure(format!("{}", e)),
+    Ok(opt) => { /* check opt */ }
+}
+```
+
+This matters most in `wait-for-not`, where a transient I/O error makes the element "appear absent" and the loop returns premature success.
 
 ### Error Handling in the Agent
 

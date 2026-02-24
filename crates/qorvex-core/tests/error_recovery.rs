@@ -200,7 +200,49 @@ async fn test_agent_error_response_propagates() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Connection drop without lifecycle — error propagates, no recovery
+// 7. wait-for-not treats transient errors as "element gone" (BUG)
+// ---------------------------------------------------------------------------
+//
+// The wait-for-not loop in executor.rs uses:
+//   let element_present = matches!(found, Ok(Some(ref el)) if el.hittable != Some(false));
+// When `found` is `Err(...)` (e.g. connection drop), `element_present` evaluates to
+// `false`, so the loop returns success — "element not found" — even though we simply
+// failed to query. This test proves the bug exists. When the bug is fixed, flip the
+// assertion to expect failure (or verify error propagation/retry).
+
+#[tokio::test]
+async fn test_wait_for_not_succeeds_on_transient_error() {
+    let tree_with_spinner = Response::Tree {
+        json: r#"[{"AXUniqueId": "spinner", "AXLabel": "Loading", "type": "ActivityIndicator", "hittable": true, "children": []}]"#.to_string(),
+    };
+
+    let executor = programmable_executor(vec![
+        MockBehavior::Respond(Response::Ok),          // heartbeat during connect
+        MockBehavior::Respond(tree_with_spinner),      // 1st poll: spinner is present
+        MockBehavior::Drop,                            // 2nd poll: connection drops
+    ])
+    .await;
+
+    let action = ActionType::WaitForNot {
+        selector: "spinner".to_string(),
+        by_label: false,
+        element_type: None,
+        timeout_ms: 5000,
+    };
+
+    let result = executor.execute(action).await;
+
+    // Fixed: transient errors are now propagated as failures instead of being
+    // misinterpreted as "element absent".
+    assert!(
+        !result.success,
+        "wait-for-not should fail on transient error, not return success: {}",
+        result.message
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Connection drop without lifecycle — error propagates, no recovery
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

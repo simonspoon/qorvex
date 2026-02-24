@@ -486,17 +486,23 @@ impl ActionExecutor {
                         element_type.as_deref(),
                     ).await;
 
-                    let element_present = matches!(found, Ok(Some(ref el)) if el.hittable != Some(false));
-
-                    if !element_present {
-                        let elapsed_ms = start.elapsed().as_millis() as u64;
-                        let msg = if by_label {
-                            format!("Element with label '{}' not found", selector)
-                        } else {
-                            format!("Element '{}' not found", selector)
-                        };
-                        return ExecutionResult::success(msg)
-                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                    match found {
+                        Err(e) => {
+                            return ExecutionResult::failure(format!("{}", e));
+                        }
+                        Ok(ref opt) => {
+                            let element_present = matches!(opt, Some(ref el) if el.hittable != Some(false));
+                            if !element_present {
+                                let elapsed_ms = start.elapsed().as_millis() as u64;
+                                let msg = if by_label {
+                                    format!("Element with label '{}' not found", selector)
+                                } else {
+                                    format!("Element '{}' not found", selector)
+                                };
+                                return ExecutionResult::success(msg)
+                                    .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                            }
+                        }
                     }
 
                     if start.elapsed() >= timeout {
