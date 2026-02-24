@@ -188,7 +188,7 @@ impl AgentLifecycle {
                 "-scheme",
                 SCHEME,
                 "-destination",
-                &format!("id={}", self.udid),
+                "generic/platform=iOS Simulator",
                 "-derivedDataPath",
                 &self.config
                     .project_dir
@@ -308,10 +308,32 @@ impl AgentLifecycle {
         }
     }
 
-    /// Orchestrate the full agent startup: build, spawn, and wait for ready.
+    /// Check whether the agent XCTest bundle has already been built.
     ///
-    /// If [`wait_for_ready`](Self::wait_for_ready) fails, the agent is terminated
-    /// and respawned up to [`AgentLifecycleConfig::max_retries`] times.
+    /// Looks for a `.xctestrun` file in the derived-data `Build/Products`
+    /// directory. Returns `true` when pre-built products exist (e.g. from
+    /// `install.sh`), allowing [`ensure_running`](Self::ensure_running) to
+    /// skip the build step.
+    fn is_agent_built(&self) -> bool {
+        let products_dir = self.config.project_dir.join(DERIVED_DATA_DIR).join("Build/Products");
+        if !products_dir.exists() {
+            return false;
+        }
+        std::fs::read_dir(&products_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "xctestrun"))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Orchestrate the full agent startup: build (if needed), spawn, and wait for ready.
+    ///
+    /// Skips the build step when pre-built products are detected (see
+    /// [`is_agent_built`](Self::is_agent_built)). If [`wait_for_ready`](Self::wait_for_ready)
+    /// fails, the agent is terminated and respawned up to
+    /// [`AgentLifecycleConfig::max_retries`] times.
     ///
     /// # Errors
     ///
@@ -320,7 +342,12 @@ impl AgentLifecycle {
     /// - [`AgentLifecycleError::StartupTimeout`] if all retries are exhausted
     #[instrument(skip(self))]
     pub async fn ensure_running(&self) -> Result<(), AgentLifecycleError> {
-        self.build_agent()?;
+        if self.is_agent_built() {
+            info!("using pre-built agent");
+        } else {
+            info!("agent not pre-built, building now");
+            self.build_agent()?;
+        }
         self.spawn_agent()?;
 
         for attempt in 0..=self.config.max_retries {

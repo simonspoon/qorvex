@@ -76,9 +76,11 @@ The Rust side manages the agent's full lifecycle through `AgentLifecycle` (defin
 xcodebuild build-for-testing \
   -project QorvexAgent.xcodeproj \
   -scheme QorvexAgentUITests \
-  -destination "id=<udid>" \
+  -destination "generic/platform=iOS Simulator" \
   -derivedDataPath .build
 ```
+
+The `generic/platform=iOS Simulator` destination produces a universal simulator bundle that works with any booted simulator, without requiring a specific UDID. `install.sh` runs this build step so the bundle is ready before any session starts.
 
 ### Spawn
 
@@ -105,9 +107,11 @@ Kills the child process. Falls back to `xcrun simctl terminate <udid> com.qorvex
 
 |  | `ensure_running` | `ensure_agent_ready` |
 |---|---|---|
-| Always rebuilds | Yes | No -- checks TCP reachability first |
-| Use case | Fresh start, known stale agent | Idempotent startup, skip rebuild if already running |
-| Retry behavior | Up to `max_retries + 1` attempts (build + spawn + health check) | Attempts health check first; delegates to `ensure_running` only if unreachable |
+| Builds agent | Only if `Build/Products/*.xctestrun` absent (pre-built by `install.sh` skips build) | No -- checks TCP reachability first; delegates to `ensure_running` if unreachable |
+| Use case | Fresh start or known stale agent | Idempotent startup, skip build/spawn if already running |
+| Retry behavior | Up to `max_retries + 1` attempts (spawn + health check) | Attempts health check first; delegates to `ensure_running` only if unreachable |
+
+`ensure_running` calls `is_agent_built()` to detect whether a `.xctestrun` file exists in `.build/Build/Products/`. If pre-built products are present (normal case after `install.sh`), the build step is skipped and startup reduces to spawn + health check.
 
 ## Crash Recovery (via `AgentDriver::with_lifecycle`)
 

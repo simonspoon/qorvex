@@ -35,7 +35,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 ## Installation
 
 ```bash
-# Install all Rust binaries, build qorvex-streamer, and record agent source dir
+# Install all Rust binaries, build qorvex-streamer, build qorvex-agent, and record agent source dir
 ./install.sh
 
 # Or install individually
