@@ -72,6 +72,9 @@ pub enum IpcRequest {
     Execute {
         /// The action to perform.
         action: ActionType,
+        /// Optional free-text tag for log filtering/analysis.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
     },
 
     /// Subscribe to session events.
@@ -407,13 +410,13 @@ impl IpcServer {
 
             // Fallback: built-in hardcoded logic (backward compatibility)
             match request {
-                IpcRequest::Execute { action } => {
+                IpcRequest::Execute { action, tag } => {
                     debug!(action = %action.name(), "executing action via IPC");
                     // Execute the action using the ActionExecutor
                     // LogComment doesn't require a driver
                     let response = if let ActionType::LogComment { ref message } = action {
                         let msg = format!("Logged: {}", message);
-                        session.log_action(action, ActionResult::Success, None, None).await;
+                        session.log_action(action, ActionResult::Success, None, None, tag).await;
 
                         IpcResponse::ActionResult {
                             success: true,
@@ -438,7 +441,7 @@ impl IpcServer {
                                 let duration_ms = result.data.as_ref()
                                     .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                                     .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
-                                session.log_action(action, action_result, result.screenshot.clone(), duration_ms).await;
+                                session.log_action(action, action_result, result.screenshot.clone(), duration_ms, tag).await;
 
                                 IpcResponse::ActionResult {
                                     success: result.success,

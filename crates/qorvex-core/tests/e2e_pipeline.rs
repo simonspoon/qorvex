@@ -38,6 +38,7 @@ async fn test_tap_via_ipc_to_mock_agent() {
                 by_label: false,
                 element_type: None, timeout_ms: None,
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -76,6 +77,7 @@ async fn test_screenshot_via_ipc_to_mock_agent() {
     let response = client
         .send(&IpcRequest::Execute {
             action: ActionType::GetScreenshot,
+            tag: None,
         })
         .await
         .unwrap();
@@ -140,6 +142,7 @@ async fn test_screen_info_via_ipc_to_mock_agent() {
     let response = client
         .send(&IpcRequest::Execute {
             action: ActionType::GetScreenInfo,
+            tag: None,
         })
         .await
         .unwrap();
@@ -189,6 +192,7 @@ async fn test_action_logged_after_ipc_execute() {
                 by_label: false,
                 element_type: None, timeout_ms: None,
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -233,6 +237,7 @@ async fn test_screenshot_event_broadcasts_via_full_stack() {
     let _ = client
         .send(&IpcRequest::Execute {
             action: ActionType::GetScreenshot,
+            tag: None,
         })
         .await
         .unwrap();
@@ -285,6 +290,7 @@ async fn test_multiple_sequential_actions_via_ipc() {
                 by_label: false,
                 element_type: None, timeout_ms: None,
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -296,6 +302,7 @@ async fn test_multiple_sequential_actions_via_ipc() {
             action: ActionType::SendKeys {
                 text: "admin".to_string(),
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -305,6 +312,7 @@ async fn test_multiple_sequential_actions_via_ipc() {
     let r3 = client
         .send(&IpcRequest::Execute {
             action: ActionType::GetScreenshot,
+            tag: None,
         })
         .await
         .unwrap();

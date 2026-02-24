@@ -140,8 +140,9 @@ See [scripting-guide.md](scripting-guide.md) for full scripting details.
 - `-s, --session <name>` -- Connect to named session (default: "default", or `$QORVEX_SESSION`)
 - `-f, --format <text|json>` -- Output format
 - `-q, --quiet` -- Suppress non-essential output
-- `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`
-- `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000)
+- `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`, `--tag <text>`
+- `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000), `--tag <text>`
+- All action commands accept `--tag <text>` — annotates the JSONL log entry; replays as `--tag` in converted scripts
 
 ## Environment Variables
 

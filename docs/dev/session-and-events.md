@@ -76,6 +76,7 @@ Events are delivered via a `tokio::sync::broadcast` channel with capacity 100. S
 | `duration_ms` | `Option<u64>` | Total action duration in milliseconds |
 | `wait_ms` | `Option<u64>` | Element lookup/wait phase duration |
 | `tap_ms` | `Option<u64>` | Agent execution phase duration |
+| `tag` | `Option<String>` | Free-text annotation for log filtering; omitted from JSON if `None` |
 
 ### JSONL Serialization
 
@@ -116,6 +117,7 @@ pub async fn log_action(
     result: ActionResult,
     screenshot: Option<Arc<String>>,
     duration_ms: Option<u64>,
+    tag: Option<String>,
 )
 ```
 
@@ -132,6 +134,7 @@ pub async fn log_action_timed(
     duration_ms: Option<u64>,
     wait_ms: Option<u64>,
     tap_ms: Option<u64>,
+    tag: Option<String>,
 )
 ```
 

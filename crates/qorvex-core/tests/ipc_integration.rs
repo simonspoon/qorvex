@@ -83,13 +83,14 @@ fn test_ipc_request_execute_serialization() {
             by_label: false,
             element_type: None, timeout_ms: None,
         },
+        tag: None,
     };
 
     let json = serde_json::to_string(&request).unwrap();
     let deserialized: IpcRequest = serde_json::from_str(&json).unwrap();
 
     match deserialized {
-        IpcRequest::Execute { action } => match action {
+        IpcRequest::Execute { action, .. } => match action {
             ActionType::Tap { selector, by_label, element_type, .. } => {
                 assert_eq!(selector, "button_submit");
                 assert!(!by_label);
@@ -189,6 +190,7 @@ fn test_ipc_response_log_serialization() {
         ActionType::GetScreenshot,
         ActionResult::Success,
         Some(Arc::new("screenshot_data".to_string())),
+        None,
         None,
     );
 
@@ -300,7 +302,7 @@ async fn test_session_broadcasts_action_logged_event() {
 
     // Log an action
     session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None)
+        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
         .await;
 
     // Should receive the event
@@ -355,6 +357,7 @@ async fn test_session_broadcasts_to_multiple_subscribers() {
             ActionResult::Success,
             None,
             None,
+            None,
         )
         .await;
 
@@ -385,6 +388,7 @@ async fn test_action_with_screenshot_broadcasts_two_events() {
             ActionResult::Success,
             Some("screenshot_data".to_string()),
             None,
+            None,
         )
         .await;
 
@@ -413,7 +417,7 @@ async fn test_session_logs_actions() {
 
     // Log multiple actions
     session
-        .log_action(ActionType::StartSession, ActionResult::Success, None, None)
+        .log_action(ActionType::StartSession, ActionResult::Success, None, None, None)
         .await;
     session
         .log_action(
@@ -425,6 +429,7 @@ async fn test_session_logs_actions() {
             ActionResult::Success,
             None,
             None,
+            None,
         )
         .await;
     session
@@ -433,6 +438,7 @@ async fn test_session_logs_actions() {
                 text: "test".to_string(),
             },
             ActionResult::Failure("Error".to_string()),
+            None,
             None,
             None,
         )
@@ -465,6 +471,7 @@ async fn test_session_stores_and_retrieves_screenshot() {
             ActionResult::Success,
             Some("screenshot1".to_string()),
             None,
+            None,
         )
         .await;
 
@@ -483,10 +490,10 @@ async fn test_action_log_has_unique_ids() {
     let session = Session::new(None, "test");
 
     let log1 = session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None)
+        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
         .await;
     let log2 = session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None)
+        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
         .await;
 
     assert_ne!(log1.id, log2.id, "Each action log should have a unique ID");
@@ -498,7 +505,7 @@ async fn test_action_log_has_timestamp() {
 
     let before = chrono::Utc::now();
     let log = session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None)
+        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
         .await;
     let after = chrono::Utc::now();
 
@@ -542,10 +549,10 @@ async fn test_ipc_get_log_request() {
 
     // Pre-log some actions
     session
-        .log_action(ActionType::StartSession, ActionResult::Success, None, None)
+        .log_action(ActionType::StartSession, ActionResult::Success, None, None, None)
         .await;
     session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None)
+        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
         .await;
 
     let _server_handle = start_server(session, &session_name).await;
@@ -582,6 +589,7 @@ async fn test_ipc_execute_action_request() {
             action: ActionType::LogComment {
                 message: "test comment".to_string(),
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -625,6 +633,7 @@ async fn test_ipc_execute_action_without_simulator_returns_error() {
                 by_label: false,
                 element_type: None, timeout_ms: None,
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -656,6 +665,7 @@ async fn test_ipc_multiple_requests_same_client() {
             action: ActionType::LogComment {
                 message: "test".to_string(),
             },
+            tag: None,
         })
         .await
         .unwrap();
@@ -686,7 +696,7 @@ async fn test_session_creates_persistent_log_file() {
 
     // Log some actions
     session
-        .log_action(ActionType::StartSession, ActionResult::Success, None, None)
+        .log_action(ActionType::StartSession, ActionResult::Success, None, None, None)
         .await;
     session
         .log_action(
@@ -698,6 +708,7 @@ async fn test_session_creates_persistent_log_file() {
             ActionResult::Success,
             None,
             None,
+            None,
         )
         .await;
     session
@@ -706,6 +717,7 @@ async fn test_session_creates_persistent_log_file() {
                 text: "hello world".to_string(),
             },
             ActionResult::Failure("Keyboard not available".to_string()),
+            None,
             None,
             None,
         )

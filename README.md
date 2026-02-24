@@ -212,8 +212,9 @@ Environment:
 - `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not` (default: 5000); overridden by `-o`
 
 Command-specific options:
-- `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip retry, attempt once; `-o, --timeout <ms>` — Retry timeout (default: 5000)
-- `wait-for`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-o, --timeout <ms>` — Wait timeout (default: 5000)
+- `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip retry, attempt once; `-o, --timeout <ms>` — Retry timeout (default: 5000); `--tag <text>` — Annotate the log entry
+- `wait-for`, `wait-for-not`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-o, --timeout <ms>` — Wait timeout (default: 5000); `--tag <text>` — Annotate the log entry
+- All action commands accept `--tag <text>` — free-text annotation written to the JSONL log; preserved when converting logs to scripts with `qorvex convert`
 
 Additional CLI commands (no running session required):
 

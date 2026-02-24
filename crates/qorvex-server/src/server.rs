@@ -117,7 +117,7 @@ impl ServerState {
             },
 
             // ── Execute ─────────────────────────────────────────────────
-            IpcRequest::Execute { action } => self.handle_execute(action).await,
+            IpcRequest::Execute { action, tag } => self.handle_execute(action, tag).await,
 
             // ── State / Log (forwarded from session) ────────────────────
             IpcRequest::GetState => self.handle_get_state().await,
@@ -528,13 +528,13 @@ impl ServerState {
 
     // ── Execute ──────────────────────────────────────────────────────────
 
-    async fn handle_execute(&mut self, action: ActionType) -> IpcResponse {
+    async fn handle_execute(&mut self, action: ActionType, tag: Option<String>) -> IpcResponse {
         debug!(action = %action.name(), "executing action");
 
         // LogComment doesn't require a driver
         if let ActionType::LogComment { ref message } = action {
             let msg = format!("Logged: {}", message);
-            self.log_action(action, ActionResult::Success, None).await;
+            self.log_action(action, ActionResult::Success, None, tag).await;
             return IpcResponse::ActionResult {
                 success: true,
                 message: msg,
@@ -569,7 +569,7 @@ impl ServerState {
                     .as_ref()
                     .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                     .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
-                self.log_action(action, action_result, duration_ms).await;
+                self.log_action(action, action_result, duration_ms, tag).await;
 
                 IpcResponse::ActionResult {
                     success: result.success,
@@ -623,11 +623,12 @@ impl ServerState {
         action: ActionType,
         result: ActionResult,
         duration_ms: Option<u64>,
+        tag: Option<String>,
     ) {
         if let Some(session) = &self.session {
             let screenshot = None;
             session
-                .log_action(action, result, screenshot, duration_ms)
+                .log_action(action, result, screenshot, duration_ms, tag)
                 .await;
         }
     }

@@ -38,6 +38,7 @@
 //!         ActionResult::Success,
 //!         None,
 //!         None,
+//!         None,
 //!     ).await;
 //! }
 //! ```
@@ -242,9 +243,9 @@ impl Session {
     /// The action log is maintained as a ring buffer. When the maximum size
     /// is reached, the oldest entry is removed. Actions are also persisted to
     /// the JSON Lines log file at `~/.qorvex/logs/`.
-    pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>, duration_ms: Option<u64>) -> ActionLog {
+    pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>, duration_ms: Option<u64>, tag: Option<String>) -> ActionLog {
         let screenshot_arc = screenshot.map(Arc::new);
-        let log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms);
+        let log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms, tag);
         self.persist_action_log(log, screenshot_arc).await
     }
 
@@ -257,9 +258,10 @@ impl Session {
         duration_ms: Option<u64>,
         wait_ms: Option<u64>,
         tap_ms: Option<u64>,
+        tag: Option<String>,
     ) -> ActionLog {
         let screenshot_arc = screenshot.map(Arc::new);
-        let mut log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms);
+        let mut log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms, tag);
         log.wait_ms = wait_ms;
         log.tap_ms = tap_ms;
         self.persist_action_log(log, screenshot_arc).await
@@ -288,6 +290,7 @@ impl Session {
                     duration_ms: log.duration_ms,
                     wait_ms: log.wait_ms,
                     tap_ms: log.tap_ms,
+                    tag: log.tag.clone(),
                 };
                 if let Ok(json) = serde_json::to_string(&file_log) {
                     let _ = writeln!(writer, "{}", json);

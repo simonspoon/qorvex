@@ -442,9 +442,11 @@ impl App {
             "get-session-info" => IpcRequest::GetSessionInfo,
             "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
+                tag: None,
             },
             "list-elements" | "get-screen-info" => IpcRequest::Execute {
                 action: ActionType::GetScreenInfo,
+                tag: None,
             },
             "tap" => {
                 let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
@@ -457,12 +459,14 @@ impl App {
                 let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
                 IpcRequest::Execute {
                     action: ActionType::Tap { selector, by_label, element_type, timeout_ms },
+                    tag: None,
                 }
             },
             "swipe" => IpcRequest::Execute {
                 action: ActionType::Swipe {
                     direction: args.positional.first().map(|s| s.to_lowercase()).unwrap_or_else(|| "up".to_string()),
                 },
+                tag: None,
             },
             "tap-location" => {
                 if args.positional.len() < 2 {
@@ -472,6 +476,7 @@ impl App {
                 match (args.positional[0].parse::<i32>(), args.positional[1].parse::<i32>()) {
                     (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
                         action: ActionType::TapLocation { x, y },
+                        tag: None,
                     },
                     _ => {
                         self.add_output(format_result(false, "Invalid coordinates"));
@@ -490,6 +495,7 @@ impl App {
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitFor { selector, by_label, element_type, timeout_ms, require_stable: true },
+                    tag: None,
                 }
             },
             "wait-for-not" => {
@@ -503,6 +509,7 @@ impl App {
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitForNot { selector, by_label, element_type, timeout_ms },
+                    tag: None,
                 }
             },
             "send-keys" => {
@@ -513,6 +520,7 @@ impl App {
                 }
                 IpcRequest::Execute {
                     action: ActionType::SendKeys { text },
+                    tag: None,
                 }
             },
             "get-value" => {
@@ -526,6 +534,7 @@ impl App {
                 let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
                 IpcRequest::Execute {
                     action: ActionType::GetValue { selector, by_label, element_type, timeout_ms },
+                    tag: None,
                 }
             },
             "log-comment" => {
@@ -536,6 +545,7 @@ impl App {
                 }
                 IpcRequest::Execute {
                     action: ActionType::LogComment { message },
+                    tag: None,
                 }
             },
             _ => {

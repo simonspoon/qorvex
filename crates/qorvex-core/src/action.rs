@@ -27,7 +27,7 @@
 //! };
 //!
 //! // Create a log entry
-//! let log = ActionLog::new(action, ActionResult::Success, None, None);
+//! let log = ActionLog::new(action, ActionResult::Success, None, None, None);
 //! println!("Action {} at {}", log.id, log.timestamp);
 //! ```
 
@@ -279,6 +279,10 @@ pub struct ActionLog {
     /// Time spent executing the tap via the automation agent (milliseconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tap_ms: Option<u64>,
+
+    /// Optional free-text tag for log filtering/analysis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 impl ActionLog {
@@ -295,7 +299,7 @@ impl ActionLog {
     /// # Returns
     ///
     /// A new `ActionLog` instance with a unique ID and current timestamp.
-    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<Arc<String>>, duration_ms: Option<u64>) -> Self {
+    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<Arc<String>>, duration_ms: Option<u64>, tag: Option<String>) -> Self {
         Self {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -305,6 +309,7 @@ impl ActionLog {
             duration_ms,
             wait_ms: None,
             tap_ms: None,
+            tag,
         }
     }
 }

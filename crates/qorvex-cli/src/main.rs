@@ -107,6 +107,9 @@ enum Command {
         /// Timeout in milliseconds for retrying
         #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Tap at screen coordinates
@@ -115,16 +118,26 @@ enum Command {
         x: i32,
         /// Y coordinate
         y: i32,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Send keyboard input
     SendKeys {
         /// Text to type
         text: String,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Capture a screenshot (outputs base64-encoded PNG)
-    Screenshot,
+    Screenshot {
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
 
     /// Get UI hierarchy information
     ScreenInfo {
@@ -134,6 +147,9 @@ enum Command {
         /// Output REPL-style formatted list
         #[arg(long)]
         pretty: bool,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Get the value of an element by ID or label
@@ -152,12 +168,18 @@ enum Command {
         /// Timeout in milliseconds for retrying
         #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Log a comment to the session
     Comment {
         /// The comment message
         message: String,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Wait for an element to appear by ID or label
@@ -173,6 +195,9 @@ enum Command {
         /// Timeout in milliseconds
         #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Wait for an element to disappear by ID or label
@@ -188,18 +213,27 @@ enum Command {
         /// Timeout in milliseconds
         #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
         timeout: u64,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Swipe the screen in a direction
     Swipe {
         /// Direction: up, down, left, right
         direction: String,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Set the target application bundle ID
     SetTarget {
         /// Bundle identifier (e.g., com.example.MyApp)
         bundle_id: String,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// Boot a simulator device
@@ -385,61 +419,61 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         .map_err(|e| CliError::Connection(format!("Failed to connect to session '{}': {}", cli.session, e)))?;
 
     match cli.command {
-        Command::Tap { ref selector, label, ref element_type, no_wait, timeout } => {
+        Command::Tap { ref selector, label, ref element_type, no_wait, timeout, ref tag } => {
             let timeout_ms = if no_wait { None } else { Some(timeout) };
             execute_action(&mut client, ActionType::Tap {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),
                 timeout_ms,
-            }, &cli).await
+            }, tag.clone(), &cli).await
         }
-        Command::TapLocation { x, y } => {
-            execute_action(&mut client, ActionType::TapLocation { x, y }, &cli).await
+        Command::TapLocation { x, y, ref tag } => {
+            execute_action(&mut client, ActionType::TapLocation { x, y }, tag.clone(), &cli).await
         }
-        Command::SendKeys { ref text } => {
-            execute_action(&mut client, ActionType::SendKeys { text: text.clone() }, &cli).await
+        Command::SendKeys { ref text, ref tag } => {
+            execute_action(&mut client, ActionType::SendKeys { text: text.clone() }, tag.clone(), &cli).await
         }
-        Command::Screenshot => {
-            execute_action(&mut client, ActionType::GetScreenshot, &cli).await
+        Command::Screenshot { ref tag } => {
+            execute_action(&mut client, ActionType::GetScreenshot, tag.clone(), &cli).await
         }
-        Command::ScreenInfo { full, pretty } => {
-            execute_screen_info(&mut client, &cli, full, pretty).await
+        Command::ScreenInfo { full, pretty, ref tag } => {
+            execute_screen_info(&mut client, &cli, full, pretty, tag.clone()).await
         }
-        Command::GetValue { ref selector, label, ref element_type, no_wait, timeout } => {
+        Command::GetValue { ref selector, label, ref element_type, no_wait, timeout, ref tag } => {
             let timeout_ms = if no_wait { None } else { Some(timeout) };
             execute_action(&mut client, ActionType::GetValue {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),
                 timeout_ms,
-            }, &cli).await
+            }, tag.clone(), &cli).await
         }
-        Command::Swipe { ref direction } => {
-            execute_action(&mut client, ActionType::Swipe { direction: direction.clone() }, &cli).await
+        Command::Swipe { ref direction, ref tag } => {
+            execute_action(&mut client, ActionType::Swipe { direction: direction.clone() }, tag.clone(), &cli).await
         }
-        Command::SetTarget { ref bundle_id } => {
-            execute_action(&mut client, ActionType::SetTarget { bundle_id: bundle_id.clone() }, &cli).await
+        Command::SetTarget { ref bundle_id, ref tag } => {
+            execute_action(&mut client, ActionType::SetTarget { bundle_id: bundle_id.clone() }, tag.clone(), &cli).await
         }
-        Command::Comment { ref message } => {
-            execute_action(&mut client, ActionType::LogComment { message: message.clone() }, &cli).await
+        Command::Comment { ref message, ref tag } => {
+            execute_action(&mut client, ActionType::LogComment { message: message.clone() }, tag.clone(), &cli).await
         }
-        Command::WaitFor { ref selector, label, ref element_type, timeout } => {
+        Command::WaitFor { ref selector, label, ref element_type, timeout, ref tag } => {
             execute_action(&mut client, ActionType::WaitFor {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),
                 timeout_ms: timeout,
                 require_stable: true,
-            }, &cli).await
+            }, tag.clone(), &cli).await
         }
-        Command::WaitForNot { ref selector, label, ref element_type, timeout } => {
+        Command::WaitForNot { ref selector, label, ref element_type, timeout, ref tag } => {
             execute_action(&mut client, ActionType::WaitForNot {
                 selector: selector.clone(),
                 by_label: label,
                 element_type: element_type.clone(),
                 timeout_ms: timeout,
-            }, &cli).await
+            }, tag.clone(), &cli).await
         }
         Command::StartSession => {
             send_command(&mut client, IpcRequest::StartSession, &cli).await
@@ -461,12 +495,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     }
 }
 
-async fn execute_action(client: &mut IpcClient, action: ActionType, cli: &Cli) -> Result<(), CliError> {
+async fn execute_action(client: &mut IpcClient, action: ActionType, tag: Option<String>, cli: &Cli) -> Result<(), CliError> {
     let is_screenshot_action = matches!(action, ActionType::GetScreenshot);
     let is_data_action = matches!(action, ActionType::GetScreenInfo | ActionType::GetValue { .. });
     let action_label = action.display_name();
     let action_target = action.display_target();
-    let request = IpcRequest::Execute { action };
+    let request = IpcRequest::Execute { action, tag };
     let response = client
         .send(&request)
         .await
@@ -592,8 +626,9 @@ async fn execute_screen_info(
     cli: &Cli,
     full: bool,
     pretty: bool,
+    tag: Option<String>,
 ) -> Result<(), CliError> {
-    let request = IpcRequest::Execute { action: ActionType::GetScreenInfo };
+    let request = IpcRequest::Execute { action: ActionType::GetScreenInfo, tag };
     let response = client
         .send(&request)
         .await

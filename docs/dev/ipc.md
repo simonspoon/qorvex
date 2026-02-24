@@ -30,7 +30,7 @@ One socket per session. The server removes any existing socket file at the path 
 #[serde(tag = "type")]
 enum IpcRequest {
     // Core
-    Execute { action: ActionType },
+    Execute { action: ActionType, tag: Option<String> },
     Subscribe,
     GetState,
     GetLog,
@@ -69,7 +69,7 @@ enum IpcRequest {
 
 | Variant | Purpose |
 |---------|---------|
-| `Execute` | Send an action for the session to execute. The `action` field is a serialized `ActionType` enum value. |
+| `Execute` | Send an action for the session to execute. The `action` field is a serialized `ActionType` enum value. The optional `tag` field is a free-text annotation written to `ActionLog` for log filtering. |
 | `Subscribe` | Begin receiving `Event` responses as session events occur (screenshots, actions, etc.). |
 | `GetState` | Request current session state (session ID, latest screenshot). |
 | `GetLog` | Request the full action log history. |
