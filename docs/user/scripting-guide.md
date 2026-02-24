@@ -105,6 +105,7 @@ See [commands.md](commands.md) for full option details.
 - Use `export QORVEX_SESSION=<name>` at the top — both `qorvex` and `qorvex-server` respect it, so you never need `-s` on individual commands.
 - Use `trap 'qorvex stop || true' EXIT` immediately after `qorvex start` so the server is always stopped, even on error. The `|| true` prevents the trap itself from masking the script's exit code when the server is already gone.
 - Use `QORVEX_TIMEOUT` to set a default timeout (ms) for all wait/tap operations without passing `-o` on every command.
+- Use `QORVEX_LOG_DIR=/path/to/run-output` to redirect all log files to a per-run directory. Combine with `QORVEX_SESSION` for fully isolated CI runs.
 - Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
 - Use `--tag <text>` on any action to annotate the JSONL log entry (e.g., `qorvex tap login-button --tag "login-flow"`). Tags survive `qorvex convert` — converted scripts emit `--tag` so the annotation round-trips through replay.
 - Use `qorvex -f json` for machine-readable output in pipelines.

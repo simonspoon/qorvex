@@ -38,11 +38,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let log_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".qorvex")
-        .join("logs");
-    std::fs::create_dir_all(&log_dir).ok();
+    let log_dir = qorvex_core::session::logs_dir();
     let file_appender = tracing_appender::rolling::daily(&log_dir, "qorvex-repl.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()

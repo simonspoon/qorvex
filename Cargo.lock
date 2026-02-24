@@ -2136,7 +2136,6 @@ dependencies = [
  "arboard",
  "base64",
  "clap",
- "dirs",
  "fuzzy-matcher",
  "qorvex-core",
  "ratatui",
@@ -2153,7 +2152,6 @@ name = "qorvex-server"
 version = "0.1.0"
 dependencies = [
  "clap",
- "dirs",
  "qorvex-core",
  "serde_json",
  "tokio",

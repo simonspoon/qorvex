@@ -59,11 +59,15 @@ use crate::ipc::qorvex_dir;
 /// Maximum number of action log entries to retain in the ring buffer.
 const MAX_ACTION_LOG_SIZE: usize = 1000;
 
-/// Returns the logs directory path (`~/.qorvex/logs/`).
+/// Returns the logs directory path.
 ///
-/// Creates the directory if it doesn't exist.
-fn logs_dir() -> PathBuf {
-    let dir = qorvex_dir().join("logs");
+/// If `QORVEX_LOG_DIR` is set, uses that path; otherwise falls back to
+/// `~/.qorvex/logs/`. Creates the directory if it doesn't exist.
+pub fn logs_dir() -> PathBuf {
+    let dir = match std::env::var("QORVEX_LOG_DIR") {
+        Ok(val) if !val.is_empty() => PathBuf::from(val),
+        _ => qorvex_dir().join("logs"),
+    };
     std::fs::create_dir_all(&dir).ok();
     dir
 }

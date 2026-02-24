@@ -152,6 +152,7 @@ See [scripting-guide.md](scripting-guide.md) for full scripting details.
 |----------|---------|-------------|
 | `QORVEX_SESSION` | `default` | Session name — respected by both `qorvex` (CLI) and `qorvex-server`. Set once at the top of a script to avoid passing `-s` on every command. |
 | `QORVEX_TIMEOUT` | `5000` | Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not`. Overridden by `-o` / `--timeout`. |
+| `QORVEX_LOG_DIR` | `~/.qorvex/logs/` | Override the directory where log files are written. Useful for redirecting logs to a per-run output folder in automation pipelines. |
 
 ## Element Selectors
 

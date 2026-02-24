@@ -210,6 +210,7 @@ Options:
 Environment:
 - `QORVEX_SESSION` — Default session name
 - `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not` (default: 5000); overridden by `-o`
+- `QORVEX_LOG_DIR` — Override log file directory (default: `~/.qorvex/logs/`)
 
 Command-specific options:
 - `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip retry, attempt once; `-o, --timeout <ms>` — Retry timeout (default: 5000); `--tag <text>` — Annotate the log entry

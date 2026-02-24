@@ -27,11 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Setup logging
-    let log_dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".qorvex")
-        .join("logs");
-    std::fs::create_dir_all(&log_dir)?;
+    let log_dir = qorvex_core::session::logs_dir();
     let file_appender = tracing_appender::rolling::never(&log_dir, "qorvex-server.log");
     tracing_subscriber::fmt()
         .with_writer(file_appender)

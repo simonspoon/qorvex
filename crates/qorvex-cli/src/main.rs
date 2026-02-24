@@ -781,8 +781,7 @@ async fn start_all(cli: &Cli) -> Result<(), CliError> {
 
     // Start server if not already running
     if !sock.exists() {
-        let log_dir = qorvex_dir().join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
+        let log_dir = qorvex_core::session::logs_dir();
         let log_file = std::fs::File::create(log_dir.join("qorvex-server-launch.log")).ok();
 
         let mut cmd = std::process::Command::new("qorvex-server");
