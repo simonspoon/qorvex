@@ -421,6 +421,8 @@ impl App {
             "set-target" => IpcRequest::SetTarget {
                 bundle_id: args.positional.first().cloned().unwrap_or_default(),
             },
+            "start-target" => IpcRequest::StartTarget,
+            "stop-target" => IpcRequest::StopTarget,
             "set-timeout" => {
                 let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
@@ -661,6 +663,8 @@ impl App {
             "  start-agent [path]       Connect to / build+launch agent",
             "  stop-agent               Stop managed agent process",
             "  set-target <bundle_id>   Set target app for automation",
+            "  start-target             Launch the target application",
+            "  stop-target              Terminate the target application",
             "  set-timeout [ms]         Set/get default wait timeout",
             "",
             "Screen:",

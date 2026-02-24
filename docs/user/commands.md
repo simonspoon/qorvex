@@ -29,6 +29,8 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Start agent | `start-agent` or `start-agent <path>` | `qorvex start-agent [--project-dir <path>]` |
 | Stop agent | `stop-agent` | — |
 | Set target app | `set-target <bundle_id>` | `qorvex set-target <bundle_id>` |
+| Launch target app | `start-target` | `qorvex start-target` |
+| Terminate target app | `stop-target` | `qorvex stop-target` |
 | Set default timeout | `set-timeout <ms>` | — |
 
 ## UI Interaction

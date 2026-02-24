@@ -36,6 +36,7 @@ pub struct ServerState {
     pub element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
     pub cached_elements: Vec<UIElement>,
     pub cached_devices: Vec<SimulatorDevice>,
+    pub target_bundle_id: Option<String>,
     pub default_timeout_ms: u64,
 }
 
@@ -66,6 +67,7 @@ impl ServerState {
             element_update_rx: None,
             cached_elements: Vec::new(),
             cached_devices,
+            target_bundle_id: None,
             default_timeout_ms: 5000,
         }
     }
@@ -89,6 +91,10 @@ impl ServerState {
             IpcRequest::StartAgent { project_dir } => self.handle_start_agent(project_dir).await,
             IpcRequest::StopAgent => self.handle_stop_agent(),
             IpcRequest::Connect { host, port } => self.handle_connect(&host, port).await,
+
+            // ── Target App Lifecycle ────────────────────────────────────
+            IpcRequest::StartTarget => self.handle_start_target(),
+            IpcRequest::StopTarget => self.handle_stop_target(),
 
             // ── Configuration ───────────────────────────────────────────
             IpcRequest::SetTarget { bundle_id } => self.handle_set_target(&bundle_id).await,
@@ -414,10 +420,13 @@ impl ServerState {
         }
         match &self.executor {
             Some(executor) => match executor.driver().set_target(bundle_id).await {
-                Ok(()) => IpcResponse::CommandResult {
-                    success: true,
-                    message: format!("Target set to {}", bundle_id),
-                },
+                Ok(()) => {
+                    self.target_bundle_id = Some(bundle_id.to_string());
+                    IpcResponse::CommandResult {
+                        success: true,
+                        message: format!("Target set to {}", bundle_id),
+                    }
+                }
                 Err(e) => IpcResponse::CommandResult {
                     success: false,
                     message: format!("Failed to set target: {}", e),
@@ -426,6 +435,56 @@ impl ServerState {
             None => IpcResponse::CommandResult {
                 success: false,
                 message: "No agent connected".to_string(),
+            },
+        }
+    }
+
+    fn handle_start_target(&self) -> IpcResponse {
+        let Some(ref bundle_id) = self.target_bundle_id else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No target set. Use set-target first.".to_string(),
+            };
+        };
+        let Some(ref udid) = self.simulator_udid else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No simulator selected.".to_string(),
+            };
+        };
+        match Simctl::launch_app(udid, bundle_id) {
+            Ok(()) => IpcResponse::CommandResult {
+                success: true,
+                message: format!("Launched {}", bundle_id),
+            },
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("Failed to launch app: {}", e),
+            },
+        }
+    }
+
+    fn handle_stop_target(&self) -> IpcResponse {
+        let Some(ref bundle_id) = self.target_bundle_id else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No target set. Use set-target first.".to_string(),
+            };
+        };
+        let Some(ref udid) = self.simulator_udid else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No simulator selected.".to_string(),
+            };
+        };
+        match Simctl::terminate_app(udid, bundle_id) {
+            Ok(()) => IpcResponse::CommandResult {
+                success: true,
+                message: format!("Terminated {}", bundle_id),
+            },
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("Failed to terminate app: {}", e),
             },
         }
     }

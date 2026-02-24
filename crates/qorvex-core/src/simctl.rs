@@ -202,6 +202,64 @@ impl Simctl {
         Ok(())
     }
 
+    /// Launches an app on a simulator device.
+    ///
+    /// Runs `xcrun simctl launch <udid> <bundle_id>` to start the specified
+    /// application on the given simulator.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `bundle_id` - The bundle identifier of the app to launch
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn launch_app(udid: &str, bundle_id: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "launch", udid, bundle_id])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Terminates an app on a simulator device.
+    ///
+    /// Runs `xcrun simctl terminate <udid> <bundle_id>` to stop the specified
+    /// application on the given simulator. If the app is not currently running,
+    /// this method returns successfully (the "not running" state is not treated
+    /// as an error).
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `bundle_id` - The bundle identifier of the app to terminate
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error (except for "not running")
+    pub fn terminate_app(udid: &str, bundle_id: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "terminate", udid, bundle_id])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // App not running is not an error
+            if !stderr.contains("not running") {
+                return Err(SimctlError::CommandFailed(stderr.to_string()));
+            }
+        }
+        Ok(())
+    }
+
     /// Parses device list JSON into a flat vector of devices.
     ///
     /// This method is exposed primarily for testing purposes. It takes

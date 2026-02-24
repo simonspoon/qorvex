@@ -236,6 +236,12 @@ enum Command {
         tag: Option<String>,
     },
 
+    /// Launch the target application
+    StartTarget,
+
+    /// Terminate the target application
+    StopTarget,
+
     /// Boot a simulator device
     BootDevice {
         /// Device UDID
@@ -474,6 +480,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 element_type: element_type.clone(),
                 timeout_ms: timeout,
             }, tag.clone(), &cli).await
+        }
+        Command::StartTarget => {
+            send_command(&mut client, IpcRequest::StartTarget, &cli).await
+        }
+        Command::StopTarget => {
+            send_command(&mut client, IpcRequest::StopTarget, &cli).await
         }
         Command::StartSession => {
             send_command(&mut client, IpcRequest::StartSession, &cli).await

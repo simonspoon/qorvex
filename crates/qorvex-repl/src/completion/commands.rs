@@ -124,6 +124,18 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[],
     },
     CommandDef {
+        name: "start-target",
+        description: "Launch the target application",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
+        name: "stop-target",
+        description: "Terminate the target application",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
         name: "set-timeout",
         description: "Set default wait timeout (ms)",
         args: &[ArgSpec {

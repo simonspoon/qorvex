@@ -111,6 +111,12 @@ pub enum IpcRequest {
     /// Connect to agent at a specific host/port.
     Connect { host: String, port: u16 },
 
+    // --- Target App Lifecycle ---
+    /// Launch the target application on the simulator.
+    StartTarget,
+    /// Terminate the target application on the simulator.
+    StopTarget,
+
     // --- Configuration ---
     /// Set the target app bundle ID.
     SetTarget { bundle_id: String },
