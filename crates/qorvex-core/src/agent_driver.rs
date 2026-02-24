@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -226,7 +226,10 @@ impl AgentDriver {
     fn is_connection_error(err: &DriverError) -> bool {
         matches!(
             err,
-            DriverError::NotConnected | DriverError::ConnectionLost(_) | DriverError::Io(_)
+            DriverError::NotConnected
+                | DriverError::ConnectionLost(_)
+                | DriverError::Io(_)
+                | DriverError::Timeout
         )
     }
 
@@ -317,7 +320,7 @@ impl AgentDriver {
 
         match &result {
             Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
-                warn!(error = %e, "connection error, trying reconnect before recovery");
+                warn!(error = %e, opcode = request.opcode_name(), "connection error, trying reconnect before recovery");
                 if self.try_reconnect().await.is_ok() {
                     self.recovery_count.fetch_add(1, Ordering::Relaxed);
                     return self.send_raw(request).await;
@@ -331,7 +334,12 @@ impl AgentDriver {
 
     /// Sends a request without recovery wrapping.
     async fn send_raw(&self, request: &Request) -> Result<Response, DriverError> {
+        let lock_start = Instant::now();
         let mut guard = self.client.lock().await;
+        let lock_elapsed = lock_start.elapsed();
+        if lock_elapsed > Duration::from_millis(500) {
+            warn!(elapsed_ms = lock_elapsed.as_millis() as u64, "slow mutex acquisition on agent client");
+        }
         let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
         client.send(request).await.map_err(map_client_error)
     }
@@ -353,7 +361,7 @@ impl AgentDriver {
 
         match &result {
             Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
-                warn!(error = %e, "connection error (with timeout), trying reconnect before recovery");
+                warn!(error = %e, opcode = request.opcode_name(), "connection error (with timeout), trying reconnect before recovery");
                 if self.try_reconnect().await.is_ok() {
                     self.recovery_count.fetch_add(1, Ordering::Relaxed);
                     return self.send_raw_with_read_timeout(request, timeout_ms).await;
@@ -373,7 +381,7 @@ impl AgentDriver {
     ) -> Result<Response, DriverError> {
         match timeout_ms {
             Some(ms) => {
-                let read_timeout = Duration::from_millis(ms + 5000);
+                let read_timeout = Duration::from_millis(ms + 15_000);
                 let mut guard = self.client.lock().await;
                 let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
                 client
@@ -1302,8 +1310,10 @@ mod tests {
             std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken")
         )));
 
+        // Timeout — now treated as connection error (stream is dropped on timeout)
+        assert!(AgentDriver::is_connection_error(&DriverError::Timeout));
+
         // Non-connection errors — should return false
-        assert!(!AgentDriver::is_connection_error(&DriverError::Timeout));
         assert!(!AgentDriver::is_connection_error(&DriverError::CommandFailed(
             "element not found".to_string()
         )));

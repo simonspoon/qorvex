@@ -28,12 +28,13 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use socket2::TcpKeepalive;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use tracing::{debug, debug_span, trace, Instrument};
+use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::protocol::{
     ProtocolError, Request, Response, decode_response, encode_request, read_frame_length,
@@ -146,6 +147,16 @@ impl AgentClient {
             .map_err(|_| AgentClientError::Timeout)?
             .map_err(|e| AgentClientError::ConnectionFailed(e.to_string()))?;
 
+        // Lower latency for small protocol frames.
+        stream.set_nodelay(true).ok();
+
+        // TCP keepalive to prevent OS from dropping idle connections between commands.
+        let sock = socket2::SockRef::from(&stream);
+        let keepalive = TcpKeepalive::new()
+            .with_time(Duration::from_secs(15))
+            .with_interval(Duration::from_secs(5));
+        sock.set_tcp_keepalive(&keepalive).ok();
+
         self.stream = Some(Box::new(stream));
         debug!("connected to agent");
         Ok(())
@@ -247,6 +258,7 @@ impl AgentClient {
             Ok(Ok(payload)) => Ok(payload),
             Ok(Err(io_err)) => {
                 // I/O error — stream is likely broken, drop it to prevent reuse.
+                warn!(error = %io_err, "stream I/O error, dropping connection");
                 self.stream.take();
                 Err(AgentClientError::Io(io_err))
             }
@@ -255,6 +267,7 @@ impl AgentClient {
                 // stale bytes in the TCP buffer. Drop the stream so the next
                 // caller gets NotConnected instead of reading a mismatched
                 // response from a previous request.
+                warn!(timeout_secs = read_timeout.as_secs_f64(), "read timeout, dropping connection");
                 self.stream.take();
                 Err(AgentClientError::Timeout)
             }
