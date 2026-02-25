@@ -103,6 +103,41 @@ Kills the child process. Falls back to `xcrun simctl terminate <udid> com.qorvex
 
 ---
 
+## TCP Connection Hardening
+
+Both ends of the TCP connection (Rust client and Swift server) are configured to detect silent drops:
+
+### Keepalive (both ends)
+
+**Rust client** (`agent_client.rs`) sets keepalive on the outgoing `TcpStream` via `socket2`:
+
+```rust
+TcpKeepalive::new()
+    .with_time(Duration::from_secs(15))   // idle before first probe
+    .with_interval(Duration::from_secs(5)) // interval between probes
+```
+
+**Swift server** (`AgentServer.swift`) sets matching keepalive on accepted connections via `NWProtocolTCP.Options`:
+
+```swift
+tcpOptions.enableKeepalive = true
+tcpOptions.keepaliveIdle = 15
+tcpOptions.keepaliveInterval = 5
+tcpOptions.keepaliveCount = 3
+```
+
+Without bidirectional keepalive, the OS can silently drop idle connections and only the side that sets keepalive will detect it.
+
+### Write timeout + stream drop (Rust)
+
+`write_frame()` wraps `write_all`+`flush` in a 10-second timeout. On I/O error or timeout, the stream is dropped (`self.stream.take()`) so the next call receives `NotConnected` rather than a confusing error 54 on the subsequent read. This mirrors the existing `read_frame()` pattern.
+
+### Connection watchdog (Swift)
+
+`AgentServer` tracks `lastActivityDate` (updated on each received payload) and runs a `DispatchSourceTimer` that fires every 30 seconds. If no payload has been received in 60 seconds, the connection is cancelled and logged. This ensures stale connections are cleaned up even when TCP keepalive probes succeed at the kernel level but the Rust process is gone (e.g., `kill -9`).
+
+---
+
 ## `ensure_running()` vs `ensure_agent_ready()`
 
 |  | `ensure_running` | `ensure_agent_ready` |

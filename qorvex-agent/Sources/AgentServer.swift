@@ -11,6 +11,8 @@ final class AgentServer {
     private var activeConnection: NWConnection?
     private let handler: CommandHandler
     private let queue = DispatchQueue(label: "com.qorvex.agent.server")
+    private var lastActivityDate = Date()
+    private var watchdogTimer: DispatchSourceTimer?
 
     init(port: UInt16, handler: CommandHandler) {
         self.port = port
@@ -19,7 +21,12 @@ final class AgentServer {
 
     /// Start listening on the configured TCP port.
     func start() throws {
-        let params = NWParameters.tcp
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 15
+        tcpOptions.keepaliveInterval = 5
+        tcpOptions.keepaliveCount = 3
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
         params.allowLocalEndpointReuse = true
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
@@ -54,11 +61,38 @@ final class AgentServer {
 
     /// Stop the server and close any active connection.
     func stop() {
+        stopWatchdog()
         activeConnection?.cancel()
         activeConnection = nil
         listener?.cancel()
         listener = nil
         NSLog("[qorvex-agent] Server stopped")
+    }
+
+    // MARK: - Watchdog
+
+    private func startWatchdog(for connection: NWConnection) {
+        stopWatchdog()
+        lastActivityDate = Date()
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 30, repeating: 30)
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let elapsed = Date().timeIntervalSince(self.lastActivityDate)
+            if elapsed > 60 {
+                NSLog("[qorvex-agent] Watchdog: no activity for %.0fs, cancelling connection", elapsed)
+                connection.cancel()
+                self.stopWatchdog()
+            }
+        }
+        timer.resume()
+        watchdogTimer = timer
+    }
+
+    private func stopWatchdog() {
+        watchdogTimer?.cancel()
+        watchdogTimer = nil
     }
 
     // MARK: - Connection handling
@@ -70,6 +104,7 @@ final class AgentServer {
             existing.cancel()
         }
         activeConnection = connection
+        startWatchdog(for: connection)
 
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
@@ -92,6 +127,7 @@ final class AgentServer {
 
     private func connectionEnded(_ connection: NWConnection) {
         if activeConnection === connection {
+            stopWatchdog()
             activeConnection = nil
         }
     }
@@ -154,6 +190,8 @@ final class AgentServer {
                 connection.cancel()
                 return
             }
+
+            self.lastActivityDate = Date()
 
             // Decode and handle the request.
             let response: AgentResponse
