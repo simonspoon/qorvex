@@ -197,7 +197,7 @@ It also overrides the timeout-aware tap/get-value methods to forward `timeout_ms
 
 When `timeout_ms` is forwarded, the Swift agent handles the retry loop locally (50ms poll interval), eliminating one TCP round-trip per retry attempt. The default trait implementations for these methods ignore `timeout_ms` and delegate to the single-attempt versions (for backends that don't support agent-side retry).
 
-When `timeout_ms` is `Some(ms)`, the Rust-side TCP read deadline is set to `ms + 5000ms` so the connection is not dropped before the agent finishes retrying. When `timeout_ms` is `None`, the default 30-second read timeout applies.
+When `timeout_ms` is `Some(ms)`, the Rust-side TCP read deadline is set to `ms + 15000ms` so the connection is not dropped before the agent finishes retrying. The 15s buffer (increased from 5s) accommodates slow XCTest accessibility queries that can stall for 5–10s during screen transitions. When `timeout_ms` is `None`, the default 30-second read timeout applies.
 
 This provides accurate **live hittability** -- the `isHittable` property is only available from live `XCUIElement` queries on the Swift side, not from accessibility tree snapshots returned by `DumpTree`.
 
@@ -224,7 +224,7 @@ When a lifecycle is attached, the driver automatically recovers from connection 
 
 This matters when the watcher and executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
 
-`dump_tree` uses `send_with_read_timeout` with a fixed 120s deadline (125s total with the +5s buffer) rather than the default 30s, to prevent the connection from being dropped on large accessibility trees.
+`dump_tree` uses `send_with_read_timeout` with a fixed 120s deadline (135s total with the +15s buffer) rather than the default 30s, to prevent the connection from being dropped on large accessibility trees.
 
 ### Crash Recovery
 

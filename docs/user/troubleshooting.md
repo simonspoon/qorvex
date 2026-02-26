@@ -43,7 +43,7 @@ Auto-recovery does **not** apply to `connect` (direct connect via `connect <host
 
 - Connection timeout: 5 seconds
 - Write timeout: 10 seconds — if the agent stops reading (e.g., blocked on a long operation), the write is aborted and the connection is dropped so the next command gets `NotConnected` immediately rather than blocking indefinitely
-- Read timeout: 30 seconds (default) — if the agent doesn't respond within 30 seconds, the connection is closed to prevent response mismatches on subsequent commands. When `QORVEX_TIMEOUT` or `--timeout` is set, the read deadline is extended to `timeout + 5s` so long agent-side retries can complete
+- Read timeout: 30 seconds (default) — if the agent doesn't respond within 30 seconds, the connection is closed to prevent response mismatches on subsequent commands. When `QORVEX_TIMEOUT` or `--timeout` is set, the read deadline is extended to `timeout + 15s` so long agent-side retries can complete (the 15s buffer accommodates XCTest queries that can stall for 5–10s during screen transitions)
 - `dump_tree` / `get-screen-info` / `list-elements`: uses a 120s read deadline regardless of the default — apps with large accessibility trees can take well over 30s to snapshot
 - Agent startup timeout: 30 seconds (3 retries)
 

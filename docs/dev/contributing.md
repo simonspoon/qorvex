@@ -6,6 +6,61 @@ This document covers common development workflows in the qorvex codebase: adding
 
 ---
 
+## Build & Run Commands
+
+### Building
+
+```bash
+cargo build                # all crates (debug)
+cargo build --release      # all crates (release)
+./install.sh               # install all Rust binaries, build agent + streamer, record agent source dir
+```
+
+### Individual Installs
+
+```bash
+cargo install --path crates/qorvex-server
+cargo install --path crates/qorvex-repl
+cargo install --path crates/qorvex-live
+cargo install --path crates/qorvex-cli
+```
+
+### Running from Source
+
+```bash
+cargo run -p qorvex-server -- -s default                         # server
+cargo run -p qorvex-repl                                          # REPL (auto-launches server)
+cargo run -p qorvex-live                                          # live TUI
+cargo run -p qorvex-live -- --fps 30                              # live TUI, higher frame rate
+cargo run -p qorvex-live -- --no-streamer                         # live TUI, polling fallback
+cargo run -p qorvex-cli -- start                                  # CLI: start server + session
+cargo run -p qorvex-cli -- tap button-id                          # CLI: tap element
+cargo run -p qorvex-cli -- stop                                   # CLI: stop session
+cargo run -p qorvex-cli -- list-devices                           # CLI: no session needed
+cargo run -p qorvex-cli -- boot-device <udid>                     # CLI: no session needed
+cargo run -p qorvex-cli -- convert log.jsonl                      # CLI: no session needed
+```
+
+### Batch Modes
+
+```bash
+echo -e "help\nquit" | cargo run -p qorvex-repl -- --batch -s <session>   # REPL batch
+cargo run -p qorvex-live -- --batch -s <session> --duration 5              # live TUI batch (JSONL)
+```
+
+### Swift Components
+
+```bash
+make -C qorvex-agent build       # build agent (requires Xcode)
+make -C qorvex-streamer build    # build streamer (macOS 13+)
+make -C qorvex-testapp build     # build test app (requires Xcode + xcodegen)
+make -C qorvex-testapp install   # install test app on booted Simulator
+make -C qorvex-testapp run       # install + launch test app
+qorvex-streamer --udid <UDID> --fps 30 --socket-path /tmp/qvx-stream.sock   # run streamer standalone
+```
+
+---
+
 ## Adding a New Action: The Ripple
 
 Adding a new action type touches approximately 10 files across Rust and Swift. Follow this order to ensure nothing is missed:
