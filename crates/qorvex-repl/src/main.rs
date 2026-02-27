@@ -191,8 +191,9 @@ async fn run_app(
     app: &mut App,
 ) -> io::Result<()> {
     loop {
-        // Check for element updates from watcher
+        // Check for element and app list updates
         app.check_element_updates();
+        app.check_app_updates();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;

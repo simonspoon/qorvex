@@ -11,7 +11,7 @@ use tui_input::Input;
 use qorvex_core::action::ActionType;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse};
-use qorvex_core::simctl::SimulatorDevice;
+use qorvex_core::simctl::{InstalledApp, SimulatorDevice, Simctl};
 
 use crate::completion::{CandidateKind, CompletionContext, CompletionState, parse_completion_context};
 use crate::completion::commands::ArgCompletion;
@@ -111,6 +111,18 @@ pub struct App {
     pub cached_elements: Vec<UIElement>,
     /// Cached simulator devices.
     pub cached_devices: Vec<SimulatorDevice>,
+    /// Cached installed apps for bundle ID completion.
+    pub cached_apps: Vec<InstalledApp>,
+
+    // --- On-demand app fetching ---
+    /// Channel receiver for app list updates from fetch task.
+    app_update_rx: Option<mpsc::Receiver<Vec<InstalledApp>>>,
+    /// Trigger sender to request a new app list fetch.
+    app_fetch_trigger_tx: Option<mpsc::Sender<()>>,
+    /// Whether an app list fetch is in progress.
+    pub apps_loading: bool,
+    /// When the current app fetch started (for 100ms threshold).
+    apps_fetch_started_at: Option<Instant>,
 
     // --- On-demand element fetching ---
     /// Channel receiver for element updates from fetch task.
@@ -180,6 +192,11 @@ impl App {
             client,
             cached_elements: Vec::new(),
             cached_devices: Vec::new(),
+            cached_apps: Vec::new(),
+            app_update_rx: None,
+            app_fetch_trigger_tx: None,
+            apps_loading: false,
+            apps_fetch_started_at: None,
             element_update_rx: None,
             fetch_trigger_tx: None,
             active_fetch_command: None,
@@ -259,6 +276,26 @@ impl App {
             }
         });
 
+        // On-demand app list fetch task
+        let (app_tx, app_rx) = mpsc::channel::<Vec<InstalledApp>>(4);
+        let (app_fetch_trigger_tx, mut app_fetch_trigger_rx) = mpsc::channel::<()>(1);
+        app.app_update_rx = Some(app_rx);
+        app.app_fetch_trigger_tx = Some(app_fetch_trigger_tx);
+        tokio::spawn(async move {
+            while app_fetch_trigger_rx.recv().await.is_some() {
+                // Drain any extra triggers
+                while app_fetch_trigger_rx.try_recv().is_ok() {}
+
+                let apps = match Simctl::get_booted_udid() {
+                    Ok(udid) => Simctl::list_apps(&udid).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                };
+                if app_tx.send(apps).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         app
     }
 
@@ -284,6 +321,13 @@ impl App {
             if command.args.get(*arg_index).map(|a| a.completion == ArgCompletion::ElementSelector).unwrap_or(false)
         );
 
+        // Detect BundleId context to trigger app list fetch
+        let needs_apps = matches!(
+            &context,
+            CompletionContext::Argument { command, arg_index }
+            if command.args.get(*arg_index).map(|a| a.completion == ArgCompletion::BundleId).unwrap_or(false)
+        );
+
         if needs_elements {
             // Extract command name
             let cmd_name = input.trim_start().split_whitespace().next().unwrap_or("").to_string();
@@ -304,11 +348,21 @@ impl App {
             self.fetch_started_at = None;
         }
 
-        // Only show loading indicator after 100ms threshold
-        let show_loading = self.elements_loading
-            && self.fetch_started_at.map(|t| t.elapsed().as_millis() >= 100).unwrap_or(false);
+        if needs_apps && self.cached_apps.is_empty() && !self.apps_loading {
+            self.apps_loading = true;
+            self.apps_fetch_started_at = Some(Instant::now());
+            if let Some(ref tx) = self.app_fetch_trigger_tx {
+                let _ = tx.try_send(());
+            }
+        }
 
-        self.completion.update(&input, &self.cached_elements, &self.cached_devices, show_loading);
+        // Only show loading indicator after 100ms threshold
+        let show_loading = (self.elements_loading
+            && self.fetch_started_at.map(|t| t.elapsed().as_millis() >= 100).unwrap_or(false))
+            || (self.apps_loading
+                && self.apps_fetch_started_at.map(|t| t.elapsed().as_millis() >= 100).unwrap_or(false));
+
+        self.completion.update(&input, &self.cached_elements, &self.cached_devices, &self.cached_apps, show_loading);
     }
 
     /// Accept the current completion.
@@ -430,6 +484,22 @@ impl App {
                 self.cached_elements = elements;
                 self.elements_loading = false;
                 self.fetch_started_at = None;
+                updated = true;
+            }
+            if updated {
+                self.update_completion();
+            }
+        }
+    }
+
+    /// Check for app list updates from the fetch task (non-blocking).
+    pub fn check_app_updates(&mut self) {
+        if let Some(ref mut rx) = self.app_update_rx {
+            let mut updated = false;
+            while let Ok(apps) = rx.try_recv() {
+                self.cached_apps = apps;
+                self.apps_loading = false;
+                self.apps_fetch_started_at = None;
                 updated = true;
             }
             if updated {

@@ -4,7 +4,7 @@ pub mod commands;
 pub mod fuzzy;
 
 use qorvex_core::element::UIElement;
-use qorvex_core::simctl::SimulatorDevice;
+use qorvex_core::simctl::{InstalledApp, SimulatorDevice};
 
 use self::commands::{find_command, commands_matching, ArgCompletion, CommandDef};
 use self::fuzzy::FuzzyFilter;
@@ -56,6 +56,8 @@ pub enum CandidateKind {
     ElementSelectorByLabel,
     /// A device UDID.
     DeviceUdid,
+    /// An installed app bundle ID.
+    BundleId,
 }
 
 /// State for the completion popup.
@@ -112,6 +114,7 @@ impl CompletionState {
         input: &str,
         cached_elements: &[UIElement],
         cached_devices: &[SimulatorDevice],
+        cached_apps: &[InstalledApp],
         is_loading: bool,
     ) {
         let (context, prefix) = parse_completion_context(input);
@@ -134,6 +137,9 @@ impl CompletionState {
                         }
                         ArgCompletion::DeviceUdid => {
                             device_candidates(&prefix, cached_devices)
+                        }
+                        ArgCompletion::BundleId => {
+                            bundle_id_candidates(&prefix, cached_apps)
                         }
                         ArgCompletion::None => Vec::new(),
                     }
@@ -357,6 +363,57 @@ fn device_candidates(prefix: &str, devices: &[SimulatorDevice]) -> Vec<Candidate
                 text: dev.udid.clone(),
                 description,
                 kind: CandidateKind::DeviceUdid,
+                score,
+                match_indices: indices,
+            })
+        })
+        .collect();
+
+    // Sort by score descending
+    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates
+}
+
+/// Generate bundle ID completion candidates with fuzzy matching.
+fn bundle_id_candidates(prefix: &str, apps: &[InstalledApp]) -> Vec<Candidate> {
+    let filter = FuzzyFilter::new();
+
+    let mut candidates: Vec<Candidate> = apps
+        .iter()
+        .filter_map(|app| {
+            // Try matching against bundle_id
+            let id_match = filter.score(prefix, &app.bundle_id);
+            // Try matching against display_name
+            let name_match = if !app.display_name.is_empty() {
+                filter.score(prefix, &app.display_name)
+            } else {
+                None
+            };
+
+            // Use the best match
+            let (score, indices) = match (id_match, name_match) {
+                (Some((id_score, id_indices)), Some((name_score, _))) => {
+                    if id_score >= name_score {
+                        (id_score, id_indices)
+                    } else {
+                        (name_score, Vec::new())
+                    }
+                }
+                (Some(m), None) => m,
+                (None, Some((score, _))) => (score, Vec::new()),
+                (None, None) => return None,
+            };
+
+            let description = if app.display_name.is_empty() {
+                app.app_type.clone()
+            } else {
+                format!("{} ({})", app.display_name, app.app_type)
+            };
+
+            Some(Candidate {
+                text: app.bundle_id.clone(),
+                description,
+                kind: CandidateKind::BundleId,
                 score,
                 match_indices: indices,
             })

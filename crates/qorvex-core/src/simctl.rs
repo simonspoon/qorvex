@@ -74,6 +74,17 @@ struct DeviceList {
     devices: std::collections::HashMap<String, Vec<SimulatorDevice>>,
 }
 
+/// An application installed on a simulator device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledApp {
+    /// The bundle identifier (e.g., "com.apple.mobilesafari").
+    pub bundle_id: String,
+    /// The display name (e.g., "Safari").
+    pub display_name: String,
+    /// The application type ("User" or "System").
+    pub app_type: String,
+}
+
 /// Wrapper for `xcrun simctl` commands.
 ///
 /// Provides static methods for interacting with iOS Simulator devices.
@@ -258,6 +269,106 @@ impl Simctl {
             }
         }
         Ok(())
+    }
+
+    /// Lists installed apps on a booted simulator.
+    ///
+    /// Runs `xcrun simctl listapps <udid>` and pipes the output through
+    /// `plutil -convert json -o - -- -` to convert from plist to JSON.
+    /// Returns apps sorted with User apps first, then alphabetical by bundle_id.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl or plutil returns an error
+    /// - [`SimctlError::JsonParse`] if the JSON output cannot be parsed
+    pub fn list_apps(udid: &str) -> Result<Vec<InstalledApp>, SimctlError> {
+        let simctl_output = Command::new("xcrun")
+            .args(["simctl", "listapps", udid])
+            .output()?;
+
+        if !simctl_output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&simctl_output.stderr).to_string(),
+            ));
+        }
+
+        let plutil_output = Command::new("plutil")
+            .args(["-convert", "json", "-o", "-", "--", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(&simctl_output.stdout)?;
+                }
+                // Drop stdin to signal EOF
+                child.stdin.take();
+                child.wait_with_output()
+            })?;
+
+        if !plutil_output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&plutil_output.stderr).to_string(),
+            ));
+        }
+
+        Self::parse_app_list(&plutil_output.stdout)
+    }
+
+    /// Parses app list JSON from plutil output into a sorted vector of installed apps.
+    ///
+    /// The JSON is a dictionary keyed by bundle ID, where each value contains
+    /// `CFBundleIdentifier`, `CFBundleDisplayName`, and `ApplicationType`.
+    ///
+    /// # Arguments
+    ///
+    /// * `json` - Raw JSON bytes from plutil output
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::JsonParse`] if the JSON is invalid
+    pub fn parse_app_list(json: &[u8]) -> Result<Vec<InstalledApp>, SimctlError> {
+        let map: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_slice(json)?;
+
+        let mut apps: Vec<InstalledApp> = map
+            .into_values()
+            .filter_map(|entry| {
+                let bundle_id = entry.get("CFBundleIdentifier")?.as_str()?.to_string();
+                let display_name = entry
+                    .get("CFBundleDisplayName")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| entry.get("CFBundleName").and_then(|v| v.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                let app_type = entry
+                    .get("ApplicationType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                Some(InstalledApp {
+                    bundle_id,
+                    display_name,
+                    app_type,
+                })
+            })
+            .collect();
+
+        // Sort: User apps first, then alphabetical by bundle_id
+        apps.sort_by(|a, b| {
+            let a_is_user = a.app_type == "User";
+            let b_is_user = b.app_type == "User";
+            b_is_user.cmp(&a_is_user).then(a.bundle_id.cmp(&b.bundle_id))
+        });
+
+        Ok(apps)
     }
 
     /// Parses device list JSON into a flat vector of devices.
@@ -479,6 +590,64 @@ mod tests {
             }
             Ok(_) => panic!("Expected error for invalid UDID"),
         }
+    }
+
+    const SAMPLE_APP_LIST: &str = r#"{
+        "com.apple.mobilesafari": {
+            "CFBundleIdentifier": "com.apple.mobilesafari",
+            "CFBundleDisplayName": "Safari",
+            "ApplicationType": "System"
+        },
+        "com.example.myapp": {
+            "CFBundleIdentifier": "com.example.myapp",
+            "CFBundleDisplayName": "My App",
+            "ApplicationType": "User"
+        },
+        "com.apple.Preferences": {
+            "CFBundleIdentifier": "com.apple.Preferences",
+            "CFBundleDisplayName": "Settings",
+            "ApplicationType": "System"
+        }
+    }"#;
+
+    #[test]
+    fn test_parse_app_list_success() {
+        let apps = Simctl::parse_app_list(SAMPLE_APP_LIST.as_bytes())
+            .expect("Should parse valid JSON");
+
+        assert_eq!(apps.len(), 3);
+        // User apps should come first
+        assert_eq!(apps[0].bundle_id, "com.example.myapp");
+        assert_eq!(apps[0].app_type, "User");
+        // System apps follow, alphabetical
+        assert_eq!(apps[1].bundle_id, "com.apple.Preferences");
+        assert_eq!(apps[2].bundle_id, "com.apple.mobilesafari");
+    }
+
+    #[test]
+    fn test_parse_app_list_empty() {
+        let apps = Simctl::parse_app_list(b"{}").expect("Should parse empty object");
+        assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn test_parse_app_list_missing_display_name() {
+        let json = r#"{
+            "com.example.noname": {
+                "CFBundleIdentifier": "com.example.noname",
+                "CFBundleName": "FallbackName",
+                "ApplicationType": "User"
+            }
+        }"#;
+        let apps = Simctl::parse_app_list(json.as_bytes()).unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].display_name, "FallbackName");
+    }
+
+    #[test]
+    fn test_parse_app_list_invalid_json() {
+        let result = Simctl::parse_app_list(b"not valid json");
+        assert!(result.is_err());
     }
 
     #[test]

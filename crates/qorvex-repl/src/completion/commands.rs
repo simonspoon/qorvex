@@ -38,6 +38,8 @@ pub enum ArgCompletion {
     ElementSelector,
     /// Complete with device UDIDs from cached device list.
     DeviceUdid,
+    /// Complete with installed app bundle IDs.
+    BundleId,
     /// No special completion (free text).
     None,
 }
@@ -119,7 +121,7 @@ pub static COMMANDS: &[CommandDef] = &[
         description: "Set target app bundle ID",
         args: &[ArgSpec {
             name: "bundle_id",
-            completion: ArgCompletion::None,
+            completion: ArgCompletion::BundleId,
         }],
         options: &[],
     },
