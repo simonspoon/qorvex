@@ -81,6 +81,17 @@ Adding a new action type touches approximately 10 files across Rust and Swift. F
 
 Steps 1-4 define the action from protocol to agent. Steps 5-7 wire it through the Rust driver and executor. Steps 8-9 make it available in the REPL. Steps 10-11 expose it in the CLI and log converter.
 
+**Step 9 — `CandidateKind` variants:** When adding candidates in `completion/mod.rs`, choose the right `CandidateKind`:
+
+| Kind | Use for |
+|------|---------|
+| `CandidateKind::Command` | Top-level command names only — triggers "replace entire input" in `accept_completion()` |
+| `CandidateKind::Option` | Flag/option candidates (e.g. `--label`, `--type`) — appends by replacing the last token |
+| `CandidateKind::ElementId` / `ElementLabel` | Element selector arguments |
+| `CandidateKind::DeviceUdid` / `BundleId` | Device and bundle ID arguments |
+
+Do **not** use `CandidateKind::Command` for flags — it clears everything before the cursor.
+
 ---
 
 ## Adding a New OpCode

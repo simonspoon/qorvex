@@ -58,6 +58,8 @@ pub enum CandidateKind {
     DeviceUdid,
     /// An installed app bundle ID.
     BundleId,
+    /// A command option/flag (e.g. --label, --type).
+    Option,
 }
 
 /// State for the completion popup.
@@ -582,7 +584,7 @@ fn option_candidates(prefix: &str, command: &'static CommandDef, input: &str) ->
             Some(Candidate {
                 text: opt.flag.to_string(),
                 description: opt.description.to_string(),
-                kind: CandidateKind::Command, // reuse Command kind for flags display
+                kind: CandidateKind::Option,
                 score,
                 match_indices: indices,
             })

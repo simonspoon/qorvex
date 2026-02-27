@@ -97,6 +97,7 @@ fn format_candidate(candidate: &Candidate, selected: bool, max_width: usize) -> 
         CandidateKind::ElementSelectorByLabel => "Lbl",
         CandidateKind::DeviceUdid => "Dev",
         CandidateKind::BundleId => "App",
+        CandidateKind::Option => "Opt",
     };
 
     let base_style = if selected {
