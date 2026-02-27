@@ -68,6 +68,9 @@ async fn main() -> io::Result<()> {
     // Main loop
     let result = run_app(&mut terminal, &mut app).await;
 
+    // Shut down the server so it removes its socket file
+    app.shutdown().await;
+
     // Restore terminal
     disable_raw_mode()?;
     execute!(
@@ -182,6 +185,9 @@ async fn run_batch(session: String) -> io::Result<()> {
             break;
         }
     }
+
+    // Shut down the server so it removes its socket file
+    app.shutdown().await;
 
     Ok(())
 }

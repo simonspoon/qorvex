@@ -795,3 +795,80 @@ async fn test_session_creates_persistent_log_file() {
     // Clean up: remove test log file
     fs::remove_file(&log_file).expect("Should clean up test log file");
 }
+
+// =============================================================================
+// Socket Cleanup Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_ipc_server_creates_socket_file() {
+    let session_name = unique_session_name();
+    let session = Session::new(None, "test");
+    let sock = qorvex_core::ipc::socket_path(&session_name);
+
+    assert!(!sock.exists(), "Socket should not exist before server starts");
+
+    let server = IpcServer::new(session, &session_name);
+    let server_handle = tokio::spawn(async move {
+        let _ = server.run().await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert!(sock.exists(), "Socket should exist while server is running");
+
+    server_handle.abort();
+    // Give Drop a moment to run
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert!(!sock.exists(), "Socket should be removed after server is dropped");
+}
+
+#[tokio::test]
+async fn test_ipc_server_drop_removes_socket() {
+    let session_name = unique_session_name();
+    let session = Session::new(None, "test");
+    let sock = qorvex_core::ipc::socket_path(&session_name);
+
+    {
+        let server = IpcServer::new(session, &session_name);
+        let server_handle = tokio::spawn(async move {
+            let _ = server.run().await;
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(sock.exists(), "Socket should exist while server is alive");
+
+        server_handle.abort();
+        let _ = server_handle.await;
+    }
+
+    // After the server task is aborted and dropped, socket should be gone
+    assert!(!sock.exists(), "Socket should be removed after server Drop");
+}
+
+#[tokio::test]
+async fn test_ipc_server_removes_stale_socket_on_start() {
+    let session_name = unique_session_name();
+    let sock = qorvex_core::ipc::socket_path(&session_name);
+
+    // Create a stale socket file
+    std::fs::write(&sock, "stale").expect("Should create stale file");
+    assert!(sock.exists());
+
+    let session = Session::new(None, "test");
+    let server = IpcServer::new(session, &session_name);
+    let server_handle = tokio::spawn(async move {
+        let _ = server.run().await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Server should have replaced the stale file with a real socket
+    assert!(sock.exists(), "Socket should exist after server starts");
+
+    // A client should be able to connect (proving it's a real socket, not stale data)
+    let client = IpcClient::connect(&session_name).await;
+    assert!(client.is_ok(), "Client should connect to server (not stale file)");
+
+    server_handle.abort();
+    let _ = server_handle.await;
+}

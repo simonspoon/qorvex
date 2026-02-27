@@ -198,6 +198,8 @@ Convenience async method to populate the shared driver slot.
 - On `Drop`: removes the socket file.
 - On `Shutdown` IPC request or SIGINT/SIGTERM: drops `ServerState` (triggering `AgentLifecycle::Drop` which kills the agent child process), removes the socket file, then exits. `ShutdownAck` is sent to the requesting client before the shutdown sequence begins.
 
+> **Pitfall — clients that launch the server must send `Shutdown` on all exit paths:** `qorvex-repl` auto-launches `qorvex-server` as a detached background process. If the REPL exits without sending `IpcRequest::Shutdown`, the server keeps running and its `.sock` file is never removed. The fix is to call a centralized `shutdown()` method after every exit path (quit command, Ctrl+C, 'q' shortcut, batch mode EOF) rather than only on the explicit quit command. The `IpcServer::Drop` impl also removes the socket, but `Drop` only runs when the server task itself exits — not when the client that spawned it disconnects.
+
 ---
 
 ## `qorvex_dir() -> PathBuf`
