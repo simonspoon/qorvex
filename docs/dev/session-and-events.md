@@ -8,6 +8,7 @@ This document covers the `Session` struct, `SessionEvent` system, `ActionLog` fo
 |------|----------|
 | `crates/qorvex-core/src/session.rs` | `Session`, `SessionEvent` |
 | `crates/qorvex-core/src/action.rs` | `ActionType`, `ActionLog`, `ActionResult` |
+| `crates/qorvex-core/src/driver.rs` | `flatten_elements` (used for on-demand element fetching) |
 
 ## `Session` Struct
 
@@ -24,8 +25,6 @@ The `Session` is the central state object for a qorvex session. It is always wra
 | `current_screenshot` | `RwLock<Option<Arc<String>>>` | Base64-encoded PNG |
 | `event_tx` | `broadcast::Sender<SessionEvent>` | Broadcast sender (capacity 100) |
 | `log_writer` | `Mutex<Option<BufWriter<File>>>` | JSONL file writer |
-| `screen_hash` | `RwLock<u64>` | Accessibility tree hash |
-| `current_elements` | `RwLock<Option<Arc<Vec<UIElement>>>>` | Cached element tree |
 
 ## Constructors
 
@@ -44,9 +43,6 @@ Example: `my_session_20260218_143022.jsonl`
 enum SessionEvent {
     ActionLogged(ActionLog),
     ScreenshotUpdated(Arc<String>),       // base64-encoded PNG
-    ScreenInfoUpdated {
-        elements: Arc<Vec<UIElement>>,
-    },
     Started { session_id: Uuid },
     Ended,
 }
@@ -56,7 +52,6 @@ enum SessionEvent {
 |---------|-------------|
 | `ActionLogged` | An action is logged via `log_action` or `log_action_timed` |
 | `ScreenshotUpdated` | A new screenshot is captured and stored |
-| `ScreenInfoUpdated` | Accessibility tree changes are detected |
 | `Started` | A session begins |
 | `Ended` | A session ends |
 
@@ -149,34 +144,10 @@ When the buffer is full, the oldest entries are dropped from the front of the de
          ◄── dropped when full     new entries ──►
 ```
 
-## Change Detection
+## On-Demand Element Fetching
 
-The `Session` maintains a hash of the accessibility tree for detecting changes between screen updates.
+UI elements are no longer polled continuously. Instead, `qorvex-repl` fetches elements on demand via the `FetchElements` IPC request when the user enters an element selector context (e.g., typing `tap `). The server calls `driver.dump_tree()` and `flatten_elements()` directly.
 
-### `screen_hash` -- Accessibility Tree Changes
-
-| Property | Value |
-|----------|-------|
-| Hash algorithm | `std::collections::hash_map::DefaultHasher` |
-| Input fields | `identifier`, `label`, `value`, `element_type`, frame coords cast to `i64` |
-| Change condition | `old_hash != new_hash` (exact equality) |
-
-Hashes the structural content of the accessibility tree. Any change to element identifiers, labels, values, types, or positions will produce a different hash.
-
-### Detection in `update_screen_info`
-
-When `update_screen_info` is called:
-
-1. Compute `screen_hash` of the new element tree
-2. Compare with stored hash: `old_screen_hash != new_screen_hash`
-3. If changed, broadcast `ScreenInfoUpdated` event
-4. Update stored hash and cached elements
-
-## Watcher Integration
-
-The `Watcher` (defined in `crates/qorvex-core/src/watcher.rs`) drives change detection by polling the accessibility tree at regular intervals.
-
-Key behaviors:
-- Returns a `WatcherHandle` with `stop()`, `cancel()`, and `is_running()` methods
-- Polls the element tree at a configurable interval (default: 1000ms)
-- Includes exponential backoff on errors to avoid overwhelming the agent
+- Elements are cached per command name in the REPL for the duration of that completion session.
+- Cache is invalidated when the command changes, input is submitted, or input is cleared.
+- A loading indicator appears in the completion popup after 100ms if the fetch is still in progress.

@@ -209,7 +209,7 @@ This triple appears in `ActionType::Tap`, `ActionType::WaitFor`, `ActionType::Ge
 
 ### `Arc<Session>`
 
-Sessions are always `Arc`-wrapped and shared by reference across the executor, IPC server, and watcher. Use these methods to record actions:
+Sessions are always `Arc`-wrapped and shared by reference across the executor and IPC server. Use these methods to record actions:
 
 - `session.log_action(action_log)` -- standard action logging
 - `session.log_action_timed(action_log)` -- action logging with per-phase timing fields (`wait_ms`, `tap_ms`)

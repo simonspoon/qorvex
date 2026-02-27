@@ -6,20 +6,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
 use qorvex_core::config::QorvexConfig;
-use qorvex_core::driver::AutomationDriver;
-use qorvex_core::element::UIElement;
+use qorvex_core::driver::{AutomationDriver, flatten_elements};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{IpcRequest, IpcResponse};
-use qorvex_core::session::{Session, SessionEvent};
+use qorvex_core::session::Session;
 use qorvex_core::simctl::{Simctl, SimulatorDevice};
-use qorvex_core::watcher::{ScreenWatcher, WatcherConfig, WatcherHandle};
 
 /// Backend state for the automation server.
 ///
@@ -32,9 +29,6 @@ pub struct ServerState {
     pub shared_driver: Arc<tokio::sync::Mutex<Option<Arc<dyn AutomationDriver>>>>,
     pub executor: Option<ActionExecutor>,
     pub agent_lifecycle: Option<Arc<AgentLifecycle>>,
-    pub watcher_handle: Option<WatcherHandle>,
-    pub element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
-    pub cached_elements: Vec<UIElement>,
     pub cached_devices: Vec<SimulatorDevice>,
     pub target_bundle_id: Option<String>,
     pub default_timeout_ms: u64,
@@ -63,9 +57,6 @@ impl ServerState {
             shared_driver: Arc::new(tokio::sync::Mutex::new(None)),
             executor,
             agent_lifecycle: None,
-            watcher_handle: None,
-            element_update_rx: None,
-            cached_elements: Vec::new(),
             cached_devices,
             target_bundle_id: None,
             default_timeout_ms: 5000,
@@ -109,16 +100,13 @@ impl ServerState {
                 timeout_ms: self.default_timeout_ms,
             },
 
-            // ── Watcher ─────────────────────────────────────────────────
-            IpcRequest::StartWatcher { interval_ms } => {
-                self.handle_start_watcher(interval_ms).await
-            }
-            IpcRequest::StopWatcher => self.handle_stop_watcher(),
+            // ── On-Demand Fetching ──────────────────────────────────────
+            IpcRequest::FetchElements => self.handle_fetch_elements().await,
 
             // ── Info ────────────────────────────────────────────────────
             IpcRequest::GetSessionInfo => self.handle_get_session_info().await,
             IpcRequest::GetCompletionData => IpcResponse::CompletionData {
-                elements: self.cached_elements.clone(),
+                elements: Vec::new(),
                 devices: self.cached_devices.clone(),
             },
 
@@ -195,10 +183,6 @@ impl ServerState {
     }
 
     fn handle_end_session(&mut self) -> IpcResponse {
-        if let Some(handle) = self.watcher_handle.take() {
-            handle.cancel();
-        }
-        self.element_update_rx = None;
         self.session = None;
 
         IpcResponse::CommandResult {
@@ -489,75 +473,32 @@ impl ServerState {
         }
     }
 
-    // ── Watcher ─────────────────────────────────────────────────────────
+    // ── On-Demand Fetching ──────────────────────────────────────────────
 
-    async fn handle_start_watcher(&mut self, interval_ms: Option<u64>) -> IpcResponse {
-        if self.watcher_handle.is_some() {
-            return IpcResponse::CommandResult {
-                success: false,
-                message: "Watcher already running".to_string(),
+    async fn handle_fetch_elements(&self) -> IpcResponse {
+        let driver = if let Some(guard) = self.shared_driver.lock().await.as_ref() {
+            guard.clone()
+        } else if let Some(executor) = &self.executor {
+            executor.driver().clone()
+        } else {
+            return IpcResponse::CompletionData {
+                elements: Vec::new(),
+                devices: Vec::new(),
             };
-        }
-        if self.session.is_none() {
-            return IpcResponse::CommandResult {
-                success: false,
-                message: "No active session. Send StartSession first.".to_string(),
-            };
-        }
-        if self.executor.is_none() {
-            return IpcResponse::CommandResult {
-                success: false,
-                message: "No simulator selected".to_string(),
-            };
-        }
-
-        let interval = interval_ms.unwrap_or(1000);
-        let config = WatcherConfig {
-            interval_ms: interval,
         };
 
-        let session = self.session.as_ref().unwrap().clone();
-
-        // Create channel for element updates
-        let (tx, rx) = mpsc::channel::<Vec<UIElement>>(16);
-        self.element_update_rx = Some(rx);
-
-        // Spawn task to forward session events to the channel
-        let mut event_rx = session.subscribe();
-        tokio::spawn(async move {
-            while let Ok(event) = event_rx.recv().await {
-                if let SessionEvent::ScreenInfoUpdated { elements, .. } = event {
-                    let elements_vec = (*elements).clone();
-                    if tx.send(elements_vec).await.is_err() {
-                        break;
-                    }
+        match driver.dump_tree().await {
+            Ok(hierarchy) => {
+                let elements = flatten_elements(&hierarchy);
+                IpcResponse::CompletionData {
+                    elements,
+                    devices: Vec::new(),
                 }
             }
-        });
-
-        let driver = self.executor.as_ref().unwrap().driver().clone();
-        let handle = ScreenWatcher::spawn(session, driver, config);
-        self.watcher_handle = Some(handle);
-
-        IpcResponse::CommandResult {
-            success: true,
-            message: format!("Watcher started ({}ms interval)", interval),
-        }
-    }
-
-    fn handle_stop_watcher(&mut self) -> IpcResponse {
-        if let Some(handle) = self.watcher_handle.take() {
-            handle.cancel();
-            self.element_update_rx = None;
-            IpcResponse::CommandResult {
-                success: true,
-                message: "Watcher stopped".to_string(),
-            }
-        } else {
-            IpcResponse::CommandResult {
-                success: false,
-                message: "No watcher running".to_string(),
-            }
+            Err(_) => IpcResponse::CompletionData {
+                elements: Vec::new(),
+                devices: Vec::new(),
+            },
         }
     }
 
@@ -697,14 +638,6 @@ impl ServerState {
         }
     }
 
-    /// Non-blocking poll for element updates from the watcher.
-    pub fn check_element_updates(&mut self) {
-        if let Some(ref mut rx) = self.element_update_rx {
-            while let Ok(elements) = rx.try_recv() {
-                self.cached_elements = elements;
-            }
-        }
-    }
 }
 
 /// Validates a simulator UDID format (8-4-4-4-12 hex).

@@ -9,7 +9,7 @@ Qorvex documentation is organized into developer and user guides. Read only what
 | Architecture | [dev/architecture.md](dev/architecture.md) | Onboarding, understanding crate relationships, data flow, and live video streamer |
 | Binary Protocol | [dev/protocol.md](dev/protocol.md) | Modifying wire format, adding opcodes, debugging agent communication |
 | Driver Abstraction | [dev/driver.md](dev/driver.md) | Adding driver methods, understanding element types and selectors |
-| Session & Events | [dev/session-and-events.md](dev/session-and-events.md) | Working with action logging, change detection, or broadcast events |
+| Session & Events | [dev/session-and-events.md](dev/session-and-events.md) | Working with action logging, on-demand element fetching, or broadcast events |
 | IPC | [dev/ipc.md](dev/ipc.md) | Modifying server-to-client communication, adding request/response types, implementing RequestHandler |
 | Swift Agent | [dev/agent.md](dev/agent.md) | Modifying the XCTest agent, agent lifecycle, or CommandHandler |
 | Contributing | [dev/contributing.md](dev/contributing.md) | Adding a new action or opcode, running tests, understanding common patterns |

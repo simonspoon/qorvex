@@ -73,7 +73,7 @@ start-agent /path/to/qorvex/qorvex-agent
 start-session
 ```
 
-This begins logging actions and enables the watcher and IPC server.
+This begins logging actions and connects to the IPC server.
 
 ### 4. Interact with the UI
 

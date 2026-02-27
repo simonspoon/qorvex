@@ -15,7 +15,7 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 
 | Crate / Component | Role |
 |-------|------|
-| `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor, watcher |
+| `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor |
 | `qorvex-server` | Standalone automation server daemon -- manages sessions, agent lifecycle, and IPC |
 | `qorvex-repl` | TUI REPL client with tab completion, connects to server via IPC; auto-launches server if needed |
 | `qorvex-live` | TUI client with live video feed (via qorvex-streamer) and IPC reconnection |
@@ -65,7 +65,7 @@ See [driver.md](driver.md) for the full method listing.
 
 ### `Session`
 
-Async session state with broadcast channels for `SessionEvent`s. Maintains a ring buffer (1000 max entries), persistent JSONL log file in `~/.qorvex/logs/` (or `$QORVEX_LOG_DIR` if set), cached `current_elements`, and a `screen_hash` for change detection.
+Async session state with broadcast channels for `SessionEvent`s. Maintains a ring buffer (1000 max entries) and a persistent JSONL log file in `~/.qorvex/logs/` (or `$QORVEX_LOG_DIR` if set). UI elements are fetched on demand via `FetchElements` IPC rather than cached in the session.
 
 Constructors:
 - `Session::new(simulator_udid, session_name)` -- logs to `~/.qorvex/logs/` (or `$QORVEX_LOG_DIR`)
@@ -145,8 +145,8 @@ The IPC layer uses Unix sockets with a JSON-over-newlines protocol.
 | `ListDevices` / `UseDevice` / `BootDevice` | Device management |
 | `StartAgent` / `StopAgent` / `Connect` | Agent management |
 | `SetTarget` / `SetTimeout` / `GetTimeout` | Configuration |
-| `StartWatcher` / `StopWatcher` | Screen change watcher |
-| `GetSessionInfo` / `GetCompletionData` | Info and tab completion |
+| `FetchElements` | On-demand live element fetch for tab completion |
+| `GetSessionInfo` / `GetCompletionData` | Info and tab completion (devices only) |
 
 **Response types:**
 

@@ -54,9 +54,8 @@ enum IpcRequest {
     SetTimeout { timeout_ms: u64 },
     GetTimeout,
 
-    // Watcher
-    StartWatcher { interval_ms: Option<u64> },
-    StopWatcher,
+    // On-demand element fetching
+    FetchElements,
 
     // Info
     GetSessionInfo,
@@ -84,10 +83,9 @@ enum IpcRequest {
 | `SetTarget` | Set the target app bundle ID. |
 | `SetTimeout` | Set the default wait timeout in milliseconds. |
 | `GetTimeout` | Get the current default wait timeout. |
-| `StartWatcher` | Start the screen change watcher; `interval_ms` defaults to 1000ms. |
-| `StopWatcher` | Stop the screen change watcher. |
+| `FetchElements` | Fetch live UI elements on demand; calls `dump_tree()` on the connected agent and returns a `CompletionData` response. Used by the REPL for tab completion. |
 | `GetSessionInfo` | Get current session status. |
-| `GetCompletionData` | Get cached elements and devices for client-side tab completion. |
+| `GetCompletionData` | Get cached devices for client-side tab completion. Elements are fetched on demand via `FetchElements`. |
 | `Shutdown` | Request the server to shut down cleanly (stop agent, remove socket, exit). Intercepted by the server's accept loop before reaching `handle_request`. |
 
 Management requests (`StartSession` and below) are only handled when the server has a `RequestHandler` attached. The built-in fallback returns an `Error` for these variants with a message directing users to `qorvex-server`.
@@ -147,12 +145,12 @@ enum IpcResponse {
 | `ActionResult` | `Execute` | `success`: whether the action succeeded. `message`: human-readable result. `screenshot`: base64-encoded PNG, set only when the action is `GetScreenshot`. `data`: optional payload (e.g., element value from `GetValue`). |
 | `State` | `GetState` | `session_id`: current session identifier. `screenshot`: latest cached screenshot as base64 PNG. |
 | `Log` | `GetLog` | `entries`: vector of `ActionLog` entries from the session ring buffer. |
-| `Event` | `Subscribe` (streamed) | `event`: a `SessionEvent` pushed to all subscribers. Event types include `ActionLogged`, `ScreenshotUpdated`, `ScreenInfoUpdated`, `Started`, `Ended`. |
+| `Event` | `Subscribe` (streamed) | `event`: a `SessionEvent` pushed to all subscribers. Event types include `ActionLogged`, `ScreenshotUpdated`, `Started`, `Ended`. |
 | `Error` | Any | `message`: error description. |
 | `CommandResult` | Management commands | `success`: whether the command succeeded. `message`: human-readable result. |
 | `DeviceList` | `ListDevices` | `devices`: list of available `SimulatorDevice` entries. |
 | `SessionInfo` | `GetSessionInfo` | `session_name`, `active`, `device_udid` (if connected), `action_count`. |
-| `CompletionData` | `GetCompletionData` | `elements`: cached UI elements from last screen info. `devices`: cached simulator devices. |
+| `CompletionData` | `GetCompletionData`, `FetchElements` | `elements`: live UI elements from the agent (`FetchElements`) or empty (`GetCompletionData`). `devices`: cached simulator devices. |
 | `TimeoutValue` | `GetTimeout` | `timeout_ms`: current default wait timeout. |
 | `ShutdownAck` | `Shutdown` | Sent immediately before the server exits. No fields. |
 
@@ -198,7 +196,7 @@ Convenience async method to populate the shared driver slot.
 
 - On startup: removes any existing socket file at the conventional path, then binds.
 - On `Drop`: removes the socket file.
-- On `Shutdown` IPC request or SIGINT/SIGTERM: cancels the watcher, drops `ServerState` (triggering `AgentLifecycle::Drop` which kills the agent child process), removes the socket file, then exits. `ShutdownAck` is sent to the requesting client before the shutdown sequence begins.
+- On `Shutdown` IPC request or SIGINT/SIGTERM: drops `ServerState` (triggering `AgentLifecycle::Drop` which kills the agent child process), removes the socket file, then exits. `ShutdownAck` is sent to the requesting client before the shutdown sequence begins.
 
 ---
 

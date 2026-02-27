@@ -113,15 +113,6 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
-## Watcher
-
-| Command | REPL |
-|---------|------|
-| Start watcher | `start-watcher` or `start-watcher <ms>` |
-| Stop watcher | `stop-watcher` |
-
-Default interval: 1000ms. Detects accessibility tree changes.
-
 ## Log Conversion
 
 | Command | Description |

@@ -125,11 +125,9 @@ pub enum IpcRequest {
     /// Get the current default wait timeout.
     GetTimeout,
 
-    // --- Watcher ---
-    /// Start the screen change watcher.
-    StartWatcher { interval_ms: Option<u64> },
-    /// Stop the screen change watcher.
-    StopWatcher,
+    // --- On-Demand Fetching ---
+    /// Fetch live UI elements from the automation agent.
+    FetchElements,
 
     // --- Info ---
     /// Get current session information.
@@ -284,7 +282,7 @@ pub fn socket_path(session_name: &str) -> PathBuf {
 
 /// Unix socket server for IPC communication.
 ///
-/// The server accepts connections from clients (typically the watcher TUI)
+/// The server accepts connections from clients
 /// and handles requests by interacting with the associated [`Session`].
 ///
 /// The server automatically cleans up the socket file when dropped.

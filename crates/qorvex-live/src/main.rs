@@ -565,7 +565,6 @@ async fn main() -> io::Result<()> {
                     SessionEvent::ScreenshotUpdated(ss) => {
                         app.update_screenshot(&ss);
                     }
-                    SessionEvent::ScreenInfoUpdated { .. } => {}
                     _ => {}
                 },
                 AppEvent::ScreenshotReady(bytes) => {

@@ -1,6 +1,7 @@
 //! Application state and event handling.
 
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -10,10 +11,10 @@ use tui_input::Input;
 use qorvex_core::action::ActionType;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse};
-use qorvex_core::session::SessionEvent;
 use qorvex_core::simctl::SimulatorDevice;
 
-use crate::completion::{CandidateKind, CompletionState};
+use crate::completion::{CandidateKind, CompletionContext, CompletionState, parse_completion_context};
+use crate::completion::commands::ArgCompletion;
 use crate::format::{format_command, format_device, format_element, format_result};
 
 /// Maximum number of lines to keep in output history.
@@ -106,14 +107,22 @@ pub struct App {
     client: Option<IpcClient>,
 
     // --- Completion caches (populated via IPC) ---
-    /// Cached UI elements from last screen info.
+    /// Cached UI elements from last fetch.
     pub cached_elements: Vec<UIElement>,
     /// Cached simulator devices.
     pub cached_devices: Vec<SimulatorDevice>,
 
-    // --- Background subscriber channel ---
-    /// Channel receiver for element updates from session events.
+    // --- On-demand element fetching ---
+    /// Channel receiver for element updates from fetch task.
     element_update_rx: Option<mpsc::Receiver<Vec<UIElement>>>,
+    /// Trigger sender to request a new element fetch.
+    fetch_trigger_tx: Option<mpsc::Sender<()>>,
+    /// Command name that triggered the active fetch (for cache reuse).
+    active_fetch_command: Option<String>,
+    /// Whether an element fetch is in progress.
+    pub elements_loading: bool,
+    /// When the current fetch started (for 100ms threshold).
+    fetch_started_at: Option<Instant>,
 }
 
 /// Ensure the qorvex-server process is running for the given session.
@@ -172,6 +181,10 @@ impl App {
             cached_elements: Vec::new(),
             cached_devices: Vec::new(),
             element_update_rx: None,
+            fetch_trigger_tx: None,
+            active_fetch_command: None,
+            elements_loading: false,
+            fetch_started_at: None,
         };
 
         // Show connection status
@@ -219,27 +232,30 @@ impl App {
         app.add_output(Line::from("Type 'help' for available commands."));
         app.add_output(Line::from(""));
 
-        // Background subscriber for element updates
-        let (tx, rx) = mpsc::channel::<Vec<UIElement>>(16);
-        app.element_update_rx = Some(rx);
-        let sub_session = session_name.clone();
+        // On-demand element fetch task
+        let (element_tx, element_rx) = mpsc::channel::<Vec<UIElement>>(4);
+        let (fetch_trigger_tx, mut fetch_trigger_rx) = mpsc::channel::<()>(1);
+        app.element_update_rx = Some(element_rx);
+        app.fetch_trigger_tx = Some(fetch_trigger_tx);
+        let fetch_session = session_name.clone();
         tokio::spawn(async move {
-            // Keep trying to subscribe
-            loop {
-                if let Ok(mut sub_client) = IpcClient::connect(&sub_session).await {
-                    if sub_client.subscribe().await.is_ok() {
-                        loop {
-                            match sub_client.read_event().await {
-                                Ok(IpcResponse::Event { event: SessionEvent::ScreenInfoUpdated { elements, .. } }) => {
-                                    let _ = tx.send((*elements).clone()).await;
-                                }
-                                Err(_) => break,
-                                _ => {}
-                            }
+            while fetch_trigger_rx.recv().await.is_some() {
+                // Drain any extra triggers that queued up
+                while fetch_trigger_rx.try_recv().is_ok() {}
+
+                let elements = match IpcClient::connect(&fetch_session).await {
+                    Ok(mut client) => {
+                        match client.send(&IpcRequest::FetchElements).await {
+                            Ok(IpcResponse::CompletionData { elements, .. }) => elements,
+                            _ => Vec::new(),
                         }
                     }
+                    Err(_) => Vec::new(),
+                };
+                // Always send a result so loading state clears
+                if element_tx.send(elements).await.is_err() {
+                    break;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         });
 
@@ -259,7 +275,40 @@ impl App {
     /// Update completion state based on current input.
     pub fn update_completion(&mut self) {
         let input = self.input.value().to_string();
-        self.completion.update(&input, &self.cached_elements, &self.cached_devices);
+
+        // Detect ElementSelector context to trigger on-demand fetch
+        let (context, _prefix) = parse_completion_context(&input);
+        let needs_elements = matches!(
+            &context,
+            CompletionContext::Argument { command, arg_index }
+            if command.args.get(*arg_index).map(|a| a.completion == ArgCompletion::ElementSelector).unwrap_or(false)
+        );
+
+        if needs_elements {
+            // Extract command name
+            let cmd_name = input.trim_start().split_whitespace().next().unwrap_or("").to_string();
+            if self.active_fetch_command.as_deref() != Some(&cmd_name) {
+                // New command context — clear cache and trigger fetch
+                self.cached_elements.clear();
+                self.elements_loading = true;
+                self.fetch_started_at = Some(Instant::now());
+                self.active_fetch_command = Some(cmd_name);
+                if let Some(ref tx) = self.fetch_trigger_tx {
+                    let _ = tx.try_send(());
+                }
+            }
+        } else {
+            // Left element context — reset fetch state
+            self.active_fetch_command = None;
+            self.elements_loading = false;
+            self.fetch_started_at = None;
+        }
+
+        // Only show loading indicator after 100ms threshold
+        let show_loading = self.elements_loading
+            && self.fetch_started_at.map(|t| t.elapsed().as_millis() >= 100).unwrap_or(false);
+
+        self.completion.update(&input, &self.cached_elements, &self.cached_devices, show_loading);
     }
 
     /// Accept the current completion.
@@ -311,9 +360,12 @@ impl App {
         // Process the command
         self.process_command(&input).await;
 
-        // Clear input and completion
+        // Clear input, completion, and fetch state
         self.input = Input::default();
         self.completion.hide();
+        self.active_fetch_command = None;
+        self.elements_loading = false;
+        self.fetch_started_at = None;
     }
 
     /// Scroll output up (away from bottom).
@@ -370,11 +422,18 @@ impl App {
         false
     }
 
-    /// Check for element updates from the watcher (non-blocking).
+    /// Check for element updates from the fetch task (non-blocking).
     pub fn check_element_updates(&mut self) {
         if let Some(ref mut rx) = self.element_update_rx {
+            let mut updated = false;
             while let Ok(elements) = rx.try_recv() {
                 self.cached_elements = elements;
+                self.elements_loading = false;
+                self.fetch_started_at = None;
+                updated = true;
+            }
+            if updated {
+                self.update_completion();
             }
         }
     }
@@ -433,10 +492,6 @@ impl App {
                     }
                 }
             },
-            "start-watcher" => IpcRequest::StartWatcher {
-                interval_ms: args.positional.first().and_then(|s| s.parse().ok()),
-            },
-            "stop-watcher" => IpcRequest::StopWatcher,
             "get-session-info" => IpcRequest::GetSessionInfo,
             "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
@@ -666,8 +721,6 @@ impl App {
             "Screen:",
             "  get-screenshot           Capture a screenshot (base64 PNG)",
             "  get-screen-info          Get UI hierarchy",
-            "  start-watcher [ms]       Auto-detect screen changes (default 500ms)",
-            "  stop-watcher             Stop screen change detection",
             "",
             "UI:",
             "  list-elements            List all UI elements",

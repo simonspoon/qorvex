@@ -158,4 +158,4 @@ The server cleans up old sockets on startup, but manual removal may be needed af
 
 ## Performance
 
-- **Watcher polling:** Default 1000ms. Lower values increase CPU usage. Set via `start-watcher <ms>`.
+- **Tab completion elements:** The REPL fetches live UI elements on demand when you type a command that requires an element selector (e.g., `tap `). Elements are cached per command and refetched when the command changes or after a submit.

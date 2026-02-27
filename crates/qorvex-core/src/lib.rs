@@ -25,7 +25,6 @@
 //! - [`session`] - Session state management with event broadcasting
 //! - [`ipc`] - Unix socket-based IPC for REPL and watcher communication
 //! - [`action`] - Action types and logging for automation operations
-//! - [`watcher`] - Screen change detection via accessibility tree polling
 //!
 //! ## External Dependencies
 //!
@@ -53,4 +52,3 @@ pub mod protocol;
 pub mod session;
 pub mod simctl;
 pub mod usb_tunnel;
-pub mod watcher;

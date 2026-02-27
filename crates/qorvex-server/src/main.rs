@@ -93,10 +93,7 @@ async fn run_accept_loop(
 async fn cleanup(state: Arc<Mutex<ServerState>>, sock_path: &std::path::Path) {
     info!("Cleaning up");
     {
-        let mut s = state.lock().await;
-        if let Some(handle) = s.watcher_handle.take() {
-            handle.cancel();
-        }
+        let _s = state.lock().await;
         // AgentLifecycle::Drop will kill the agent child process
     }
     // drop state so ServerState destructors run
@@ -163,11 +160,6 @@ async fn handle_client(
                 }
             }
             other => {
-                // Check for element updates before handling
-                {
-                    let mut s = state.lock().await;
-                    s.check_element_updates();
-                }
                 let response = {
                     let mut s = state.lock().await;
                     s.handle_request(other).await

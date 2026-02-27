@@ -157,21 +157,6 @@ pub static COMMANDS: &[CommandDef] = &[
         args: &[],
         options: &[],
     },
-    CommandDef {
-        name: "start-watcher",
-        description: "Start screen change detection",
-        args: &[ArgSpec {
-            name: "interval_ms",
-            completion: ArgCompletion::None,
-        }],
-        options: &[],
-    },
-    CommandDef {
-        name: "stop-watcher",
-        description: "Stop screen change detection",
-        args: &[],
-        options: &[],
-    },
     // UI commands
     CommandDef {
         name: "list-elements",

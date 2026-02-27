@@ -53,7 +53,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::action::{ActionLog, ActionType, ActionResult};
-use crate::element::UIElement;
 use crate::ipc::qorvex_dir;
 
 /// Maximum number of action log entries to retain in the ring buffer.
@@ -87,14 +86,6 @@ pub enum SessionEvent {
     /// for efficient cloning during broadcast.
     ScreenshotUpdated(Arc<String>),
 
-    /// The screen info was updated (from screen watcher).
-    ///
-    /// Contains the current UI elements on screen.
-    ScreenInfoUpdated {
-        /// The current UI elements on screen.
-        elements: Arc<Vec<UIElement>>,
-    },
-
     /// The session has started.
     Started {
         /// The unique identifier for this session.
@@ -114,8 +105,6 @@ pub enum SessionEvent {
 /// - The current screenshot (if any)
 /// - A broadcast channel for notifying watchers of state changes
 /// - A persistent log file in `~/.qorvex/logs/`
-/// - Screen hash for change detection (used by watcher)
-///
 /// Sessions are created via [`Session::new`], which returns an `Arc<Session>`
 /// for safe sharing across async tasks.
 pub struct Session {
@@ -139,12 +128,6 @@ pub struct Session {
 
     /// Buffered writer for persistent JSON Lines log file.
     log_writer: Mutex<Option<BufWriter<std::fs::File>>>,
-
-    /// Hash of the current screen elements for change detection.
-    screen_hash: RwLock<u64>,
-
-    /// Current UI elements on screen (cached from last screen info update).
-    current_elements: RwLock<Option<Arc<Vec<UIElement>>>>,
 
 }
 
@@ -199,8 +182,6 @@ impl Session {
             current_screenshot: RwLock::new(None),
             event_tx,
             log_writer: Mutex::new(log_writer),
-            screen_hash: RwLock::new(0),
-            current_elements: RwLock::new(None),
         })
     }
 
@@ -364,61 +345,5 @@ impl Session {
         *self.current_screenshot.write().await = Some(screenshot_arc.clone());
         // Ignore send errors - no subscribers is expected
         let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(screenshot_arc));
-    }
-
-    /// Updates the screen info if the element hash has changed.
-    ///
-    /// This method is called by the screen watcher to update the cached
-    /// screen elements and broadcast changes to subscribers.
-    ///
-    /// # Arguments
-    ///
-    /// * `elements` - The current UI elements on screen
-    /// * `element_hash` - The computed hash of the elements
-    ///
-    /// # Returns
-    ///
-    /// `true` if the screen info changed (hash was different), `false` otherwise.
-    ///
-    /// # Events
-    ///
-    /// If the hash changed, broadcasts a [`SessionEvent::ScreenInfoUpdated`] event.
-    pub async fn update_screen_info(
-        &self,
-        elements: Vec<UIElement>,
-        element_hash: u64,
-    ) -> bool {
-        // Check if element hash changed
-        let mut screen_hash = self.screen_hash.write().await;
-        if *screen_hash == element_hash {
-            return false;
-        }
-
-        // Update hash
-        *screen_hash = element_hash;
-        drop(screen_hash);
-
-        // Wrap in Arc for efficient sharing
-        let elements_arc = Arc::new(elements);
-
-        // Update cached elements
-        *self.current_elements.write().await = Some(elements_arc.clone());
-
-        // Broadcast screen info updated event
-        let _ = self.event_tx.send(SessionEvent::ScreenInfoUpdated {
-            elements: elements_arc,
-        });
-
-        true
-    }
-
-    /// Returns the current UI elements, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(Arc<Vec<UIElement>>)` containing the cached elements,
-    /// or `None` if no screen info has been captured yet.
-    pub async fn get_current_elements(&self) -> Option<Arc<Vec<UIElement>>> {
-        self.current_elements.read().await.clone()
     }
 }

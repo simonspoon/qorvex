@@ -112,6 +112,7 @@ impl CompletionState {
         input: &str,
         cached_elements: &[UIElement],
         cached_devices: &[SimulatorDevice],
+        is_loading: bool,
     ) {
         let (context, prefix) = parse_completion_context(input);
 
@@ -120,7 +121,7 @@ impl CompletionState {
                 commands_matching(&prefix)
             }
             CompletionContext::Argument { command, arg_index } => {
-                if let Some(arg_spec) = command.args.get(arg_index) {
+                let arg_cands = if let Some(arg_spec) = command.args.get(arg_index) {
                     match arg_spec.completion {
                         ArgCompletion::ElementId => {
                             element_candidates(&prefix, cached_elements)
@@ -138,6 +139,12 @@ impl CompletionState {
                     }
                 } else {
                     Vec::new()
+                };
+
+                if arg_cands.is_empty() && arg_index >= command.args.len() && !command.options.is_empty() {
+                    option_candidates(&prefix, command, input)
+                } else {
+                    arg_cands
                 }
             }
             CompletionContext::Option { command } => {
@@ -145,13 +152,24 @@ impl CompletionState {
             }
         };
 
+        // Show loading placeholder when fetching elements
+        if self.candidates.is_empty() && is_loading {
+            self.candidates.push(Candidate {
+                text: String::new(),
+                description: "Fetching elements...".to_string(),
+                kind: CandidateKind::Command,
+                score: 0,
+                match_indices: Vec::new(),
+            });
+        }
+
         self.visible = !self.candidates.is_empty();
         self.selected = 0;
     }
 }
 
 /// Parse the completion context from input.
-fn parse_completion_context(input: &str) -> (CompletionContext, String) {
+pub fn parse_completion_context(input: &str) -> (CompletionContext, String) {
     let trimmed = input.trim_start();
 
     // If no space yet, we're completing a command name

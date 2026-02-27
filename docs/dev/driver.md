@@ -222,7 +222,7 @@ When a lifecycle is attached, the driver automatically recovers from connection 
 
 `AgentClient` enforces a read timeout on every response. The default is 30 seconds; calls routed through `send_with_timeout` use a caller-supplied deadline instead (used by the `*_with_timeout` driver methods when `timeout_ms` is set). If the timeout fires (or an I/O error occurs), the TCP stream is **dropped immediately** to prevent response desynchronization.
 
-This matters when the watcher and executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
+This matters when on-demand element fetches (`FetchElements`) and the executor share the same driver: a slow `dump_tree` or `screenshot` that times out will close the connection for both, and the next executor command will fail with `NotConnected` rather than silently reading a stale response.
 
 `dump_tree` uses `send_with_read_timeout` with a fixed 120s deadline (135s total with the +15s buffer) rather than the default 30s, to prevent the connection from being dropped on large accessibility trees.
 
