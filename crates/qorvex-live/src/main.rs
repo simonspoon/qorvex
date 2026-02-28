@@ -16,6 +16,8 @@ use ratatui::{
     Frame, Terminal,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -76,12 +78,13 @@ enum AppEvent {
     ScreenshotReady(Vec<u8>),
     StreamerFrame(Vec<u8>),
     StreamerStatus(StreamerStatus),
+    ImageReady(StatefulProtocol, u32, u32),
 }
 
 struct App {
     action_log: Vec<ActionLog>,
     list_state: ListState,
-    current_screenshot: Option<Vec<u8>>,
+
     session_name: String,
     simulator_udid: Option<String>,
     should_quit: bool,
@@ -89,6 +92,7 @@ struct App {
     streamer_status: StreamerStatus,
     image_picker: Picker,
     image_state: Option<StatefulProtocol>,
+    image_pixel_size: Option<(u32, u32)>,
 }
 
 impl App {
@@ -98,7 +102,7 @@ impl App {
         Self {
             action_log: Vec::new(),
             list_state: ListState::default(),
-            current_screenshot: None,
+
             session_name,
             simulator_udid: Simctl::get_booted_udid().ok(),
             should_quit: false,
@@ -106,6 +110,7 @@ impl App {
             streamer_status: StreamerStatus::Disconnected,
             image_picker: picker,
             image_state: None,
+            image_pixel_size: None,
         }
     }
 
@@ -115,22 +120,51 @@ impl App {
         self.list_state.select(Some(self.action_log.len().saturating_sub(1)));
     }
 
-    fn update_screenshot(&mut self, base64_png: &str) {
-        use base64::Engine;
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(base64_png) {
-            self.current_screenshot = Some(bytes.clone());
-            // Update image state
-            if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                self.image_state = Some(self.image_picker.new_resize_protocol(dyn_img));
-            }
-        }
+    fn set_image_state(&mut self, state: StatefulProtocol) {
+        self.image_state = Some(state);
     }
+}
 
-    fn set_screenshot(&mut self, bytes: Vec<u8>) {
-        self.current_screenshot = Some(bytes.clone());
+/// Max pixel dimensions to feed into ratatui-image's resize protocol.
+/// Anything larger gets thumbnailed down first — this avoids hashing and
+/// processing multi-megabyte pixel buffers every frame.
+const MAX_DECODE_WIDTH: u32 = 1200;
+const MAX_DECODE_HEIGHT: u32 = 1800;
+
+/// Spawn a blocking task to decode JPEG bytes into a terminal image protocol.
+/// Returns false (and does nothing) if a decode is already in flight.
+fn spawn_decode_task(bytes: Vec<u8>, picker: Picker, tx: mpsc::Sender<AppEvent>, decoding: &Arc<AtomicBool>) -> bool {
+    if decoding.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return false; // decode already in flight, drop this frame
+    }
+    let flag = decoding.clone();
+    tokio::task::spawn_blocking(move || {
         if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-            self.image_state = Some(self.image_picker.new_resize_protocol(dyn_img));
+            // Downscale before handing to ratatui-image to avoid hashing/processing
+            // the full-resolution pixel buffer (e.g. 1920x1080 RGBA = ~8MB) every frame.
+            let img = if dyn_img.width() > MAX_DECODE_WIDTH || dyn_img.height() > MAX_DECODE_HEIGHT {
+                dyn_img.thumbnail(MAX_DECODE_WIDTH, MAX_DECODE_HEIGHT)
+            } else {
+                dyn_img
+            };
+            let (img_w, img_h) = (img.width(), img.height());
+            let state = picker.new_resize_protocol(img);
+            let _ = tx.blocking_send(AppEvent::ImageReady(state, img_w, img_h));
         }
+        flag.store(false, Ordering::SeqCst);
+    });
+    true
+}
+
+/// Spawn a blocking task to decode base64 screenshot into a terminal image protocol
+fn spawn_decode_base64_task(base64_png: &Arc<String>, picker: Picker, tx: mpsc::Sender<AppEvent>, decoding: &Arc<AtomicBool>) {
+    // Check the flag before doing the base64 decode to avoid wasted work
+    if decoding.load(Ordering::SeqCst) {
+        return;
+    }
+    use base64::Engine;
+    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(base64_png.as_bytes()) {
+        spawn_decode_task(bytes, picker, tx, decoding);
     }
 }
 
@@ -169,7 +203,7 @@ fn spawn_streamer_task(
 
     tokio::spawn(async move {
         // Find the qorvex-streamer binary
-        let streamer_bin = which_streamer();
+        let streamer_bin = which_streamer().await;
         let Some(bin_path) = streamer_bin else {
             let _ = tx.send(AppEvent::StreamerStatus(
                 StreamerStatus::NotAvailable("qorvex-streamer binary not found".into())
@@ -307,11 +341,12 @@ async fn read_frame<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> std::io:
     Ok(buf)
 }
 
-fn which_streamer() -> Option<PathBuf> {
-    // Check PATH
-    if let Ok(output) = std::process::Command::new("which")
+async fn which_streamer() -> Option<PathBuf> {
+    // Check PATH (use tokio::process to avoid blocking the async runtime)
+    if let Ok(output) = tokio::process::Command::new("which")
         .arg("qorvex-streamer")
         .output()
+        .await
     {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -550,69 +585,112 @@ async fn main() -> io::Result<()> {
         }
     }
 
+    // Guard to prevent multiple concurrent decode tasks
+    let decoding = Arc::new(AtomicBool::new(false));
+    let mut needs_redraw = true;
+
     // Main loop
     loop {
-        // Check for app events (IPC events and screenshot results)
+        // Drain all pending events; only keep the latest frame to avoid redundant decodes
+        let mut latest_frame: Option<Vec<u8>> = None;
+        let mut latest_screenshot: Option<Vec<u8>> = None;
+        let mut latest_base64: Option<Arc<String>> = None;
         while let Ok(app_event) = event_rx.try_recv() {
             match app_event {
                 AppEvent::SessionEvent(event) => match event {
                     SessionEvent::ActionLogged(log) => {
-                        if let Some(ref ss) = log.screenshot {
-                            app.update_screenshot(ss);
+                        // Only track base64 screenshots when streamer isn't providing frames
+                        if !app.streamer_active {
+                            if let Some(ref ss) = log.screenshot {
+                                latest_base64 = Some(Arc::clone(ss));
+                            }
                         }
                         app.add_action(log);
+                        needs_redraw = true;
                     }
                     SessionEvent::ScreenshotUpdated(ss) => {
-                        app.update_screenshot(&ss);
+                        if !app.streamer_active {
+                            latest_base64 = Some(ss);
+                        }
                     }
                     _ => {}
                 },
                 AppEvent::ScreenshotReady(bytes) => {
-                    app.set_screenshot(bytes);
+                    if !app.streamer_active {
+                        latest_screenshot = Some(bytes);
+                    }
                 }
                 AppEvent::StreamerFrame(bytes) => {
-                    app.set_screenshot(bytes);
+                    latest_frame = Some(bytes);
                     app.streamer_active = true;
                 }
                 AppEvent::StreamerStatus(status) => {
+                    let changed = app.streamer_status != status;
                     app.streamer_status = status;
                     if matches!(app.streamer_status, StreamerStatus::Disconnected | StreamerStatus::NotAvailable(_)) {
                         app.streamer_active = false;
                     }
+                    if changed {
+                        needs_redraw = true;
+                    }
+                }
+                AppEvent::ImageReady(state, w, h) => {
+                    app.set_image_state(state);
+                    app.image_pixel_size = Some((w, h));
+                    needs_redraw = true;
                 }
             }
         }
+        // Decode only the latest frame/screenshot (streamer frames take priority).
+        // If a decode is already in flight, the frame is dropped (next one will be picked up).
+        if let Some(bytes) = latest_frame {
+            spawn_decode_task(bytes, app.image_picker.clone(), event_tx.clone(), &decoding);
+        } else if let Some(bytes) = latest_screenshot {
+            spawn_decode_task(bytes, app.image_picker.clone(), event_tx.clone(), &decoding);
+        } else if let Some(b64) = latest_base64 {
+            spawn_decode_base64_task(&b64, app.image_picker.clone(), event_tx.clone(), &decoding);
+        }
 
-        terminal.draw(|f| ui(f, &mut app))?;
+        if needs_redraw {
+            terminal.draw(|f| ui(f, &mut app))?;
+            needs_redraw = false;
+        }
 
         // Poll for events with timeout for responsiveness
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            // Cancel the IPC task before quitting
-                            cancel_token.cancel();
-                            app.should_quit = true;
-                        }
-                        KeyCode::Char('r') => {
-                            // Trigger non-blocking screenshot refresh
-                            if let Some(udid) = app.simulator_udid.clone() {
-                                spawn_screenshot_task(udid, event_tx.clone());
+        if event::poll(Duration::from_millis(33))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        needs_redraw = true;
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                // Cancel the IPC task before quitting
+                                cancel_token.cancel();
+                                app.should_quit = true;
                             }
+                            KeyCode::Char('r') => {
+                                // Trigger non-blocking screenshot refresh
+                                if let Some(udid) = app.simulator_udid.clone() {
+                                    spawn_screenshot_task(udid, event_tx.clone());
+                                }
+                            }
+                            KeyCode::Up => {
+                                let i = app.list_state.selected().unwrap_or(0);
+                                app.list_state.select(Some(i.saturating_sub(1)));
+                            }
+                            KeyCode::Down => {
+                                let i = app.list_state.selected().unwrap_or(0);
+                                let max = app.action_log.len().saturating_sub(1);
+                                app.list_state.select(Some((i + 1).min(max)));
+                            }
+                            _ => {}
                         }
-                        KeyCode::Up => {
-                            let i = app.list_state.selected().unwrap_or(0);
-                            app.list_state.select(Some(i.saturating_sub(1)));
-                        }
-                        KeyCode::Down => {
-                            let i = app.list_state.selected().unwrap_or(0);
-                            let max = app.action_log.len().saturating_sub(1);
-                            app.list_state.select(Some((i + 1).min(max)));
-                        }
-                        _ => {}
                     }
                 }
+                Event::Resize(_, _) => {
+                    needs_redraw = true;
+                }
+                _ => {}
             }
         }
 
@@ -634,12 +712,33 @@ async fn main() -> io::Result<()> {
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
+    // Compute left panel width to hug the simulator image's aspect ratio.
+    // Uses the image pixel dimensions and terminal cell pixel size to derive
+    // exactly how many columns are needed to fill the available height.
+    let left_width = if let Some((img_w, img_h)) = app.image_pixel_size {
+        if img_h > 0 {
+            let (cell_w, cell_h) = app.image_picker.font_size();
+            let cell_w = cell_w.max(1) as u64;
+            let cell_h = cell_h.max(1) as u64;
+            // inner_rows = height minus top/bottom border
+            let inner_rows = f.area().height.saturating_sub(2) as u64;
+            // inner_cols = image_w * inner_rows * cell_h / (image_h * cell_w)
+            let inner_cols = (img_w as u64 * inner_rows * cell_h) / (img_h as u64 * cell_w);
+            // Add 2 for left/right borders; cap at 60% of terminal width
+            ((inner_cols as u16).saturating_add(2)).min(f.area().width * 3 / 5)
+        } else {
+            f.area().width * 2 / 5
+        }
+    } else {
+        f.area().width * 2 / 5
+    };
+
     // Split into left (simulator) and right (log)
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
+            Constraint::Length(left_width),
+            Constraint::Min(0),
         ])
         .split(f.area());
 

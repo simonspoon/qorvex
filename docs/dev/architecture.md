@@ -168,6 +168,17 @@ Server constructors:
 - `IpcServer::with_handler(handler)` -- attach a `RequestHandler` impl (builder pattern); when set, all requests are delegated to the handler instead of built-in logic
 - `shared_driver()` / `set_driver(driver)` -- wire the server to an already-connected driver so `Execute` requests reuse the existing TCP connection
 
+## Live TUI Image Pipeline (`qorvex-live`)
+
+The live image pipeline runs in `spawn_decode_task` (blocking thread) and feeds into `AppEvent::ImageReady`.
+
+**Implementation notes:**
+
+- `Picker::font_size()` is a method — not a public field. Accessing it as `.font_size` fails to compile.
+- `MAX_DECODE_WIDTH` / `MAX_DECODE_HEIGHT` in `main.rs` cap the image before it reaches `ratatui-image`. If these are too small (e.g., 600px), the image cannot render larger than that cap regardless of terminal size. Set them large enough for the largest expected terminal (1200×1800 covers typical fullscreen use).
+- `Event::Resize` must be explicitly matched in the event poll loop — it is not automatically handled by ratatui or crossterm. If omitted, the layout will not reflow when the terminal is resized until the next key press.
+- The left panel width is computed from `image_pixel_size` and `picker.font_size()` each frame. Formula: `inner_cols = img_w * inner_rows * cell_h / (img_h * cell_w)`. This makes the border hug the image's natural aspect ratio at the current terminal height.
+
 ## External Dependencies
 
 - `xcrun simctl` -- Apple's simulator control CLI (comes with Xcode)
