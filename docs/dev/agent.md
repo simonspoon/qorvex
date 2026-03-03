@@ -66,7 +66,7 @@ The Rust side manages the agent's full lifecycle through `AgentLifecycle` (defin
 | Field | Type | Default |
 |-------|------|---------|
 | `project_dir` | `PathBuf` | (required) |
-| `agent_port` | `u16` | `8080` |
+| `agent_port` | `u16` | `8080` (configurable via `~/.qorvex/config.json`) |
 | `startup_timeout` | `Duration` | 30s |
 | `max_retries` | `u32` | `3` |
 
@@ -95,7 +95,7 @@ xcodebuild test-without-building \
 
 ### Health Check
 
-Polls every 500ms: TCP connect + heartbeat to `127.0.0.1:<port>`, repeated until success or `startup_timeout` is exceeded.
+Polls every 500ms: TCP connect + heartbeat to `127.0.0.1:<agent_port>`, repeated until success or `startup_timeout` is exceeded. The port is passed to the Swift agent via the `TEST_RUNNER_QORVEX_PORT` environment variable (the test runner strips the `TEST_RUNNER_` prefix, so the agent reads `QORVEX_PORT`).
 
 ### Terminate
 

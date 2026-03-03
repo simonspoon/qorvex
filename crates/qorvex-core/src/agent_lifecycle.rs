@@ -237,6 +237,7 @@ impl AgentLifecycle {
                 "-only-testing",
                 TEST_CLASS,
             ])
+            .env("TEST_RUNNER_QORVEX_PORT", self.config.agent_port.to_string())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -245,6 +246,7 @@ impl AgentLifecycle {
         let mut guard = self.child.lock().unwrap();
         *guard = Some(child);
 
+        debug!(port = self.config.agent_port, "passing port to agent via TEST_RUNNER_QORVEX_PORT");
         info!("agent process spawned");
         Ok(())
     }

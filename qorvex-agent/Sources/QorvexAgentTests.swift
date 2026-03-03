@@ -16,16 +16,24 @@ final class QorvexAgentTests: XCTestCase {
     /// simulator. It does NOT launch any app itself -- the Rust host is responsible
     /// for launching and managing the target app via `simctl`.
     func testRunAgent() throws {
+        let port: UInt16 = {
+            if let raw = ProcessInfo.processInfo.environment["QORVEX_PORT"],
+               let p = UInt16(raw) {
+                return p
+            }
+            return 8080
+        }()
+
         let app = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         // Default to SpringBoard, which is always running on the simulator.
         // Use the SetTarget protocol command to switch to a specific app.
 
         let handler = CommandHandler(app: app)
-        let server = AgentServer(port: 8080, handler: handler)
+        let server = AgentServer(port: port, handler: handler)
 
         try server.start()
 
-        NSLog("[qorvex-agent] Agent started, waiting for commands on port 8080")
+        NSLog("[qorvex-agent] Agent started, waiting for commands on port \(port)")
 
         // Keep the test running indefinitely until the process is killed.
         // The test runner framework requires us to wait on an expectation;

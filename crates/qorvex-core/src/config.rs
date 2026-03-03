@@ -33,9 +33,18 @@ pub struct QorvexConfig {
     /// Recorded by `install.sh` so that sessions can auto-build the agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_source_dir: Option<PathBuf>,
+
+    /// TCP port the Swift agent listens on. Defaults to 8080 if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_port: Option<u16>,
 }
 
 impl QorvexConfig {
+    /// Returns the configured agent port, defaulting to 8080.
+    pub fn agent_port(&self) -> u16 {
+        self.agent_port.unwrap_or(8080)
+    }
+
     /// Load config from `~/.qorvex/config.json`.
     ///
     /// Returns [`Default`] if the file does not exist or cannot be parsed.
@@ -70,6 +79,7 @@ mod tests {
     fn roundtrip_serialization() {
         let config = QorvexConfig {
             agent_source_dir: Some(PathBuf::from("/Users/test/qorvex-agent")),
+            agent_port: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let loaded: QorvexConfig = serde_json::from_str(&json).unwrap();

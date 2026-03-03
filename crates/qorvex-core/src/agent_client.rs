@@ -279,7 +279,13 @@ impl AgentClient {
             Ok(Ok(payload)) => Ok(payload),
             Ok(Err(io_err)) => {
                 // I/O error — stream is likely broken, drop it to prevent reuse.
-                warn!(error = %io_err, "stream I/O error, dropping connection");
+                // UnexpectedEof is routine during startup polling (agent closes the
+                // connection before it's ready), so log at debug to avoid spam.
+                if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+                    debug!(error = %io_err, "stream I/O error, dropping connection");
+                } else {
+                    warn!(error = %io_err, "stream I/O error, dropping connection");
+                }
                 self.stream.take();
                 Err(AgentClientError::Io(io_err))
             }

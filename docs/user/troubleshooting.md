@@ -9,7 +9,7 @@
 1. Is a simulator booted? Run `xcrun simctl list devices | grep Booted`
 2. Is xcodegen installed? `which xcodegen` -- install via `brew install xcodegen`
 3. Is the agent source configured? Check `~/.qorvex/config.json` for `agent_source_dir`
-4. Is port 8080 available? `lsof -i :8080` -- kill any existing process
+4. Is the agent port available? Default is 8080 (`lsof -i :8080`). Configurable via `"agent_port"` in `~/.qorvex/config.json`
 5. Check Xcode build errors: run `make -C qorvex-agent build` manually to see full output
 
 **Common fixes:**
@@ -25,7 +25,7 @@
 
 1. Is the agent process running? Look for `xcodebuild test-without-building` in Activity Monitor
 2. Try stopping and restarting: `stop-agent` then `start-agent`
-3. The agent binds to `127.0.0.1:8080` -- ensure nothing else is using that port
+3. The agent binds to `127.0.0.1:8080` by default -- ensure nothing else is using that port. To change the port, add `"agent_port": 9090` to `~/.qorvex/config.json`
 
 **Auto-recovery:**
 

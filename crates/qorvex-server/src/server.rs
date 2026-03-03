@@ -32,16 +32,19 @@ pub struct ServerState {
     pub cached_devices: Vec<SimulatorDevice>,
     pub target_bundle_id: Option<String>,
     pub default_timeout_ms: u64,
+    pub agent_port: u16,
 }
 
 impl ServerState {
     /// Create a new `ServerState`, pre-fetching devices and detecting a booted simulator.
     pub fn new(session_name: String) -> Self {
+        let config = QorvexConfig::load();
+        let agent_port = config.agent_port();
         let cached_devices = Simctl::list_devices().unwrap_or_default();
         let simulator_udid = Simctl::get_booted_udid().ok();
         let executor = simulator_udid
             .as_ref()
-            .map(|_| ActionExecutor::with_agent("localhost".to_string(), 8080));
+            .map(|_| ActionExecutor::with_agent("localhost".to_string(), agent_port));
 
         info!(
             session = %session_name,
@@ -60,6 +63,7 @@ impl ServerState {
             cached_devices,
             target_bundle_id: None,
             default_timeout_ms: 5000,
+            agent_port,
         }
     }
 
@@ -150,12 +154,13 @@ impl ServerState {
                 let config = QorvexConfig::load();
                 if let Some(agent_source_dir) = config.agent_source_dir {
                     info!("Auto-starting agent");
-                    let lc_config = AgentLifecycleConfig::new(agent_source_dir);
+                    let mut lc_config = AgentLifecycleConfig::new(agent_source_dir);
+                    lc_config.agent_port = self.agent_port;
                     let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
                     match lifecycle.ensure_agent_ready().await {
                         Ok(()) => {
-                            let mut driver = AgentDriver::direct("127.0.0.1", 8080)
+                            let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port)
                                 .with_lifecycle(lifecycle.clone());
                             self.agent_lifecycle = Some(lifecycle);
                             match driver.connect().await {
@@ -220,7 +225,7 @@ impl ServerState {
             };
         }
         self.simulator_udid = Some(udid.to_string());
-        self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), 8080));
+        self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
         IpcResponse::CommandResult {
             success: true,
             message: format!("Using device {}", udid),
@@ -244,7 +249,7 @@ impl ServerState {
         match Simctl::boot(udid) {
             Ok(_) => {
                 self.simulator_udid = Some(udid.to_string());
-                self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), 8080));
+                self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
                 IpcResponse::CommandResult {
                     success: true,
                     message: format!("Booted and using device {}", udid),
@@ -271,12 +276,13 @@ impl ServerState {
         if let Some(project_dir_str) = project_dir {
             // With path: build, spawn, wait, store lifecycle
             let project_dir = PathBuf::from(strip_quotes(&project_dir_str));
-            let config = AgentLifecycleConfig::new(project_dir);
-            let lifecycle = Arc::new(AgentLifecycle::new(udid, config));
+            let mut lc_config = AgentLifecycleConfig::new(project_dir);
+            lc_config.agent_port = self.agent_port;
+            let lifecycle = Arc::new(AgentLifecycle::new(udid, lc_config));
 
             match lifecycle.ensure_running().await {
                 Ok(()) => {
-                    let mut driver = AgentDriver::direct("127.0.0.1", 8080)
+                    let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port)
                         .with_lifecycle(lifecycle.clone());
                     self.agent_lifecycle = Some(lifecycle);
                     match driver.connect().await {
@@ -302,12 +308,13 @@ impl ServerState {
             // No path argument: try config, then fall back to external agent
             let config = QorvexConfig::load();
             if let Some(project_dir) = config.agent_source_dir {
-                let lc_config = AgentLifecycleConfig::new(project_dir);
+                let mut lc_config = AgentLifecycleConfig::new(project_dir);
+                lc_config.agent_port = self.agent_port;
                 let lifecycle = Arc::new(AgentLifecycle::new(udid, lc_config));
 
                 match lifecycle.ensure_agent_ready().await {
                     Ok(()) => {
-                        let mut driver = AgentDriver::direct("127.0.0.1", 8080)
+                        let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port)
                             .with_lifecycle(lifecycle.clone());
                         self.agent_lifecycle = Some(lifecycle);
                         match driver.connect().await {
@@ -331,12 +338,13 @@ impl ServerState {
                 }
             } else {
                 // No config: connect to externally-started agent
-                let lc_config = AgentLifecycleConfig::new(PathBuf::new());
+                let mut lc_config = AgentLifecycleConfig::new(PathBuf::new());
+                lc_config.agent_port = self.agent_port;
                 let lifecycle = AgentLifecycle::new(udid, lc_config);
 
                 match lifecycle.wait_for_ready().await {
                     Ok(()) => {
-                        let mut driver = AgentDriver::direct("127.0.0.1", 8080);
+                        let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port);
                         match driver.connect().await {
                             Ok(()) => {
                                 self.set_executor_with_driver(Arc::new(driver)).await;
