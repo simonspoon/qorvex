@@ -88,8 +88,8 @@ impl ServerState {
             IpcRequest::Connect { host, port } => self.handle_connect(&host, port).await,
 
             // ── Target App Lifecycle ────────────────────────────────────
-            IpcRequest::StartTarget => self.handle_start_target(),
-            IpcRequest::StopTarget => self.handle_stop_target(),
+            IpcRequest::StartTarget => self.handle_start_target().await,
+            IpcRequest::StopTarget => self.handle_stop_target().await,
 
             // ── Configuration ───────────────────────────────────────────
             IpcRequest::SetTarget { bundle_id } => self.handle_set_target(&bundle_id).await,
@@ -410,28 +410,87 @@ impl ServerState {
                 message: "set_target requires a bundle_id".to_string(),
             };
         }
-        match &self.executor {
+        let (response, action_result) = match &self.executor {
             Some(executor) => match executor.driver().set_target(bundle_id).await {
                 Ok(()) => {
                     self.target_bundle_id = Some(bundle_id.to_string());
-                    IpcResponse::CommandResult {
-                        success: true,
-                        message: format!("Target set to {}", bundle_id),
-                    }
+                    (
+                        IpcResponse::CommandResult {
+                            success: true,
+                            message: format!("Target set to {}", bundle_id),
+                        },
+                        ActionResult::Success,
+                    )
                 }
-                Err(e) => IpcResponse::CommandResult {
-                    success: false,
-                    message: format!("Failed to set target: {}", e),
+                Err(e) => {
+                    let msg = format!("Failed to set target: {}", e);
+                    (
+                        IpcResponse::CommandResult {
+                            success: false,
+                            message: msg.clone(),
+                        },
+                        ActionResult::Failure(msg),
+                    )
+                }
+            },
+            None => {
+                let msg = "No agent connected".to_string();
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::SetTarget { bundle_id: bundle_id.to_string() },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_start_target(&self) -> IpcResponse {
+        let Some(ref bundle_id) = self.target_bundle_id else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No target set. Use set-target first.".to_string(),
+            };
+        };
+        let Some(ref udid) = self.simulator_udid else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No simulator selected.".to_string(),
+            };
+        };
+        let (response, action_result) = match Simctl::launch_app(udid, bundle_id) {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Launched {}", bundle_id),
                 },
-            },
-            None => IpcResponse::CommandResult {
-                success: false,
-                message: "No agent connected".to_string(),
-            },
-        }
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to launch app: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::StartTarget, action_result, None, None).await;
+        response
     }
 
-    fn handle_start_target(&self) -> IpcResponse {
+    async fn handle_stop_target(&self) -> IpcResponse {
         let Some(ref bundle_id) = self.target_bundle_id else {
             return IpcResponse::CommandResult {
                 success: false,
@@ -444,41 +503,27 @@ impl ServerState {
                 message: "No simulator selected.".to_string(),
             };
         };
-        match Simctl::launch_app(udid, bundle_id) {
-            Ok(()) => IpcResponse::CommandResult {
-                success: true,
-                message: format!("Launched {}", bundle_id),
-            },
-            Err(e) => IpcResponse::CommandResult {
-                success: false,
-                message: format!("Failed to launch app: {}", e),
-            },
-        }
-    }
-
-    fn handle_stop_target(&self) -> IpcResponse {
-        let Some(ref bundle_id) = self.target_bundle_id else {
-            return IpcResponse::CommandResult {
-                success: false,
-                message: "No target set. Use set-target first.".to_string(),
-            };
+        let (response, action_result) = match Simctl::terminate_app(udid, bundle_id) {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Terminated {}", bundle_id),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to terminate app: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
         };
-        let Some(ref udid) = self.simulator_udid else {
-            return IpcResponse::CommandResult {
-                success: false,
-                message: "No simulator selected.".to_string(),
-            };
-        };
-        match Simctl::terminate_app(udid, bundle_id) {
-            Ok(()) => IpcResponse::CommandResult {
-                success: true,
-                message: format!("Terminated {}", bundle_id),
-            },
-            Err(e) => IpcResponse::CommandResult {
-                success: false,
-                message: format!("Failed to terminate app: {}", e),
-            },
-        }
+        self.log_action(ActionType::StopTarget, action_result, None, None).await;
+        response
     }
 
     // ── On-Demand Fetching ──────────────────────────────────────────────

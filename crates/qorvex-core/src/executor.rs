@@ -545,7 +545,8 @@ impl ActionExecutor {
             }
 
             // Session management actions should be handled by the caller
-            ActionType::StartSession | ActionType::EndSession | ActionType::Quit => {
+            ActionType::StartSession | ActionType::EndSession | ActionType::Quit
+            | ActionType::StartTarget | ActionType::StopTarget => {
                 ExecutionResult::failure("Session management actions must be handled by the session manager")
             }
         }

@@ -86,6 +86,8 @@ Available commands:
 - `start-agent <path>` — Build and launch Swift agent from project directory
 - `stop-agent` — Stop a managed agent process
 - `set-target <bundle_id>` — Set target app bundle ID
+- `start-target` — Launch the target app
+- `stop-target` — Terminate the target app
 - `set-timeout <ms>` — Set default timeout for tap/wait operations (default: 5000ms); no arg prints current value
 - `start-session` — Begin a new session (auto-starts agent if configured)
 - `end-session` — End the current session

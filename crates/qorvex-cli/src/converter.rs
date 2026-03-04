@@ -108,6 +108,8 @@ impl LogConverter {
             ActionType::SetTarget { bundle_id } => {
                 Some(format!("qorvex set-target {}", shell_escape(bundle_id)))
             }
+            ActionType::StartTarget => Some("qorvex start-target".to_string()),
+            ActionType::StopTarget => Some("qorvex stop-target".to_string()),
             ActionType::LogComment { message } => {
                 Some(format!("# {}", message))
             }
@@ -406,5 +408,21 @@ mod tests {
             Some("my tag"),
         ).unwrap();
         assert_eq!(cmd, "qorvex tap btn --tag 'my tag'");
+    }
+
+    #[test]
+    fn test_start_target_to_command() {
+        assert_eq!(
+            LogConverter::action_to_command(&ActionType::StartTarget, None),
+            Some("qorvex start-target".to_string())
+        );
+    }
+
+    #[test]
+    fn test_stop_target_to_command() {
+        assert_eq!(
+            LogConverter::action_to_command(&ActionType::StopTarget, None),
+            Some("qorvex stop-target".to_string())
+        );
     }
 }

@@ -168,6 +168,12 @@ pub enum ActionType {
         bundle_id: String,
     },
 
+    /// Launch the target application.
+    StartTarget,
+
+    /// Terminate the target application.
+    StopTarget,
+
     /// Quit the REPL entirely.
     Quit,
 }
@@ -189,6 +195,8 @@ impl ActionType {
             ActionType::WaitFor { .. } => "wait_for",
             ActionType::WaitForNot { .. } => "wait_for_not",
             ActionType::SetTarget { .. } => "set_target",
+            ActionType::StartTarget => "start_target",
+            ActionType::StopTarget => "stop_target",
             ActionType::StartSession => "start_session",
             ActionType::EndSession => "end_session",
             ActionType::Quit => "quit",
@@ -209,6 +217,8 @@ impl ActionType {
             ActionType::WaitFor { .. } => "Find",
             ActionType::WaitForNot { .. } => "Gone",
             ActionType::SetTarget { .. } => "Target",
+            ActionType::StartTarget => "StartTarget",
+            ActionType::StopTarget => "StopTarget",
             ActionType::StartSession => "Start",
             ActionType::EndSession => "End",
             ActionType::Quit => "Quit",
@@ -240,6 +250,7 @@ impl ActionType {
             }
             ActionType::LogComment { message } => message.clone(),
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
+            ActionType::StartTarget | ActionType::StopTarget => String::new(),
             _ => String::new(),
         }
     }
