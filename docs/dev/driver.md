@@ -174,6 +174,23 @@ Examples:
 - `cell_?` matches `cell_1`, `cell_A` but not `cell_12`
 - `*submit*` matches any element containing "submit"
 
+## Array-Index Syntax
+
+When multiple elements share the same accessibility ID or label (e.g., table rows), a trailing `[N]` suffix selects the Nth match (0-based) from the full DFS traversal.
+
+| Selector | Meaning |
+|----------|---------|
+| `row` | First element with ID `row` (DFS first match, unchanged) |
+| `row[0]` | First element with ID `row` (explicit index) |
+| `row[2]` | Third element with ID `row` |
+| `cell_*[1]` | Second element whose ID matches glob `cell_*` |
+
+Parsing is handled by `parse_selector_index(selector)` in `driver.rs`, which splits `"row[2]"` into `("row", Some(2))`. Only trailing `[digits]` triggers indexing — empty brackets (`row[]`), non-numeric content (`row[abc]`), and negative numbers (`row[-1]`) are treated as literal selectors with no index.
+
+When an index is present, the search functions collect **all** DFS matches into a `Vec` and return the element at position `n`. Out-of-bounds indices return `None` (element not found). When no index is present, behavior is identical to before (DFS first match).
+
+The Swift agent applies the same syntax via `parseSelectorIndex` in `CommandHandler.swift`, using XCUITest's `.element(boundBy: n)` instead of `.firstMatch`.
+
 ## `AgentDriver` Overrides
 
 `AgentDriver` is the primary implementation of `AutomationDriver`, communicating with the Swift XCTest agent over TCP.

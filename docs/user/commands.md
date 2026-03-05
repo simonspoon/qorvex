@@ -154,3 +154,18 @@ Selectors support glob matching:
 - `?` matches exactly one character
 
 Example: `tap login-*` matches `login-button`, `login-field`, etc.
+
+### Array-Index Syntax
+
+When multiple elements share the same accessibility ID or label, append `[N]` (0-based) to select a specific one:
+
+| Selector | Meaning |
+|----------|---------|
+| `row` | First element with ID `row` |
+| `row[0]` | First element with ID `row` (explicit) |
+| `row[2]` | Third element with ID `row` |
+| `cell_*[1]` | Second element whose ID matches `cell_*` |
+
+Shell quoting is required in the CLI when using brackets: `qorvex tap 'cell[2]'`. In the REPL no quoting is needed: `tap cell[2]`.
+
+Out-of-bounds indices (e.g., `row[999]` when fewer elements exist) return an "element not found" error.

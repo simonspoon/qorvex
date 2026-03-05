@@ -187,17 +187,17 @@ All commands are dispatched on the main thread via `AgentServer`.
 |---------|---------------|-------------|
 | `heartbeat` | inline | Returns `.ok` immediately |
 | `tapCoord` | `handleTapCoord` | Uses `app.coordinate(withNormalizedOffset:)` with absolute offset |
-| `tapElement` | `handleTapElement` | NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
-| `tapByLabel` | `handleTapByLabel` | NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
-| `tapWithType` | `handleTapWithType` | Maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
+| `tapElement` | `handleTapElement` | Calls `parseSelectorIndex` to strip trailing `[N]`; uses `.element(boundBy: n)` when index present, `.firstMatch` otherwise; NSPredicate on `identifier`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
+| `tapByLabel` | `handleTapByLabel` | Calls `parseSelectorIndex` on label; uses `.element(boundBy: n)` when index present, `.firstMatch` otherwise; NSPredicate on `label`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
+| `tapWithType` | `handleTapWithType` | Calls `parseSelectorIndex`; uses `.element(boundBy: n)` when index present, `.firstMatch` otherwise; maps type string to `XCUIElement.ElementType`; uses `pollUntilFound` when `timeoutMs` is set; waits for 2 consecutive polls with stable `element.frame` before tapping; re-queries immediately before tap; taps via `XCUICoordinate` at frame center (bypasses XCUITest quiescence) |
 | `typeText` | `handleTypeText` | Finds element with `hasKeyboardFocus`, falls back to `app.keyboards.firstMatch` |
 | `swipe` | `handleSwipe` | Computes velocity from distance/duration (`distance / seconds`), passes to `press(forDuration:thenDragTo:withVelocity:thenHoldForDuration:)` |
 | `longPress` | `handleLongPress` | `coordinate.press(forDuration:)` at specified coordinates |
-| `getValue` | `handleGetValue` | Returns `element.value` as String, falls back to `element.label`; uses `pollUntilFound` when `timeoutMs` is set |
+| `getValue` | `handleGetValue` | Calls `parseSelectorIndex`; uses `.element(boundBy: n)` when index present, `.firstMatch` otherwise; returns `element.value` as String, falls back to `element.label`; uses `pollUntilFound` when `timeoutMs` is set |
 | `dumpTree` | `handleDumpTree` | `app.snapshot()` via `QVXTryCatch`, serialized to JSON with empty-node pruning |
 | `screenshot` | `handleScreenshot` | `XCUIScreen.main.screenshot().pngRepresentation` -- full screen capture |
 | `setTarget` | `handleSetTarget` | Replaces `self.app = XCUIApplication(bundleIdentifier:)` for app context switching; disables quiescence on the new app |
-| `findElement` | `handleFindElement` | Queries live `XCUIElement` for `isHittable` (not from snapshot), overrides hittable field in response |
+| `findElement` | `handleFindElement` | Calls `parseSelectorIndex`; uses `.element(boundBy: n)` when index present, `.firstMatch` otherwise; queries live `XCUIElement` for `isHittable` (not from snapshot), overrides hittable field in response |
 
 ### `pollUntilFound` Helper
 

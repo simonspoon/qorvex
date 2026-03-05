@@ -11,6 +11,39 @@ private func disableQuiescenceWaiting(_ app: XCUIApplication) {
     app.setValue(3, forKey: "currentInteractionOptions")
 }
 
+/// Parses a selector string, extracting a trailing `[N]` index if present.
+///
+/// Returns `(base, index)` where `base` is the selector without the index suffix,
+/// and `index` is the 0-based integer when the selector ends with `[digits]`.
+/// Non-numeric content, empty brackets, negative numbers, and no brackets
+/// are returned as `(selector, nil)` — treated as a literal selector.
+///
+/// Examples:
+///   `"row[2]"` → `("row", 2)`
+///   `"row"` → `("row", nil)`
+///   `"cell_*[1]"` → `("cell_*", 1)`
+///   `"row[-1]"`, `"row[]"`, `"row[abc]"` → `(original, nil)`
+func parseSelectorIndex(_ selector: String) -> (base: String, index: Int?) {
+    guard let lastBracket = selector.lastIndex(of: "["),
+          selector.last == "]" else {
+        return (selector, nil)
+    }
+    let afterBracket = selector.index(after: lastBracket)
+    let endIndex = selector.index(before: selector.endIndex)
+    guard afterBracket <= endIndex else {
+        return (selector, nil)
+    }
+    let digits = String(selector[afterBracket..<endIndex])
+    guard !digits.isEmpty, digits.allSatisfy({ $0.isNumber }) else {
+        return (selector, nil)
+    }
+    guard let n = Int(digits), n >= 0 else {
+        return (selector, nil)
+    }
+    let base = String(selector[..<lastBracket])
+    return (base, n)
+}
+
 final class CommandHandler {
     private var app: XCUIApplication
 
@@ -87,10 +120,12 @@ final class CommandHandler {
     // MARK: - Tap by accessibility identifier
 
     private func handleTapElement(selector: String, timeoutMs: UInt64?) -> AgentResponse {
+        let (base, index) = parseSelectorIndex(selector)
         let queryFn = { [app] () -> XCUIElement in
-            app.descendants(matching: .any).matching(
-                NSPredicate(format: "identifier == %@", selector)
-            ).firstMatch
+            let query = app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier == %@", base)
+            )
+            return index.map { query.element(boundBy: $0) } ?? query.firstMatch
         }
         return performTap(queryFn: queryFn, description: "identifier '\(selector)'", timeoutMs: timeoutMs)
     }
@@ -98,10 +133,12 @@ final class CommandHandler {
     // MARK: - Tap by accessibility label
 
     private func handleTapByLabel(label: String, timeoutMs: UInt64?) -> AgentResponse {
+        let (base, index) = parseSelectorIndex(label)
         let queryFn = { [app] () -> XCUIElement in
-            app.descendants(matching: .any).matching(
-                NSPredicate(format: "label == %@", label)
-            ).firstMatch
+            let query = app.descendants(matching: .any).matching(
+                NSPredicate(format: "label == %@", base)
+            )
+            return index.map { query.element(boundBy: $0) } ?? query.firstMatch
         }
         return performTap(queryFn: queryFn, description: "label '\(label)'", timeoutMs: timeoutMs)
     }
@@ -112,11 +149,13 @@ final class CommandHandler {
         guard let xcType = xcuiElementType(from: elementType) else {
             return .error(message: "Unknown element type '\(elementType)'")
         }
+        let (base, index) = parseSelectorIndex(selector)
         let field = byLabel ? "label" : "identifier"
         let queryFn = { [app] () -> XCUIElement in
-            app.descendants(matching: xcType).matching(
-                NSPredicate(format: "%K == %@", field, selector)
-            ).firstMatch
+            let query = app.descendants(matching: xcType).matching(
+                NSPredicate(format: "%K == %@", field, base)
+            )
+            return index.map { query.element(boundBy: $0) } ?? query.firstMatch
         }
         let lookupKind = byLabel ? "label" : "identifier"
         return performTap(queryFn: queryFn, description: "\(lookupKind) '\(selector)' and type '\(elementType)'", timeoutMs: timeoutMs)
@@ -299,18 +338,20 @@ final class CommandHandler {
     // MARK: - Get value
 
     private func handleGetValue(selector: String, byLabel: Bool, elementType: String?, timeoutMs: UInt64?) -> AgentResponse {
+        let (base, index) = parseSelectorIndex(selector)
         let queryFn = { [app] () -> XCUIElement in
+            let field = byLabel ? "label" : "identifier"
+            let query: XCUIElementQuery
             if let typeName = elementType, let xcType = xcuiElementType(from: typeName) {
-                let field = byLabel ? "label" : "identifier"
-                return app.descendants(matching: xcType).matching(
-                    NSPredicate(format: "%K == %@", field, selector)
-                ).firstMatch
+                query = app.descendants(matching: xcType).matching(
+                    NSPredicate(format: "%K == %@", field, base)
+                )
             } else {
-                let field = byLabel ? "label" : "identifier"
-                return app.descendants(matching: .any).matching(
-                    NSPredicate(format: "%K == %@", field, selector)
-                ).firstMatch
+                query = app.descendants(matching: .any).matching(
+                    NSPredicate(format: "%K == %@", field, base)
+                )
             }
+            return index.map { query.element(boundBy: $0) } ?? query.firstMatch
         }
 
         let actionFn = { (element: XCUIElement) -> AgentResponse? in
@@ -420,18 +461,20 @@ final class CommandHandler {
     // MARK: - Find element
 
     private func handleFindElement(selector: String, byLabel: Bool, elementType: String?) -> AgentResponse {
+        let (base, index) = parseSelectorIndex(selector)
+        let field = byLabel ? "label" : "identifier"
         let element: XCUIElement
 
         if let typeName = elementType, let xcType = xcuiElementType(from: typeName) {
-            let field = byLabel ? "label" : "identifier"
-            element = app.descendants(matching: xcType).matching(
-                NSPredicate(format: "%K == %@", field, selector)
-            ).firstMatch
+            let query = app.descendants(matching: xcType).matching(
+                NSPredicate(format: "%K == %@", field, base)
+            )
+            element = index.map { query.element(boundBy: $0) } ?? query.firstMatch
         } else {
-            let field = byLabel ? "label" : "identifier"
-            element = app.descendants(matching: .any).matching(
-                NSPredicate(format: "%K == %@", field, selector)
-            ).firstMatch
+            let query = app.descendants(matching: .any).matching(
+                NSPredicate(format: "%K == %@", field, base)
+            )
+            element = index.map { query.element(boundBy: $0) } ?? query.firstMatch
         }
 
         var result: AgentResponse?

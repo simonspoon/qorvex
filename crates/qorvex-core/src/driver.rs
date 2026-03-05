@@ -132,19 +132,88 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     dp[plen][tlen]
 }
 
+/// Parses a selector string, extracting a trailing `[N]` index if present.
+///
+/// Returns `(base_selector, Some(index))` when the selector ends with `[digits]`
+/// (e.g. `"row[2]"` → `("row", Some(2))`), or `(selector, None)` otherwise.
+///
+/// Only trailing `[digits]` triggers indexing. Non-numeric content, empty
+/// brackets, or no brackets at all are treated as a literal selector with
+/// no index. Negative numbers (e.g. `[-1]`) are also treated as literal.
+fn parse_selector_index(selector: &str) -> (&str, Option<usize>) {
+    if let Some(bracket_pos) = selector.rfind('[') {
+        let after = &selector[bracket_pos + 1..];
+        if after.ends_with(']') {
+            let digits = &after[..after.len() - 1];
+            if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(n) = digits.parse::<usize>() {
+                    return (&selector[..bracket_pos], Some(n));
+                }
+            }
+        }
+    }
+    (selector, None)
+}
+
+fn collect_by_identifier(elements: &[UIElement], base: &str, result: &mut Vec<UIElement>) {
+    for element in elements {
+        if element.identifier.as_deref().map_or(false, |id| glob_match(base, id)) {
+            result.push(element.clone());
+        }
+        collect_by_identifier(&element.children, base, result);
+    }
+}
+
+fn collect_by_label(elements: &[UIElement], base: &str, result: &mut Vec<UIElement>) {
+    for element in elements {
+        if element.label.as_deref().map_or(false, |l| glob_match(base, l)) {
+            result.push(element.clone());
+        }
+        collect_by_label(&element.children, base, result);
+    }
+}
+
+fn collect_with_type(
+    elements: &[UIElement],
+    base: &str,
+    by_label: bool,
+    element_type: Option<&str>,
+    result: &mut Vec<UIElement>,
+) {
+    for element in elements {
+        let selector_matches = if by_label {
+            element.label.as_deref().map_or(false, |l| glob_match(base, l))
+        } else {
+            element.identifier.as_deref().map_or(false, |id| glob_match(base, id))
+        };
+        let type_matches = match element_type {
+            Some(typ) => element.element_type.as_deref() == Some(typ),
+            None => true,
+        };
+        if selector_matches && type_matches {
+            result.push(element.clone());
+        }
+        collect_with_type(&element.children, base, by_label, element_type, result);
+    }
+}
+
 /// Recursively searches a UI element hierarchy for an element matching by identifier.
 ///
 /// Supports glob wildcard patterns (`*` and `?`) in the identifier.
-fn search_by_identifier(elements: &[UIElement], identifier: &str) -> Option<UIElement> {
+/// Supports `[N]` suffix for 0-based index selection among all matches.
+fn search_by_identifier(elements: &[UIElement], selector: &str) -> Option<UIElement> {
+    let (base, index) = parse_selector_index(selector);
+    if let Some(n) = index {
+        let mut matches = Vec::new();
+        collect_by_identifier(elements, base, &mut matches);
+        return matches.into_iter().nth(n);
+    }
+    // No index: existing DFS first-match behavior (unchanged)
     for element in elements {
-        if element
-            .identifier
-            .as_deref()
-            .map_or(false, |id| glob_match(identifier, id))
-        {
+        if element.identifier.as_deref().map_or(false, |id| glob_match(base, id)) {
             return Some(element.clone());
         }
-        if let Some(found) = search_by_identifier(&element.children, identifier) {
+        if let Some(found) = search_by_identifier(&element.children, selector) {
             return Some(found);
         }
     }
@@ -154,16 +223,20 @@ fn search_by_identifier(elements: &[UIElement], identifier: &str) -> Option<UIEl
 /// Recursively searches a UI element hierarchy for an element matching by label.
 ///
 /// Supports glob wildcard patterns (`*` and `?`) in the label.
-fn search_by_label(elements: &[UIElement], label: &str) -> Option<UIElement> {
+/// Supports `[N]` suffix for 0-based index selection among all matches.
+fn search_by_label(elements: &[UIElement], selector: &str) -> Option<UIElement> {
+    let (base, index) = parse_selector_index(selector);
+    if let Some(n) = index {
+        let mut matches = Vec::new();
+        collect_by_label(elements, base, &mut matches);
+        return matches.into_iter().nth(n);
+    }
+    // No index: existing DFS first-match behavior (unchanged)
     for element in elements {
-        if element
-            .label
-            .as_deref()
-            .map_or(false, |l| glob_match(label, l))
-        {
+        if element.label.as_deref().map_or(false, |l| glob_match(base, l)) {
             return Some(element.clone());
         }
-        if let Some(found) = search_by_label(&element.children, label) {
+        if let Some(found) = search_by_label(&element.children, selector) {
             return Some(found);
         }
     }
@@ -173,24 +246,32 @@ fn search_by_label(elements: &[UIElement], label: &str) -> Option<UIElement> {
 /// Recursively searches a UI element hierarchy by selector (ID or label) with optional type filter.
 ///
 /// Supports glob wildcard patterns (`*` and `?`) in the selector.
+/// Supports `[N]` suffix for 0-based index selection among all matches.
 fn search_with_type(
     elements: &[UIElement],
     selector: &str,
     by_label: bool,
     element_type: Option<&str>,
 ) -> Option<UIElement> {
+    let (base, index) = parse_selector_index(selector);
+    if let Some(n) = index {
+        let mut matches = Vec::new();
+        collect_with_type(elements, base, by_label, element_type, &mut matches);
+        return matches.into_iter().nth(n);
+    }
+    // No index: existing DFS first-match behavior (unchanged)
     for element in elements {
         // Check if this element matches the selector (supports glob wildcards)
         let selector_matches = if by_label {
             element
                 .label
                 .as_deref()
-                .map_or(false, |l| glob_match(selector, l))
+                .map_or(false, |l| glob_match(base, l))
         } else {
             element
                 .identifier
                 .as_deref()
-                .map_or(false, |id| glob_match(selector, id))
+                .map_or(false, |id| glob_match(base, id))
         };
 
         // Check if type matches (if type filter is specified)
@@ -952,5 +1033,215 @@ mod tests {
         assert!(glob_match("Tab ?*", "Tab 1 Selected"));
         assert!(glob_match("Tab ?*", "Tab 1"));
         assert!(!glob_match("Tab ?*", "Tab "));
+    }
+
+    // --- parse_selector_index tests ---
+
+    #[test]
+    fn test_parse_selector_index_with_index() {
+        let (base, idx) = parse_selector_index("row[2]");
+        assert_eq!(base, "row");
+        assert_eq!(idx, Some(2));
+    }
+
+    #[test]
+    fn test_parse_selector_index_no_index() {
+        let (base, idx) = parse_selector_index("row");
+        assert_eq!(base, "row");
+        assert_eq!(idx, None);
+    }
+
+    #[test]
+    fn test_parse_selector_index_zero() {
+        let (base, idx) = parse_selector_index("cell[0]");
+        assert_eq!(base, "cell");
+        assert_eq!(idx, Some(0));
+    }
+
+    #[test]
+    fn test_parse_selector_index_glob_plus_index() {
+        let (base, idx) = parse_selector_index("cell_*[1]");
+        assert_eq!(base, "cell_*");
+        assert_eq!(idx, Some(1));
+    }
+
+    #[test]
+    fn test_parse_selector_index_malformed_non_numeric() {
+        // Non-numeric content → literal selector, no index
+        let (base, idx) = parse_selector_index("row[abc]");
+        assert_eq!(base, "row[abc]");
+        assert_eq!(idx, None);
+    }
+
+    #[test]
+    fn test_parse_selector_index_empty_brackets() {
+        // Empty brackets → literal
+        let (base, idx) = parse_selector_index("row[]");
+        assert_eq!(base, "row[]");
+        assert_eq!(idx, None);
+    }
+
+    #[test]
+    fn test_parse_selector_index_negative() {
+        // Negative numbers (starts with '-') → literal
+        let (base, idx) = parse_selector_index("row[-1]");
+        assert_eq!(base, "row[-1]");
+        assert_eq!(idx, None);
+    }
+
+    // --- search_by_identifier indexed tests ---
+
+    fn make_element(id: &str) -> UIElement {
+        UIElement {
+            identifier: Some(id.to_string()),
+            label: None,
+            value: None,
+            element_type: None,
+            frame: None,
+            children: vec![],
+            role: None,
+            hittable: None,
+        }
+    }
+
+    fn make_labeled(label: &str) -> UIElement {
+        UIElement {
+            identifier: None,
+            label: Some(label.to_string()),
+            value: None,
+            element_type: None,
+            frame: None,
+            children: vec![],
+            role: None,
+            hittable: None,
+        }
+    }
+
+    #[test]
+    fn test_search_by_identifier_indexed_flat() {
+        // Three sibling elements with id "row"
+        let elements = vec![
+            make_element("row"),
+            make_element("row"),
+            make_element("row"),
+        ];
+        assert_eq!(search_by_identifier(&elements, "row[0]").unwrap().identifier.as_deref(), Some("row"));
+        assert!(search_by_identifier(&elements, "row[1]").is_some());
+        assert!(search_by_identifier(&elements, "row[2]").is_some());
+        assert!(search_by_identifier(&elements, "row[3]").is_none()); // out of bounds
+    }
+
+    #[test]
+    fn test_search_by_identifier_indexed_dfs_order() {
+        // Tree: root has children row_A and container; container has child row_B
+        // DFS order: row_A, row_B → [0]=row_A, [1]=row_B
+        let elements = vec![UIElement {
+            identifier: Some("root".to_string()),
+            label: None,
+            value: None,
+            element_type: None,
+            frame: None,
+            children: vec![
+                UIElement {
+                    identifier: Some("row".to_string()),
+                    label: Some("Row A".to_string()),
+                    value: None,
+                    element_type: None,
+                    frame: None,
+                    children: vec![],
+                    role: None,
+                    hittable: None,
+                },
+                UIElement {
+                    identifier: Some("container".to_string()),
+                    label: None,
+                    value: None,
+                    element_type: None,
+                    frame: None,
+                    children: vec![UIElement {
+                        identifier: Some("row".to_string()),
+                        label: Some("Row B".to_string()),
+                        value: None,
+                        element_type: None,
+                        frame: None,
+                        children: vec![],
+                        role: None,
+                        hittable: None,
+                    }],
+                    role: None,
+                    hittable: None,
+                },
+            ],
+            role: None,
+            hittable: None,
+        }];
+
+        let row0 = search_by_identifier(&elements, "row[0]");
+        let row1 = search_by_identifier(&elements, "row[1]");
+        assert_eq!(row0.unwrap().label.as_deref(), Some("Row A"));
+        assert_eq!(row1.unwrap().label.as_deref(), Some("Row B"));
+    }
+
+    #[test]
+    fn test_search_by_identifier_no_index_unchanged() {
+        // Without index, behavior is unchanged: returns first match
+        let elements = vec![
+            make_element("row"),
+            make_element("row"),
+        ];
+        let found = search_by_identifier(&elements, "row");
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_search_by_label_indexed() {
+        let elements = vec![
+            make_labeled("Item"),
+            make_labeled("Item"),
+            make_labeled("Item"),
+        ];
+        assert!(search_by_label(&elements, "Item[0]").is_some());
+        assert!(search_by_label(&elements, "Item[2]").is_some());
+        assert!(search_by_label(&elements, "Item[3]").is_none());
+    }
+
+    #[test]
+    fn test_search_with_type_indexed() {
+        let elements = vec![
+            UIElement {
+                identifier: Some("btn".to_string()),
+                label: None,
+                value: None,
+                element_type: Some("Button".to_string()),
+                frame: None,
+                children: vec![],
+                role: None,
+                hittable: None,
+            },
+            UIElement {
+                identifier: Some("btn".to_string()),
+                label: None,
+                value: None,
+                element_type: Some("Button".to_string()),
+                frame: None,
+                children: vec![],
+                role: None,
+                hittable: None,
+            },
+        ];
+        assert!(search_with_type(&elements, "btn[0]", false, Some("Button")).is_some());
+        assert!(search_with_type(&elements, "btn[1]", false, Some("Button")).is_some());
+        assert!(search_with_type(&elements, "btn[2]", false, Some("Button")).is_none());
+    }
+
+    #[test]
+    fn test_search_by_identifier_glob_plus_index() {
+        // Glob + index: "cell_*[1]" → base="cell_*", index=1
+        let elements = vec![
+            UIElement { identifier: Some("cell_A".to_string()), label: None, value: None, element_type: None, frame: None, children: vec![], role: None, hittable: None },
+            UIElement { identifier: Some("cell_B".to_string()), label: None, value: None, element_type: None, frame: None, children: vec![], role: None, hittable: None },
+        ];
+        let found = search_by_identifier(&elements, "cell_*[1]");
+        assert_eq!(found.unwrap().identifier.as_deref(), Some("cell_B"));
     }
 }
