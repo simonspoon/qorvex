@@ -69,6 +69,7 @@ The Rust side manages the agent's full lifecycle through `AgentLifecycle` (defin
 | `agent_port` | `u16` | `8080` (configurable via `~/.qorvex/config.json`) |
 | `startup_timeout` | `Duration` | 30s |
 | `max_retries` | `u32` | `3` |
+| `is_physical` | `bool` | `false` |
 
 ### Build
 
@@ -80,7 +81,7 @@ xcodebuild build-for-testing \
   -derivedDataPath .build
 ```
 
-The `generic/platform=iOS Simulator` destination produces a universal simulator bundle that works with any booted simulator, without requiring a specific UDID. `install.sh` runs this build step so the bundle is ready before any session starts.
+When `is_physical` is `false` (default), the destination is `generic/platform=iOS Simulator`, which produces a universal simulator bundle that works with any booted simulator. When `is_physical` is `true`, the destination is `generic/platform=iOS`, which produces a physical device build. `install.sh` builds for simulator by default.
 
 ### Spawn
 
@@ -95,11 +96,14 @@ xcodebuild test-without-building \
 
 ### Health Check
 
-Polls every 500ms: TCP connect + heartbeat to `127.0.0.1:<agent_port>`, repeated until success or `startup_timeout` is exceeded. The port is passed to the Swift agent via the `TEST_RUNNER_QORVEX_PORT` environment variable (the test runner strips the `TEST_RUNNER_` prefix, so the agent reads `QORVEX_PORT`).
+Polls every 500ms until success or `startup_timeout` is exceeded. The port is passed to the Swift agent via the `TEST_RUNNER_QORVEX_PORT` environment variable (the test runner strips the `TEST_RUNNER_` prefix, so the agent reads `QORVEX_PORT`).
+
+- **Simulator** (`is_physical = false`): TCP connect + heartbeat to `127.0.0.1:<agent_port>`.
+- **Physical device** (`is_physical = true`): probes reachability via `usb_tunnel::connect(&udid, agent_port)` instead of a direct TCP connection.
 
 ### Terminate
 
-Kills the child process. Falls back to `xcrun simctl terminate <udid> com.qorvex.agent` if the child process is not available. Auto-cleanup via `Drop`.
+Kills the child process. Falls back to `xcrun simctl terminate <udid> com.qorvex.agent` if the child process is not available (simulators only — `simctl terminate` is skipped when `is_physical = true`). Auto-cleanup via `Drop`.
 
 ---
 

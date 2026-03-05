@@ -18,7 +18,8 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| List devices | `list-devices` | `qorvex list-devices` |
+| List simulators | `list-devices` | `qorvex list-devices` |
+| List physical devices | `list-physical-devices` | — |
 | Select device | `use-device <udid>` | — |
 | Boot + select | `boot-device <udid>` | `qorvex boot-device <udid>` |
 

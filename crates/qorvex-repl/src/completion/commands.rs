@@ -84,6 +84,12 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[],
     },
     CommandDef {
+        name: "list-physical-devices",
+        description: "List connected physical devices",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
         name: "use-device",
         description: "Select a simulator by UDID",
         args: &[ArgSpec {

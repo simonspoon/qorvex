@@ -41,6 +41,7 @@ enum IpcRequest {
 
     // Device management
     ListDevices,
+    ListPhysicalDevices,
     UseDevice { udid: String },
     BootDevice { udid: String },
 
@@ -75,7 +76,8 @@ enum IpcRequest {
 | `StartSession` | Start a new automation session. |
 | `EndSession` | End the current session. |
 | `ListDevices` | List available simulator devices. |
-| `UseDevice` | Select a simulator device by UDID. |
+| `ListPhysicalDevices` | List physical iOS devices connected via USB or network (usbmuxd). Returns a `PhysicalDeviceList` response. |
+| `UseDevice` | Select a device by UDID. Auto-detects whether the UDID belongs to a simulator (checks cached device list) or a physical device (probes via USB tunnel). Accepts both 36-char simulator UDIDs and 40-char physical device UDIDs. |
 | `BootDevice` | Boot a simulator device by UDID. |
 | `StartAgent` | Start or connect to the automation agent; `project_dir` overrides the configured source directory. |
 | `StopAgent` | Stop the managed agent process. |
@@ -93,6 +95,20 @@ Management requests (`StartSession` and below) are only handled when the server 
 ---
 
 ## `IpcResponse` Variants
+
+### `PhysicalDeviceInfo`
+
+A plain DTO carrying only the fields needed by IPC clients. Not derived from `usb_tunnel::PhysicalDevice`.
+
+```rust
+pub struct PhysicalDeviceInfo {
+    pub udid: String,
+    pub name: Option<String>,
+    pub connection: String,  // e.g. "USB", "Network (1.2.3.4)", "Unknown (...)"
+}
+```
+
+---
 
 ```rust
 #[serde(tag = "type")]
@@ -123,6 +139,9 @@ enum IpcResponse {
     DeviceList {
         devices: Vec<SimulatorDevice>,
     },
+    PhysicalDeviceList {
+        devices: Vec<PhysicalDeviceInfo>,
+    },
     SessionInfo {
         session_name: String,
         active: bool,
@@ -149,6 +168,7 @@ enum IpcResponse {
 | `Error` | Any | `message`: error description. |
 | `CommandResult` | Management commands | `success`: whether the command succeeded. `message`: human-readable result. |
 | `DeviceList` | `ListDevices` | `devices`: list of available `SimulatorDevice` entries. |
+| `PhysicalDeviceList` | `ListPhysicalDevices` | `devices`: list of `PhysicalDeviceInfo` entries (udid, name, connection string). |
 | `SessionInfo` | `GetSessionInfo` | `session_name`, `active`, `device_udid` (if connected), `action_count`. |
 | `CompletionData` | `GetCompletionData`, `FetchElements` | `elements`: live UI elements from the agent (`FetchElements`) or empty (`GetCompletionData`). `devices`: cached simulator devices. |
 | `TimeoutValue` | `GetTimeout` | `timeout_ms`: current default wait timeout. |

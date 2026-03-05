@@ -80,7 +80,8 @@ Controls:
 
 Available commands:
 - `list-devices` — List all available simulators
-- `use-device <udid>` — Select a simulator to use
+- `list-physical-devices` — List physical iOS devices connected via USB or network
+- `use-device <udid>` — Select a simulator or physical device by UDID
 - `boot-device <udid>` — Boot and select a simulator
 - `start-agent` — Start agent using configured source dir, or connect to external agent
 - `start-agent <path>` — Build and launch Swift agent from project directory

@@ -64,6 +64,8 @@ pub struct AgentLifecycleConfig {
     pub startup_timeout: Duration,
     /// Maximum number of launch retries before giving up.
     pub max_retries: u32,
+    /// Whether the target is a physical device (`true`) or a simulator (`false`).
+    pub is_physical: bool,
 }
 
 impl AgentLifecycleConfig {
@@ -74,6 +76,7 @@ impl AgentLifecycleConfig {
             agent_port: 8080,
             startup_timeout: Duration::from_secs(30),
             max_retries: 3,
+            is_physical: false,
         }
     }
 }
@@ -180,6 +183,12 @@ impl AgentLifecycle {
             return Err(AgentLifecycleError::ProjectNotFound(xcodeproj));
         }
 
+        let destination = if self.config.is_physical {
+            "generic/platform=iOS"
+        } else {
+            "generic/platform=iOS Simulator"
+        };
+
         let output = Command::new("xcodebuild")
             .args([
                 "build-for-testing",
@@ -188,7 +197,7 @@ impl AgentLifecycle {
                 "-scheme",
                 SCHEME,
                 "-destination",
-                "generic/platform=iOS Simulator",
+                destination,
                 "-derivedDataPath",
                 &self.config
                     .project_dir
@@ -264,11 +273,14 @@ impl AgentLifecycle {
         drop(guard);
 
         // Fallback: simctl terminate in case the agent process is still around.
-        let _ = Command::new("xcrun")
-            .args(["simctl", "terminate", &self.udid, AGENT_BUNDLE_ID])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        // This only applies to simulators; physical devices do not support simctl.
+        if !self.config.is_physical {
+            let _ = Command::new("xcrun")
+                .args(["simctl", "terminate", &self.udid, AGENT_BUNDLE_ID])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output();
+        }
 
         Ok(())
     }
@@ -292,14 +304,22 @@ impl AgentLifecycle {
         let addr = self.agent_addr();
 
         loop {
-            let mut client = AgentClient::new(addr);
-            if client.connect().await.is_ok() {
-                if client.heartbeat().await.is_ok() {
-                    client.disconnect();
+            if self.config.is_physical {
+                let reachable = crate::usb_tunnel::connect(&self.udid, self.config.agent_port).await.is_ok();
+                if reachable {
                     info!("agent ready");
                     return Ok(());
                 }
-                client.disconnect();
+            } else {
+                let mut client = AgentClient::new(addr);
+                if client.connect().await.is_ok() {
+                    if client.heartbeat().await.is_ok() {
+                        client.disconnect();
+                        info!("agent ready");
+                        return Ok(());
+                    }
+                    client.disconnect();
+                }
             }
 
             if tokio::time::Instant::now() >= deadline {
@@ -422,6 +442,7 @@ mod tests {
         assert_eq!(config.agent_port, 8080);
         assert_eq!(config.startup_timeout, Duration::from_secs(30));
         assert_eq!(config.max_retries, 3);
+        assert!(!config.is_physical);
     }
 
     #[test]
@@ -431,6 +452,7 @@ mod tests {
             agent_port: 12345,
             startup_timeout: Duration::from_secs(10),
             max_retries: 5,
+            is_physical: false,
         };
 
         assert_eq!(config.project_dir, PathBuf::from("/tmp/custom"));
@@ -539,6 +561,7 @@ mod tests {
             agent_port: 5555,
             startup_timeout: Duration::from_secs(15),
             max_retries: 2,
+            is_physical: false,
         };
         let lifecycle = AgentLifecycle::new("ABCD-1234".to_string(), config);
 
@@ -561,6 +584,7 @@ mod tests {
             agent_port: 19999,
             startup_timeout: Duration::from_secs(30),
             max_retries: 3,
+            is_physical: false,
         };
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 
@@ -574,6 +598,7 @@ mod tests {
             agent_port: 19998,
             startup_timeout: Duration::from_secs(1),
             max_retries: 3,
+            is_physical: false,
         };
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 

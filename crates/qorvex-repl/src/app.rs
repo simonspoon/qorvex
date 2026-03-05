@@ -539,6 +539,7 @@ impl App {
             "start-session" => IpcRequest::StartSession,
             "end-session" => IpcRequest::EndSession,
             "list-devices" => IpcRequest::ListDevices,
+            "list-physical-devices" => IpcRequest::ListPhysicalDevices,
             "use-device" => IpcRequest::UseDevice {
                 udid: args.positional.first().cloned().unwrap_or_default(),
             },
@@ -752,6 +753,16 @@ impl App {
                 }
                 self.add_output(format_result(true, &format!("{} devices", devices.len())));
             }
+            IpcResponse::PhysicalDeviceList { devices } => {
+                if devices.is_empty() {
+                    self.add_output(Line::from("No physical devices connected.".to_string()));
+                } else {
+                    for d in &devices {
+                        let name_part = d.name.as_deref().unwrap_or("unknown");
+                        self.add_output(Line::from(format!("  {} ({}) — {}", d.udid, d.connection, name_part)));
+                    }
+                }
+            }
             IpcResponse::SessionInfo { session_name, active, device_udid, action_count } => {
                 if active {
                     self.add_output(Line::from(format!("Session: {} (active)", session_name)));
@@ -785,7 +796,8 @@ impl App {
             "",
             "Device:",
             "  list-devices             List available simulators",
-            "  use-device <udid>        Select a simulator by UDID",
+            "  list-physical-devices    List connected physical devices",
+            "  use-device <udid>        Select a device by UDID (simulator or physical)",
             "  boot-device <udid>       Boot a simulator",
             "  start-agent [path]       Connect to / build+launch agent",
             "  stop-agent               Stop managed agent process",

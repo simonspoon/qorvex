@@ -33,6 +33,7 @@ pub struct ServerState {
     pub target_bundle_id: Option<String>,
     pub default_timeout_ms: u64,
     pub agent_port: u16,
+    pub is_physical_device: bool,
 }
 
 impl ServerState {
@@ -64,6 +65,7 @@ impl ServerState {
             target_bundle_id: None,
             default_timeout_ms: 5000,
             agent_port,
+            is_physical_device: false,
         }
     }
 
@@ -79,7 +81,8 @@ impl ServerState {
 
             // ── Device Management ───────────────────────────────────────
             IpcRequest::ListDevices => self.handle_list_devices(),
-            IpcRequest::UseDevice { udid } => self.handle_use_device(&udid),
+            IpcRequest::ListPhysicalDevices => self.handle_list_physical_devices().await,
+            IpcRequest::UseDevice { udid } => self.handle_use_device(&udid).await,
             IpcRequest::BootDevice { udid } => self.handle_boot_device(&udid),
 
             // ── Agent Management ────────────────────────────────────────
@@ -210,7 +213,25 @@ impl ServerState {
         }
     }
 
-    fn handle_use_device(&mut self, udid: &str) -> IpcResponse {
+    async fn handle_list_physical_devices(&mut self) -> IpcResponse {
+        match qorvex_core::usb_tunnel::list_devices().await {
+            Ok(devices) => IpcResponse::PhysicalDeviceList {
+                devices: devices
+                    .into_iter()
+                    .map(|d| qorvex_core::ipc::PhysicalDeviceInfo {
+                        udid: d.udid,
+                        name: None,
+                        connection: d.connection.to_string(),
+                    })
+                    .collect(),
+            },
+            Err(e) => IpcResponse::Error {
+                message: format!("USB tunnel error: {}", e),
+            },
+        }
+    }
+
+    async fn handle_use_device(&mut self, udid: &str) -> IpcResponse {
         let udid = strip_quotes(udid);
         if udid.is_empty() {
             return IpcResponse::CommandResult {
@@ -224,11 +245,44 @@ impl ServerState {
                 message: format!("Invalid UDID format: {}", udid),
             };
         }
-        self.simulator_udid = Some(udid.to_string());
-        self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
-        IpcResponse::CommandResult {
-            success: true,
-            message: format!("Using device {}", udid),
+        // Check if the UDID belongs to a known simulator.
+        if self.cached_devices.iter().any(|d| d.udid == udid) {
+            self.is_physical_device = false;
+            self.simulator_udid = Some(udid.to_string());
+            self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
+            return IpcResponse::CommandResult {
+                success: true,
+                message: format!("Using simulator {}", udid),
+            };
+        }
+        // Not a simulator — check physical devices via USB tunnel.
+        match qorvex_core::usb_tunnel::list_devices().await {
+            Ok(physical_devices) => {
+                if physical_devices.iter().any(|d| d.udid == udid) {
+                    self.is_physical_device = true;
+                    self.simulator_udid = Some(udid.to_string());
+                    self.executor = None;
+                    IpcResponse::CommandResult {
+                        success: true,
+                        message: format!("Using physical device {}", udid),
+                    }
+                } else {
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: format!(
+                            "Device {} not found (not a simulator and not connected via USB)",
+                            udid
+                        ),
+                    }
+                }
+            }
+            Err(_) => IpcResponse::CommandResult {
+                success: false,
+                message: format!(
+                    "Device {} not found (not a simulator and not connected via USB)",
+                    udid
+                ),
+            },
         }
     }
 
@@ -278,12 +332,20 @@ impl ServerState {
             let project_dir = PathBuf::from(strip_quotes(&project_dir_str));
             let mut lc_config = AgentLifecycleConfig::new(project_dir);
             lc_config.agent_port = self.agent_port;
-            let lifecycle = Arc::new(AgentLifecycle::new(udid, lc_config));
+            if self.is_physical_device {
+                lc_config.is_physical = true;
+            }
+            let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
             match lifecycle.ensure_running().await {
                 Ok(()) => {
-                    let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port)
-                        .with_lifecycle(lifecycle.clone());
+                    let mut driver = if self.is_physical_device {
+                        AgentDriver::usb_device(udid.clone(), self.agent_port)
+                            .with_lifecycle(lifecycle.clone())
+                    } else {
+                        AgentDriver::direct("127.0.0.1", self.agent_port)
+                            .with_lifecycle(lifecycle.clone())
+                    };
                     self.agent_lifecycle = Some(lifecycle);
                     match driver.connect().await {
                         Ok(()) => {
@@ -310,12 +372,20 @@ impl ServerState {
             if let Some(project_dir) = config.agent_source_dir {
                 let mut lc_config = AgentLifecycleConfig::new(project_dir);
                 lc_config.agent_port = self.agent_port;
-                let lifecycle = Arc::new(AgentLifecycle::new(udid, lc_config));
+                if self.is_physical_device {
+                    lc_config.is_physical = true;
+                }
+                let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
                 match lifecycle.ensure_agent_ready().await {
                     Ok(()) => {
-                        let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port)
-                            .with_lifecycle(lifecycle.clone());
+                        let mut driver = if self.is_physical_device {
+                            AgentDriver::usb_device(udid.clone(), self.agent_port)
+                                .with_lifecycle(lifecycle.clone())
+                        } else {
+                            AgentDriver::direct("127.0.0.1", self.agent_port)
+                                .with_lifecycle(lifecycle.clone())
+                        };
                         self.agent_lifecycle = Some(lifecycle);
                         match driver.connect().await {
                             Ok(()) => {
@@ -340,11 +410,18 @@ impl ServerState {
                 // No config: connect to externally-started agent
                 let mut lc_config = AgentLifecycleConfig::new(PathBuf::new());
                 lc_config.agent_port = self.agent_port;
-                let lifecycle = AgentLifecycle::new(udid, lc_config);
+                if self.is_physical_device {
+                    lc_config.is_physical = true;
+                }
+                let lifecycle = AgentLifecycle::new(udid.clone(), lc_config);
 
                 match lifecycle.wait_for_ready().await {
                     Ok(()) => {
-                        let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port);
+                        let mut driver = if self.is_physical_device {
+                            AgentDriver::usb_device(udid.clone(), self.agent_port)
+                        } else {
+                            AgentDriver::direct("127.0.0.1", self.agent_port)
+                        };
                         match driver.connect().await {
                             Ok(()) => {
                                 self.set_executor_with_driver(Arc::new(driver)).await;
@@ -693,8 +770,16 @@ impl ServerState {
 
 }
 
-/// Validates a simulator UDID format (8-4-4-4-12 hex).
+/// Validates a UDID format.
+///
+/// Accepts simulator UDIDs (8-4-4-4-12 hex, 36 chars) and physical device
+/// UDIDs (40 contiguous hex characters).
 fn is_valid_udid(udid: &str) -> bool {
+    // Physical device UDID: 40 contiguous hex characters.
+    if udid.len() == 40 && udid.chars().all(|c| c.is_ascii_hexdigit()) {
+        return true;
+    }
+    // Simulator UDID: 8-4-4-4-12 hex groups separated by dashes (36 chars total).
     if udid.len() != 36 {
         return false;
     }

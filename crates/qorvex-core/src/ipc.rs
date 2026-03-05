@@ -62,6 +62,20 @@ pub enum IpcError {
     SessionNotFound,
 }
 
+/// A physical device connected via USB or network, for use as an IPC data-transfer object.
+///
+/// This is a plain DTO — it is not derived from `usb_tunnel::PhysicalDevice` and carries
+/// only the fields needed by IPC clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhysicalDeviceInfo {
+    /// The device UDID.
+    pub udid: String,
+    /// Human-readable device name, if available.
+    pub name: Option<String>,
+    /// Connection description, e.g. `"USB"`, `"Network (1.2.3.4)"`, or `"Unknown (...)"`.
+    pub connection: String,
+}
+
 /// A request sent from client to server over the IPC connection.
 ///
 /// Requests are serialized as JSON with a `type` tag discriminator.
@@ -98,6 +112,8 @@ pub enum IpcRequest {
     // --- Device Management ---
     /// List available simulator devices.
     ListDevices,
+    /// List physical devices connected via USB or network.
+    ListPhysicalDevices,
     /// Select a simulator device by UDID.
     UseDevice { udid: String },
     /// Boot a simulator device.
@@ -198,6 +214,12 @@ pub enum IpcResponse {
     DeviceList {
         /// Available simulator devices.
         devices: Vec<crate::simctl::SimulatorDevice>,
+    },
+
+    /// List of physical devices connected via USB or network.
+    PhysicalDeviceList {
+        /// Connected physical devices.
+        devices: Vec<PhysicalDeviceInfo>,
     },
 
     /// Current session information.
