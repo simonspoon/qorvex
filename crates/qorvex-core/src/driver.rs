@@ -548,6 +548,22 @@ pub trait AutomationDriver: Send + Sync {
         Ok(search_with_type(&tree, selector, by_label, element_type))
     }
 
+    /// Like [`find_element_with_type`], but with a hint for the IPC read timeout.
+    ///
+    /// The default implementation ignores `read_timeout_ms` and delegates to
+    /// [`find_element_with_type`]. Backends that communicate over IPC can
+    /// override this to avoid dropping the connection before a response arrives.
+    async fn find_element_with_read_timeout(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        read_timeout_ms: Option<u64>,
+    ) -> Result<Option<UIElement>, DriverError> {
+        let _ = read_timeout_ms;
+        self.find_element_with_type(selector, by_label, element_type).await
+    }
+
     /// Get an element's value by its accessibility identifier.
     ///
     /// # Arguments

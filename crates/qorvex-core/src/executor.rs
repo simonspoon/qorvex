@@ -374,10 +374,11 @@ impl ActionExecutor {
                 let mut last_recovery = self.driver.recovery_count();
 
                 loop {
-                    if let Ok(found) = self.driver.find_element_with_type(
+                    if let Ok(found) = self.driver.find_element_with_read_timeout(
                         selector,
                         by_label,
                         element_type.as_deref(),
+                        Some(timeout_ms),
                     ).await {
                         if let Some(element) = found {
                             if require_stable {
@@ -490,10 +491,11 @@ impl ActionExecutor {
                 let mut last_recovery = self.driver.recovery_count();
 
                 loop {
-                    let found = self.driver.find_element_with_type(
+                    let found = self.driver.find_element_with_read_timeout(
                         selector,
                         by_label,
                         element_type.as_deref(),
+                        Some(timeout_ms),
                     ).await;
 
                     match found {

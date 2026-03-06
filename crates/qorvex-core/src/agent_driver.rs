@@ -707,6 +707,36 @@ impl AutomationDriver for AgentDriver {
     }
 
     #[instrument(skip(self), level = "debug")]
+    async fn find_element_with_read_timeout(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        read_timeout_ms: Option<u64>,
+    ) -> Result<Option<UIElement>, DriverError> {
+        let response = self
+            .send_with_read_timeout(
+                &Request::FindElement {
+                    selector: selector.to_string(),
+                    by_label,
+                    element_type: element_type.map(|s| s.to_string()),
+                },
+                read_timeout_ms,
+            )
+            .await?;
+        match response {
+            Response::Element { json } => {
+                let element: Option<UIElement> = serde_json::from_str(&json)
+                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
+                Ok(element)
+            }
+            other => Err(DriverError::CommandFailed(format!(
+                "unexpected response: {other:?}"
+            ))),
+        }
+    }
+
+    #[instrument(skip(self), level = "debug")]
     async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
         let response = self.send(&Request::SetTarget {
             bundle_id: bundle_id.to_string(),

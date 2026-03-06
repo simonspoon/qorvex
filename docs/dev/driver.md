@@ -13,7 +13,7 @@ This document covers the `AutomationDriver` trait, its implementations, and the 
 
 ## `AutomationDriver` Trait
 
-All methods grouped by category. The trait has 22 async methods and 1 sync method.
+All methods grouped by category. The trait has 23 async methods and 1 sync method.
 
 ### Connection
 
@@ -68,6 +68,7 @@ These methods have default implementations that dump the full tree and search lo
 | `async fn find_element(&self, identifier: &str) -> Result<Option<UIElement>, DriverError>` | Find by accessibility ID |
 | `async fn find_element_by_label(&self, label: &str) -> Result<Option<UIElement>, DriverError>` | Find by accessibility label |
 | `async fn find_element_with_type(&self, selector: &str, by_label: bool, element_type: Option<&str>) -> Result<Option<UIElement>, DriverError>` | Find with optional type filter |
+| `async fn find_element_with_read_timeout(&self, selector: &str, by_label: bool, element_type: Option<&str>, read_timeout_ms: Option<u64>) -> Result<Option<UIElement>, DriverError>` | Like `find_element_with_type` but hints the IPC read timeout; default ignores the hint and delegates to `find_element_with_type` |
 
 ### App Switching (Default Returns Error)
 
@@ -202,6 +203,7 @@ It overrides the default search methods to use the `FindElement` protocol comman
 | `find_element(identifier)` | Sends `FindElement` with `by_label=false` |
 | `find_element_by_label(label)` | Sends `FindElement` with `by_label=true` |
 | `find_element_with_type(selector, by_label, element_type)` | Sends `FindElement` with all three fields |
+| `find_element_with_read_timeout(selector, by_label, element_type, read_timeout_ms)` | Sends `FindElement` via `send_with_read_timeout`, so the IPC read deadline is `read_timeout_ms + 15s` rather than the hardcoded 30s |
 
 It also overrides the timeout-aware tap/get-value methods to forward `timeout_ms` through the protocol:
 

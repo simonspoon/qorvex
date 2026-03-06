@@ -241,6 +241,10 @@ The retry classification lives in `is_retryable_error()` in `executor.rs`. Only 
 
 - **`require_stable: false`**: returns as soon as the element exists and is hittable. Used when you want to wait-without-acting with a looser stability requirement.
 
+### WaitFor/WaitForNot Must Use `find_element_with_read_timeout`
+
+The `WaitFor` and `WaitForNot` poll loops must call `find_element_with_read_timeout(..., Some(timeout_ms))` rather than `find_element_with_type`. This sets the IPC read deadline to `timeout_ms + 15s`, ensuring the TCP connection is never dropped before the user's overall wait timeout expires. Using `find_element_with_type` (which uses the hardcoded 30s `READ_TIMEOUT`) causes a connection drop whenever `QORVEX_TIMEOUT ≥ 30s` and a single poll stalls for 30s.
+
 ### Poll-Loop Error Handling
 
 When implementing a poll loop that calls a fallible driver method (e.g., `find_element_with_type`), always handle `Err` explicitly before checking the result value. A common pitfall is using `matches!` to test the happy-path condition:
