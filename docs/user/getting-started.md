@@ -38,6 +38,22 @@ make -C qorvex-streamer build   # Live video streamer (macOS 13+)
 
 `install.sh` builds both automatically.
 
+## Shell Completions (Optional)
+
+After installing, enable tab completion for the `qorvex` CLI:
+
+```zsh
+# Zsh — add to ~/.zshrc
+eval "$(qorvex completions zsh)"
+```
+
+```bash
+# Bash — add to ~/.bashrc
+eval "$(qorvex completions bash)"
+```
+
+Also supported: `fish`, `elvish`, `powershell`.
+
 ## First Session Walkthrough
 
 ### 1. Boot a Simulator

@@ -123,6 +123,27 @@ Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
 See [scripting-guide.md](scripting-guide.md) for full scripting details.
 
+## Shell Completions
+
+| Command | Description |
+|---------|-------------|
+| `qorvex completions zsh` | Print Zsh completion script |
+| `qorvex completions bash` | Print Bash completion script |
+| `qorvex completions fish` | Print Fish completion script |
+| `qorvex completions elvish` | Print Elvish completion script |
+| `qorvex completions powershell` | Print PowerShell completion script |
+
+No running session required. Output the script to stdout and source it in your shell profile:
+
+```zsh
+# Add to ~/.zshrc
+eval "$(qorvex completions zsh)"
+
+# Or write to a completions file (faster shell startup)
+qorvex completions zsh > ~/.zfunc/_qorvex
+# Ensure ~/.zfunc is in fpath: fpath=(~/.zfunc $fpath)
+```
+
 ## Logging
 
 | Command | REPL | CLI |

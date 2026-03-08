@@ -281,6 +281,12 @@ enum Command {
 
     /// Stop the server for this session
     Stop,
+
+    /// Generate shell completion scripts
+    Completions {
+        /// Shell to generate completions for (zsh, bash, fish, elvish, powershell)
+        shell: clap_complete::Shell,
+    },
 }
 
 #[tokio::main]
@@ -416,6 +422,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Start => {
             return start_all(&cli).await;
         }
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            use clap_complete::generate;
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "qorvex", &mut std::io::stdout());
+            return Ok(());
+        }
         _ => {} // Fall through to IPC-connected commands
     }
 
@@ -503,7 +516,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             get_log(&mut client, &cli).await
         }
         // These commands are handled before IPC connection above
-        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start => unreachable!(),
+        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start | Command::Completions { .. } => unreachable!(),
     }
 }
 

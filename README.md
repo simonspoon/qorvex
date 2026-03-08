@@ -237,6 +237,9 @@ qorvex convert ~/.qorvex/logs/default_20250101_120000.jsonl > replay.sh
 
 # Convert from stdin
 qorvex log -f json | qorvex convert > replay.sh
+
+# Generate shell completions (zsh, bash, fish, elvish, powershell)
+eval "$(qorvex completions zsh)"
 ```
 
 ### Shell Scripting
