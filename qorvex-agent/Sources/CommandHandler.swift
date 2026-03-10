@@ -481,7 +481,36 @@ final class CommandHandler {
             state = "unknown"
         }
 
+        // Bundle ID via KVC (private but stable across iOS versions)
+        let bundleId = (app.value(forKey: "bundleID") as? String) ?? ""
+
+        // Display name, version, build via LSApplicationProxy (private API,
+        // available in simulator and device XCTest contexts)
+        var displayName = ""
+        var version = ""
+        var build = ""
+        if !bundleId.isEmpty,
+           let proxyClass = NSClassFromString("LSApplicationProxy"),
+           proxyClass.responds(to: NSSelectorFromString("applicationProxyForIdentifier:")),
+           let proxy = (proxyClass as AnyObject)
+               .perform(NSSelectorFromString("applicationProxyForIdentifier:"), with: bundleId)?
+               .takeUnretainedValue() {
+            if proxy.responds(to: NSSelectorFromString("shortVersionString")) {
+                version = proxy.perform(NSSelectorFromString("shortVersionString"))?.takeUnretainedValue() as? String ?? ""
+            }
+            if proxy.responds(to: NSSelectorFromString("bundleVersion")) {
+                build = proxy.perform(NSSelectorFromString("bundleVersion"))?.takeUnretainedValue() as? String ?? ""
+            }
+            if proxy.responds(to: NSSelectorFromString("localizedName")) {
+                displayName = proxy.perform(NSSelectorFromString("localizedName"))?.takeUnretainedValue() as? String ?? ""
+            }
+        }
+
         let info: [String: String] = [
+            "bundle_id": bundleId,
+            "display_name": displayName,
+            "version": version,
+            "build": build,
             "state": state,
         ]
 

@@ -754,14 +754,30 @@ impl AutomationDriver for AgentDriver {
         let response = self.send(&Request::GetTargetInfo).await?;
         match response {
             Response::TargetInfo { json } => {
-                // Agent returns partial info (state); we merge in the bundle_id
-                // we already know from the Rust side.
-                let mut info: TargetInfo = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                if info.bundle_id.is_empty() {
-                    info.bundle_id = bundle_id;
+                // Deserialize the agent's JSON response into the full
+                // TargetInfo struct; bundle_id falls back to what we tracked.
+                #[derive(serde::Deserialize, Default)]
+                struct AgentTargetInfo {
+                    #[serde(default)]
+                    state: String,
+                    #[serde(default)]
+                    display_name: String,
+                    #[serde(default)]
+                    version: String,
+                    #[serde(default)]
+                    build: String,
+                    #[serde(default)]
+                    bundle_id: String,
                 }
-                Ok(info)
+                let partial: AgentTargetInfo = serde_json::from_str(&json)
+                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
+                Ok(TargetInfo {
+                    bundle_id: if partial.bundle_id.is_empty() { bundle_id } else { partial.bundle_id },
+                    display_name: partial.display_name,
+                    version: partial.version,
+                    build: partial.build,
+                    state: partial.state,
+                })
             }
             other => Err(DriverError::CommandFailed(format!(
                 "unexpected response: {other:?}"
