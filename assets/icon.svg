@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="512" height="512" shape-rendering="crispEdges">
+  <style>
+    rect { stroke: none; }
+  </style>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="16" height="16" fill="#1a1a2e"/>
+
+  <!-- Q ring - top -->
+  <rect x="5" y="2" width="1" height="1" fill="#6C5CE7"/>
+  <rect x="6" y="2" width="1" height="1" fill="#6C5CE7"/>
+  <rect x="7" y="2" width="1" height="1" fill="#7B6CEA"/>
+  <rect x="8" y="2" width="1" height="1" fill="#7B6CEA"/>
+  <rect x="9" y="2" width="1" height="1" fill="#8A7CED"/>
+
+  <!-- Q ring - upper corners -->
+  <rect x="4" y="3" width="1" height="1" fill="#6C5CE7"/>
+  <rect x="3" y="4" width="1" height="1" fill="#6C5CE7"/>
+  <rect x="10" y="3" width="1" height="1" fill="#9A8CF0"/>
+  <rect x="11" y="4" width="1" height="1" fill="#AA9CF3"/>
+
+  <!-- Q ring - left side -->
+  <rect x="2" y="5" width="1" height="1" fill="#6C5CE7"/>
+  <rect x="2" y="6" width="1" height="1" fill="#6C5CE7"/>
+  <rect x="2" y="7" width="1" height="1" fill="#5C6CE7"/>
+  <rect x="2" y="8" width="1" height="1" fill="#4C7CE7"/>
+  <rect x="2" y="9" width="1" height="1" fill="#3C8CE0"/>
+  <rect x="3" y="10" width="1" height="1" fill="#2C9CD8"/>
+
+  <!-- Q ring - right side -->
+  <rect x="12" y="5" width="1" height="1" fill="#55B5D0"/>
+  <rect x="12" y="6" width="1" height="1" fill="#33C0CB"/>
+  <rect x="12" y="7" width="1" height="1" fill="#1DCACC"/>
+  <rect x="12" y="8" width="1" height="1" fill="#00CEC9"/>
+  <rect x="12" y="9" width="1" height="1" fill="#00CEC9"/>
+  <rect x="11" y="10" width="1" height="1" fill="#00CEC9"/>
+
+  <!-- Q ring - lower corners -->
+  <rect x="4" y="11" width="1" height="1" fill="#1AACBE"/>
+  <rect x="10" y="11" width="1" height="1" fill="#00CEC9"/>
+
+  <!-- Q ring - bottom -->
+  <rect x="5" y="12" width="1" height="1" fill="#1AACBE"/>
+  <rect x="6" y="12" width="1" height="1" fill="#0DC0C5"/>
+  <rect x="7" y="12" width="1" height="1" fill="#00CEC9"/>
+  <rect x="8" y="12" width="1" height="1" fill="#00CEC9"/>
+  <rect x="9" y="12" width="1" height="1" fill="#00CEC9"/>
+
+  <!-- Center dot -->
+  <rect x="7" y="7" width="2" height="2" fill="#00CEC9" opacity="0.9"/>
+
+  <!-- Q tail - diagonal -->
+  <rect x="9" y="9" width="1" height="1" fill="#00CEC9"/>
+  <rect x="10" y="10" width="1" height="1" fill="#00C8C2"/>
+  <rect x="11" y="11" width="1" height="1" fill="#00C2BB"/>
+  <rect x="12" y="12" width="1" height="1" fill="#00B894"/>
+</svg>

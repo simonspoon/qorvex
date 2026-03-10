@@ -24,7 +24,9 @@ qorvex-agent/
 │   ├── BridgingHeader.h       # Swift-ObjC bridging header
 │   ├── QorvexAgentTests.swift # XCTest entry point (testRunAgent)
 │   └── App/
-│       └── QorvexAgentApp.swift  # Minimal SwiftUI app stub (required by xcodegen)
+│       ├── QorvexAgentApp.swift  # Minimal SwiftUI app stub (required by xcodegen)
+│       └── Assets.xcassets/      # Asset catalog
+│           └── AppIcon.appiconset/  # App icon (1024x1024 PNG)
 ```
 
 ---
