@@ -242,6 +242,9 @@ enum Command {
     /// Terminate the target application
     StopTarget,
 
+    /// Get metadata about the target application
+    TargetInfo,
+
     /// Boot a simulator device
     BootDevice {
         /// Device UDID
@@ -500,6 +503,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::StopTarget => {
             send_command(&mut client, IpcRequest::StopTarget, &cli).await
         }
+        Command::TargetInfo => {
+            execute_target_info(&mut client, &cli).await
+        }
         Command::StartSession => {
             send_command(&mut client, IpcRequest::StartSession, &cli).await
         }
@@ -577,6 +583,58 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, tag: Option<
         _ => {
             Err(CliError::Protocol("Unexpected response type".to_string()))
         }
+    }
+}
+
+async fn execute_target_info(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::GetTargetInfo)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::ActionResult { success, message, data, .. } => {
+            if !success {
+                return Err(CliError::ActionFailed(message));
+            }
+            if cli.format == OutputFormat::Json {
+                if let Some(ref d) = data {
+                    println!("{}", d);
+                }
+            } else if let Some(ref d) = data {
+                if let Ok(info) = serde_json::from_str::<serde_json::Value>(d) {
+                    if let Some(bid) = info.get("bundle_id").and_then(|v| v.as_str()) {
+                        println!("Bundle ID:    {}", bid);
+                    }
+                    if let Some(name) = info.get("display_name").and_then(|v| v.as_str()) {
+                        if !name.is_empty() {
+                            println!("Display Name: {}", name);
+                        }
+                    }
+                    if let Some(ver) = info.get("version").and_then(|v| v.as_str()) {
+                        if !ver.is_empty() {
+                            println!("Version:      {}", ver);
+                        }
+                    }
+                    if let Some(build) = info.get("build").and_then(|v| v.as_str()) {
+                        if !build.is_empty() {
+                            println!("Build:        {}", build);
+                        }
+                    }
+                    if let Some(state) = info.get("state").and_then(|v| v.as_str()) {
+                        println!("State:        {}", state);
+                    }
+                } else {
+                    println!("{}", d);
+                }
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { success, message } => {
+            if success { Ok(()) } else { Err(CliError::ActionFailed(message)) }
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 

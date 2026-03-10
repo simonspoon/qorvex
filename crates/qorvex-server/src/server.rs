@@ -94,6 +94,9 @@ impl ServerState {
             IpcRequest::StartTarget => self.handle_start_target().await,
             IpcRequest::StopTarget => self.handle_stop_target().await,
 
+            // ── Target Info ─────────────────────────────────────────────
+            IpcRequest::GetTargetInfo => self.handle_get_target_info().await,
+
             // ── Configuration ───────────────────────────────────────────
             IpcRequest::SetTarget { bundle_id } => self.handle_set_target(&bundle_id).await,
             IpcRequest::SetTimeout { timeout_ms } => {
@@ -601,6 +604,43 @@ impl ServerState {
         };
         self.log_action(ActionType::StopTarget, action_result, None, None).await;
         response
+    }
+
+    // ── Target Info ──────────────────────────────────────────────────────
+
+    async fn handle_get_target_info(&self) -> IpcResponse {
+        let driver = if let Some(guard) = self.shared_driver.lock().await.as_ref() {
+            guard.clone()
+        } else if let Some(executor) = &self.executor {
+            executor.driver().clone()
+        } else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No automation backend connected.".to_string(),
+            };
+        };
+        match driver.get_target_info().await {
+            Ok(mut info) => {
+                // Enrich with the bundle_id from server state if the driver
+                // didn't provide it.
+                if info.bundle_id.is_empty() {
+                    if let Some(ref bid) = self.target_bundle_id {
+                        info.bundle_id = bid.clone();
+                    }
+                }
+                let json = serde_json::to_string(&info).unwrap_or_default();
+                IpcResponse::ActionResult {
+                    success: true,
+                    message: format!("{} ({})", info.display_name, info.bundle_id),
+                    screenshot: None,
+                    data: Some(json),
+                }
+            }
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("get-target-info failed: {}", e),
+            },
+        }
     }
 
     // ── On-Demand Fetching ──────────────────────────────────────────────

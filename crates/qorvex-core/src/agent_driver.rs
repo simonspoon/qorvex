@@ -40,7 +40,7 @@ use tracing::{debug, info, warn, instrument};
 use crate::agent_client::{AgentClient, AgentClientError};
 use crate::agent_lifecycle::AgentLifecycle;
 use crate::element::UIElement;
-use crate::driver::{AutomationDriver, DriverError};
+use crate::driver::{AutomationDriver, DriverError, TargetInfo};
 use crate::protocol::{Request, Response};
 
 // ---------------------------------------------------------------------------
@@ -745,6 +745,28 @@ impl AutomationDriver for AgentDriver {
         // Remember for restore after recovery.
         *self.target_bundle_id.lock().await = Some(bundle_id.to_string());
         Ok(())
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    async fn get_target_info(&self) -> Result<TargetInfo, DriverError> {
+        let bundle_id = self.target_bundle_id.lock().await.clone()
+            .unwrap_or_default();
+        let response = self.send(&Request::GetTargetInfo).await?;
+        match response {
+            Response::TargetInfo { json } => {
+                // Agent returns partial info (state); we merge in the bundle_id
+                // we already know from the Rust side.
+                let mut info: TargetInfo = serde_json::from_str(&json)
+                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
+                if info.bundle_id.is_empty() {
+                    info.bundle_id = bundle_id;
+                }
+                Ok(info)
+            }
+            other => Err(DriverError::CommandFailed(format!(
+                "unexpected response: {other:?}"
+            ))),
+        }
     }
 }
 

@@ -555,6 +555,7 @@ impl App {
             },
             "start-target" => IpcRequest::StartTarget,
             "stop-target" => IpcRequest::StopTarget,
+            "get-target-info" => IpcRequest::GetTargetInfo,
             "set-timeout" => {
                 let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
@@ -741,6 +742,41 @@ impl App {
                             self.add_output(format_result(false, &message));
                         }
                     }
+                    "get-target-info" => {
+                        if success {
+                            if let Some(ref d) = data {
+                                if let Ok(info) = serde_json::from_str::<serde_json::Value>(d) {
+                                    if let Some(bid) = info.get("bundle_id").and_then(|v| v.as_str()) {
+                                        self.add_output(format!("  Bundle ID:    {}", bid).into());
+                                    }
+                                    if let Some(name) = info.get("display_name").and_then(|v| v.as_str()) {
+                                        if !name.is_empty() {
+                                            self.add_output(format!("  Display Name: {}", name).into());
+                                        }
+                                    }
+                                    if let Some(ver) = info.get("version").and_then(|v| v.as_str()) {
+                                        if !ver.is_empty() {
+                                            self.add_output(format!("  Version:      {}", ver).into());
+                                        }
+                                    }
+                                    if let Some(build) = info.get("build").and_then(|v| v.as_str()) {
+                                        if !build.is_empty() {
+                                            self.add_output(format!("  Build:        {}", build).into());
+                                        }
+                                    }
+                                    if let Some(state) = info.get("state").and_then(|v| v.as_str()) {
+                                        self.add_output(format!("  State:        {}", state).into());
+                                    }
+                                } else {
+                                    self.add_output(format_result(true, &message));
+                                }
+                            } else {
+                                self.add_output(format_result(true, &message));
+                            }
+                        } else {
+                            self.add_output(format_result(false, &message));
+                        }
+                    }
                     _ => {
                         self.add_output(format_result(success, &message));
                     }
@@ -802,6 +838,7 @@ impl App {
             "  start-agent [path]       Connect to / build+launch agent",
             "  stop-agent               Stop managed agent process",
             "  set-target <bundle_id>   Set target app for automation",
+            "  get-target-info          Get target app metadata",
             "  start-target             Launch the target application",
             "  stop-target              Terminate the target application",
             "  set-timeout [ms]         Set/get default wait timeout",

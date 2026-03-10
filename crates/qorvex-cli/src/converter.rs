@@ -110,6 +110,7 @@ impl LogConverter {
             }
             ActionType::StartTarget => Some("qorvex start-target".to_string()),
             ActionType::StopTarget => Some("qorvex stop-target".to_string()),
+            ActionType::GetTargetInfo => Some("qorvex get-target-info".to_string()),
             ActionType::LogComment { message } => {
                 Some(format!("# {}", message))
             }

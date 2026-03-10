@@ -132,6 +132,12 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[],
     },
     CommandDef {
+        name: "get-target-info",
+        description: "Get target app metadata",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
         name: "start-target",
         description: "Launch the target application",
         args: &[],

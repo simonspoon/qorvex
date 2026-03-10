@@ -27,6 +27,7 @@
 //! ```
 
 use async_trait::async_trait;
+use serde::{Serialize, Deserialize};
 use thiserror::Error;
 
 use crate::element::UIElement;
@@ -321,6 +322,16 @@ fn collect_elements(elements: &[UIElement], result: &mut Vec<UIElement>) {
         }
         collect_elements(&element.children, result);
     }
+}
+
+/// Metadata about the currently targeted application.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetInfo {
+    pub bundle_id: String,
+    pub display_name: String,
+    pub version: String,
+    pub build: String,
+    pub state: String,
 }
 
 /// Trait for backend-agnostic iOS Simulator UI automation.
@@ -655,6 +666,14 @@ pub trait AutomationDriver: Send + Sync {
     /// an error.
     async fn set_target(&self, _bundle_id: &str) -> Result<(), DriverError> {
         Err(DriverError::CommandFailed("set_target not supported by this backend".to_string()))
+    }
+
+    /// Get metadata about the currently targeted application.
+    ///
+    /// Not all backends support this. The default implementation returns
+    /// an error.
+    async fn get_target_info(&self) -> Result<TargetInfo, DriverError> {
+        Err(DriverError::CommandFailed("get_target_info not supported by this backend".to_string()))
     }
 }
 

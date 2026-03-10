@@ -174,6 +174,9 @@ pub enum ActionType {
     /// Terminate the target application.
     StopTarget,
 
+    /// Get metadata about the currently targeted application.
+    GetTargetInfo,
+
     /// Quit the REPL entirely.
     Quit,
 }
@@ -197,6 +200,7 @@ impl ActionType {
             ActionType::SetTarget { .. } => "set_target",
             ActionType::StartTarget => "start_target",
             ActionType::StopTarget => "stop_target",
+            ActionType::GetTargetInfo => "get_target_info",
             ActionType::StartSession => "start_session",
             ActionType::EndSession => "end_session",
             ActionType::Quit => "quit",
@@ -219,6 +223,7 @@ impl ActionType {
             ActionType::SetTarget { .. } => "Target",
             ActionType::StartTarget => "StartTarget",
             ActionType::StopTarget => "StopTarget",
+            ActionType::GetTargetInfo => "TargetInfo",
             ActionType::StartSession => "Start",
             ActionType::EndSession => "End",
             ActionType::Quit => "Quit",
@@ -250,7 +255,7 @@ impl ActionType {
             }
             ActionType::LogComment { message } => message.clone(),
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
-            ActionType::StartTarget | ActionType::StopTarget => String::new(),
+            ActionType::StartTarget | ActionType::StopTarget | ActionType::GetTargetInfo => String::new(),
             _ => String::new(),
         }
     }

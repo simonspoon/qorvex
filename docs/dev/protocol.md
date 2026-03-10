@@ -53,6 +53,7 @@ Both sides use a sequential reader pattern (`ProtocolCursor` in Rust, equivalent
 | Screenshot | `0x11` | (none) | Capture screenshot as PNG |
 | SetTarget | `0x12` | `String bundle_id` | Switch target application |
 | FindElement | `0x13` | `String selector`, `Bool by_label`, `Optional String element_type` | Find single element with live hittability |
+| GetTargetInfo | `0x14` | (none) | Get metadata (state, version, build, display name) for the current target app |
 
 ### Special OpCodes (Agent-initiated)
 
@@ -73,6 +74,7 @@ Response messages use opcode `0xA0` with a sub-discriminator byte immediately fo
 | Screenshot | `0x03` | `Raw Bytes data` | PNG screenshot bytes |
 | Value | `0x04` | `Optional String value` | Element value (may be absent) |
 | Element | `0x05` | `String json` | Single element as JSON |
+| TargetInfo | `0x06` | `String json` | Target app metadata as JSON (`bundle_id`, `display_name`, `version`, `build`, `state`) |
 
 ### Bare Error (0x99)
 

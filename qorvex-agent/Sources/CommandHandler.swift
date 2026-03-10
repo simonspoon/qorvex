@@ -97,6 +97,9 @@ final class CommandHandler {
 
         case .findElement(let selector, let byLabel, let elementType):
             return handleFindElement(selector: selector, byLabel: byLabel, elementType: elementType)
+
+        case .getTargetInfo:
+            return handleGetTargetInfo()
         }
     }
 
@@ -456,6 +459,38 @@ final class CommandHandler {
         app = XCUIApplication(bundleIdentifier: bundleId)
         disableQuiescenceWaiting(app)
         return .ok
+    }
+
+    // MARK: - Get target info
+
+    private func handleGetTargetInfo() -> AgentResponse {
+        // XCUIApplication always knows its state, even if not running
+        let state: String
+        switch app.state {
+        case .notRunning:
+            state = "not_running"
+        case .runningBackgroundSuspended:
+            state = "suspended"
+        case .runningBackground:
+            state = "running_background"
+        case .runningForeground:
+            state = "running_foreground"
+        case .unknown:
+            state = "unknown"
+        @unknown default:
+            state = "unknown"
+        }
+
+        let info: [String: String] = [
+            "state": state,
+        ]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: info),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return .error(message: "Failed to serialize target info")
+        }
+
+        return .targetInfo(json: jsonString)
     }
 
     // MARK: - Find element

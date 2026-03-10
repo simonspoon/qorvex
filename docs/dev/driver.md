@@ -70,11 +70,12 @@ These methods have default implementations that dump the full tree and search lo
 | `async fn find_element_with_type(&self, selector: &str, by_label: bool, element_type: Option<&str>) -> Result<Option<UIElement>, DriverError>` | Find with optional type filter |
 | `async fn find_element_with_read_timeout(&self, selector: &str, by_label: bool, element_type: Option<&str>, read_timeout_ms: Option<u64>) -> Result<Option<UIElement>, DriverError>` | Like `find_element_with_type` but hints the IPC read timeout; default ignores the hint and delegates to `find_element_with_type` |
 
-### App Switching (Default Returns Error)
+### App Switching / Target Info (Default Returns Error)
 
 | Method | Description |
 |--------|-------------|
 | `async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError>` | Switch the target application bundle ID |
+| `async fn get_target_info(&self) -> Result<TargetInfo, DriverError>` | Get metadata for the current target app |
 
 ### Recovery Observability (Default Returns 0)
 
@@ -107,6 +108,23 @@ enum DriverConfig {
 | `Io(std::io::Error)` | Underlying I/O error |
 | `JsonParse(String)` | JSON parsing failed with details |
 | `UsbTunnel(UsbTunnelError)` | USB tunnel error (physical devices) |
+
+## `TargetInfo`
+
+Metadata about the currently targeted application, returned by `get_target_info()`.
+
+```rust
+pub struct TargetInfo {
+    pub bundle_id: String,      // e.g. "com.example.MyApp"
+    pub display_name: String,   // CFBundleDisplayName / CFBundleName
+    pub version: String,        // CFBundleShortVersionString (e.g. "2.1.0")
+    pub build: String,          // CFBundleVersion (e.g. "42")
+    pub state: String,          // XCUIApplication state: "unknown", "not_running",
+                                //   "running_background", "running_foreground", "suspended"
+}
+```
+
+All fields are non-optional `String`. Unknown or unavailable values are represented as empty strings. The `bundle_id` is enriched by the Rust side (`AgentDriver` and the server) from locally stored state when the agent returns an empty value.
 
 ## `UIElement`
 

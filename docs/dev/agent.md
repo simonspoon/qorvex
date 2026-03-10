@@ -16,7 +16,7 @@ qorvex-agent/
 ├── Makefile                   # Build/test via xcodebuild with auto-detection of booted simulator
 ├── Sources/
 │   ├── AgentServer.swift      # TCP server (Network framework, NWListener)
-│   ├── Protocol.swift         # Binary protocol codec (13 request opcodes, 6 response types)
+│   ├── Protocol.swift         # Binary protocol codec (14 request opcodes, 7 response types)
 │   ├── CommandHandler.swift   # XCUIElement action dispatch
 │   ├── UITreeSerializer.swift # Accessibility tree snapshot to JSON serialization
 │   ├── ObjCExceptionCatcher.h # Exception bridge header

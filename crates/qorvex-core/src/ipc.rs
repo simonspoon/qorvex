@@ -133,6 +133,9 @@ pub enum IpcRequest {
     /// Terminate the target application on the simulator.
     StopTarget,
 
+    /// Get metadata about the currently targeted application.
+    GetTargetInfo,
+
     // --- Configuration ---
     /// Set the target app bundle ID.
     SetTarget { bundle_id: String },
