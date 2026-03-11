@@ -5,7 +5,7 @@
 - macOS with Xcode and iOS Simulators installed
 - Rust 1.70+
 - [xcodegen](https://github.com/yonaskolb/XcodeGen) (for building the Swift agent)
-- For physical devices: USB-connected iOS device with developer mode enabled
+- For physical devices: iOS device with developer mode enabled, connected via USB or on the same WiFi network (iOS 17+)
 
 ## Installation
 
@@ -116,12 +116,15 @@ Shows a live video feed of the Simulator window and the action log from your REP
 
 ## Simulator vs Physical Device
 
-| | Simulator | Physical Device |
-|---|---|---|
-| Connection | Direct TCP on localhost:8080 | USB tunnel via usbmuxd |
-| Setup | Boot simulator, start agent | Connect via USB, enable developer mode |
-| REPL command | `boot-device <udid>` | `use-device <udid>` |
-| Performance | Fast | Slightly slower (USB overhead) |
+| | Simulator | Physical Device (WiFi) | Physical Device (USB) |
+|---|---|---|---|
+| Connection | Direct TCP on localhost:8080 | Direct TCP via mDNS (`<Name>.local`) | USB tunnel (usbmuxd or CoreDevice) |
+| Setup | Boot simulator, start agent | Same WiFi network, developer mode on | USB cable, developer mode on |
+| Select in REPL | `boot-device <udid>` | `use-device <udid>` | `use-device <udid>` |
+| Launch app | `start-target` | `xcrun devicectl device process launch` | `xcrun devicectl device process launch` |
+| Performance | Fast | ~1–2s per command | ~1–2s per command |
+
+> **Note:** `start-target` and `stop-target` use `xcrun simctl` and only work for simulators.
 
 ## What Gets Created
 

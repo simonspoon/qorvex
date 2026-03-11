@@ -94,19 +94,38 @@ Swift agent process lifecycle management: build (`xcodebuild build-for-testing`)
 Configured via `AgentLifecycleConfig` (port, timeout, retries).
 
 Two orchestration methods:
-- `ensure_running()` -- always rebuilds the agent
-- `ensure_agent_ready()` -- skips rebuild if agent is already reachable
+- `ensure_running()` -- build (skipped if `.xctestrun` products already exist), spawn, wait with retries
+- `ensure_agent_ready()` -- skips rebuild and respawn if agent is already reachable
 
 ## Connection Modes
 
 | Target | Connection | Implementation |
 |--------|-----------|---------------|
-| Simulators | Direct TCP (port 8080) | `AgentDriver::direct(host, port)` |
-| Physical devices | USB tunnel via usbmuxd | `AgentDriver::usb_device(udid, port)` using `idevice` crate |
+| Simulators | Direct TCP (localhost:8080) | `AgentDriver::direct(host, port)` |
+| Physical devices — WiFi (localNetwork) | Direct TCP via mDNS (`<Name>.local`) | `AgentDriver::direct(hostname, port)` |
+| Physical devices — USB (tunneld) | TCP through pymobiledevice3 tunnel | `AgentDriver::tunneld(tunnel_address, port)` using `usb_tunnel::connect_tunneld` |
+| Physical devices — USB (CoreDevice) | Userspace TCP via CoreDevice proxy (iOS 17+) | `AgentDriver::core_device(udid, port)` via `core_device_tunnel::connect_coredevice` |
+| Physical devices — USB (usbmuxd) | USB tunnel via usbmuxd | `AgentDriver::usb_device(udid, port)` using `idevice` crate |
 
-For physical devices, the `usb_tunnel` module provides:
-- `list_devices()` -- enumerate connected USB devices
-- `connect(udid, port)` -- establish port forwarding via usbmuxd
+`ServerState.handle_use_device()` auto-selects the connection mode when a physical device is chosen:
+- `localNetwork` transport → sets `direct_host = Some("<Name>.local")` (WiFi direct)
+- Wired + tunneld running → sets `tunnel_address` from tunneld
+- Wired + no tunneld → sets `use_core_device = true` (native CoreDevice, iOS 17+)
+- Falls back to `usb_device` if discovered via usbmuxd
+
+The `usb_tunnel` module provides:
+- `list_devices()` -- enumerate USB-connected devices via usbmuxd
+- `connect(udid, port)` -- port forwarding through usbmuxd
+- `list_tunneld_devices()` -- enumerate devices via pymobiledevice3 tunneld
+- `connect_tunneld(tunnel_address, port)` -- TCP through a tunneld address
+
+The `coredevice` module provides:
+- `list_devices()` -- enumerate paired physical devices via `xcrun devicectl list devices`
+
+The `core_device_tunnel` module provides:
+- `connect_coredevice(udid, port)` -- userspace TCP tunnel via `CoreDeviceProxy` (iOS 17+, no root required)
+
+> **CoreDevice tunnel details:** Resolves the device via mDNS as `{UDID}.coredevice.local` (not `{Name}.local`). Requires a pairing file at `~/Library/Lockdown/PairRecords/{UDID}.plist` or `/var/db/lockdown/{UDID}.plist`. If either is missing, connection fails with `PairingFileNotFound`.
 
 ## Runtime Directory Structure
 
@@ -182,5 +201,6 @@ The live image pipeline runs in `spawn_decode_task` (blocking thread) and feeds 
 ## External Dependencies
 
 - `xcrun simctl` -- Apple's simulator control CLI (comes with Xcode)
-- `idevice` -- Rust crate for USB device tunneling via usbmuxd
+- `xcrun devicectl` -- Apple's physical device control CLI (Xcode 15+, used by `coredevice::list_devices`)
+- `idevice` -- Rust crate for USB device tunneling via usbmuxd and CoreDevice proxy
 - `xcodebuild` -- builds and launches the Swift agent

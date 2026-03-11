@@ -66,6 +66,16 @@ pub struct AgentLifecycleConfig {
     pub max_retries: u32,
     /// Whether the target is a physical device (`true`) or a simulator (`false`).
     pub is_physical: bool,
+    /// Tunnel address for reaching the device (tunneld or direct network).
+    ///
+    /// When set, the lifecycle uses this address instead of usbmuxd for
+    /// readiness polling and connectivity checks on physical devices.
+    pub tunnel_address: Option<String>,
+    /// mDNS hostname for direct TCP connection to a WiFi (localNetwork) device.
+    ///
+    /// When set, the lifecycle connects directly to `{direct_host}:{agent_port}`
+    /// instead of going through usbmuxd or the CoreDevice tunnel.
+    pub direct_host: Option<String>,
 }
 
 impl AgentLifecycleConfig {
@@ -77,6 +87,8 @@ impl AgentLifecycleConfig {
             startup_timeout: Duration::from_secs(30),
             max_retries: 3,
             is_physical: false,
+            tunnel_address: None,
+            direct_host: None,
         }
     }
 }
@@ -305,7 +317,24 @@ impl AgentLifecycle {
 
         loop {
             if self.config.is_physical {
-                let reachable = crate::usb_tunnel::connect(&self.udid, self.config.agent_port).await.is_ok();
+                // For physical devices, try connection methods in order:
+                // 1. Direct host (WiFi/localNetwork — mDNS hostname)
+                // 2. Tunnel address (tunneld)
+                // 3. USB tunnel (usbmuxd) → CoreDevice tunnel (iOS 17+)
+                let reachable = if let Some(ref host) = self.config.direct_host {
+                    let host_port = format!("{}:{}", host, self.config.agent_port);
+                    tokio::net::TcpStream::connect(host_port.as_str()).await.is_ok()
+                } else if let Some(ref tunnel_addr) = self.config.tunnel_address {
+                    crate::usb_tunnel::connect_tunneld(tunnel_addr, self.config.agent_port).await.is_ok()
+                } else {
+                    // Try usbmuxd first, then fall back to native CoreDevice tunnel (iOS 17+).
+                    let via_usb = crate::usb_tunnel::connect(&self.udid, self.config.agent_port).await.is_ok();
+                    if via_usb {
+                        true
+                    } else {
+                        crate::core_device_tunnel::connect_coredevice(&self.udid, self.config.agent_port).await.is_ok()
+                    }
+                };
                 if reachable {
                     info!("agent ready");
                     return Ok(());
@@ -395,18 +424,39 @@ impl AgentLifecycle {
     /// Returns `true` if the agent responds to a heartbeat within 2 seconds,
     /// `false` otherwise.
     pub async fn is_agent_reachable(&self) -> bool {
-        let addr = self.agent_addr();
-        let check = async {
-            let mut client = AgentClient::new(addr);
-            client.connect().await.ok()?;
-            let result = client.heartbeat().await;
-            client.disconnect();
-            result.ok()
-        };
-
-        tokio::time::timeout(Duration::from_secs(2), check)
-            .await
-            .is_ok_and(|inner| inner.is_some())
+        if self.config.is_physical {
+            let check = async {
+                if let Some(ref host) = self.config.direct_host {
+                    let host_port = format!("{}:{}", host, self.config.agent_port);
+                    tokio::net::TcpStream::connect(host_port.as_str()).await.is_ok()
+                } else if let Some(ref tunnel_addr) = self.config.tunnel_address {
+                    crate::usb_tunnel::connect_tunneld(tunnel_addr, self.config.agent_port).await.is_ok()
+                } else {
+                    // Try usbmuxd first, then fall back to native CoreDevice tunnel (iOS 17+).
+                    let via_usb = crate::usb_tunnel::connect(&self.udid, self.config.agent_port).await.is_ok();
+                    if via_usb {
+                        true
+                    } else {
+                        crate::core_device_tunnel::connect_coredevice(&self.udid, self.config.agent_port).await.is_ok()
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(2), check)
+                .await
+                .unwrap_or(false)
+        } else {
+            let addr = self.agent_addr();
+            let check = async {
+                let mut client = AgentClient::new(addr);
+                client.connect().await.ok()?;
+                let result = client.heartbeat().await;
+                client.disconnect();
+                result.ok()
+            };
+            tokio::time::timeout(Duration::from_secs(2), check)
+                .await
+                .is_ok_and(|inner| inner.is_some())
+        }
     }
 
     /// Ensure the agent is running, starting it only if not already reachable.
@@ -453,6 +503,8 @@ mod tests {
             startup_timeout: Duration::from_secs(10),
             max_retries: 5,
             is_physical: false,
+            tunnel_address: None,
+            direct_host: None,
         };
 
         assert_eq!(config.project_dir, PathBuf::from("/tmp/custom"));
@@ -562,6 +614,8 @@ mod tests {
             startup_timeout: Duration::from_secs(15),
             max_retries: 2,
             is_physical: false,
+            tunnel_address: None,
+            direct_host: None,
         };
         let lifecycle = AgentLifecycle::new("ABCD-1234".to_string(), config);
 
@@ -585,6 +639,8 @@ mod tests {
             startup_timeout: Duration::from_secs(30),
             max_retries: 3,
             is_physical: false,
+            tunnel_address: None,
+            direct_host: None,
         };
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 
@@ -599,6 +655,8 @@ mod tests {
             startup_timeout: Duration::from_secs(1),
             max_retries: 3,
             is_physical: false,
+            tunnel_address: None,
+            direct_host: None,
         };
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 

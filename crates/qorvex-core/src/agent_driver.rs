@@ -4,11 +4,13 @@
 //! trait by communicating with a Swift accessibility agent using the binary
 //! protocol defined in [`crate::protocol`].
 //!
-//! The driver supports two connection modes:
+//! The driver supports three connection modes:
 //!
 //! - **Direct TCP** (simulators): connects to a host:port via TCP socket
 //! - **USB tunnel** (physical devices): tunnels through usbmuxd to a port on
 //!   the device, using the [`usb_tunnel`](crate::usb_tunnel) module
+//! - **Tunneld** (CoreDevice devices): connects through a pymobiledevice3
+//!   tunnel to the agent on the device
 //!
 //! # Example
 //!
@@ -91,6 +93,20 @@ pub enum ConnectionTarget {
         /// The TCP port the agent listens on *on the device*.
         device_port: u16,
     },
+    /// Connect via a pymobiledevice3 tunnel (CoreDevice devices).
+    Tunneld {
+        /// Tunnel IP address (typically IPv6 link-local from tunneld).
+        tunnel_address: String,
+        /// The agent TCP port on the device.
+        agent_port: u16,
+    },
+    /// Connect via the native CoreDevice tunnel (iOS 17+, no pymobiledevice3 required).
+    CoreDevice {
+        /// The device UDID.
+        udid: String,
+        /// The TCP port the agent listens on inside the tunnel.
+        port: u16,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +164,38 @@ impl AgentDriver {
         }
     }
 
+    /// Creates a driver that will connect through a pymobiledevice3 tunnel.
+    ///
+    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
+    pub fn tunneld(tunnel_address: impl Into<String>, agent_port: u16) -> Self {
+        Self {
+            target: ConnectionTarget::Tunneld {
+                tunnel_address: tunnel_address.into(),
+                agent_port,
+            },
+            client: Mutex::new(None),
+            lifecycle: None,
+            recovery_count: AtomicU64::new(0),
+            target_bundle_id: Mutex::new(None),
+        }
+    }
+
+    /// Creates a driver that will connect via the native CoreDevice tunnel (iOS 17+).
+    ///
+    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
+    pub fn core_device(udid: impl Into<String>, port: u16) -> Self {
+        Self {
+            target: ConnectionTarget::CoreDevice {
+                udid: udid.into(),
+                port,
+            },
+            client: Mutex::new(None),
+            lifecycle: None,
+            recovery_count: AtomicU64::new(0),
+            target_bundle_id: Mutex::new(None),
+        }
+    }
+
     /// Creates a driver for the given host and port (direct TCP).
     ///
     /// This is a convenience alias for [`direct`](Self::direct) that maintains
@@ -175,6 +223,8 @@ impl AgentDriver {
         match &self.target {
             ConnectionTarget::Direct { host, .. } => host,
             ConnectionTarget::UsbDevice { udid, .. } => udid,
+            ConnectionTarget::Tunneld { tunnel_address, .. } => tunnel_address,
+            ConnectionTarget::CoreDevice { udid, .. } => udid,
         }
     }
 
@@ -183,6 +233,8 @@ impl AgentDriver {
         match &self.target {
             ConnectionTarget::Direct { port, .. } => *port,
             ConnectionTarget::UsbDevice { device_port, .. } => *device_port,
+            ConnectionTarget::Tunneld { agent_port, .. } => *agent_port,
+            ConnectionTarget::CoreDevice { port, .. } => *port,
         }
     }
 
@@ -213,6 +265,16 @@ impl AgentDriver {
             }
             ConnectionTarget::UsbDevice { udid, device_port } => {
                 let stream = crate::usb_tunnel::connect(udid, *device_port).await?;
+                AgentClient::from_stream(stream)
+            }
+            ConnectionTarget::Tunneld { tunnel_address, agent_port } => {
+                let stream = crate::usb_tunnel::connect_tunneld(tunnel_address, *agent_port).await?;
+                AgentClient::from_stream(stream)
+            }
+            ConnectionTarget::CoreDevice { udid, port } => {
+                let stream = crate::core_device_tunnel::connect_coredevice(udid, *port)
+                    .await
+                    .map_err(|e| DriverError::ConnectionLost(e.to_string()))?;
                 AgentClient::from_stream(stream)
             }
         };
@@ -901,6 +963,34 @@ mod tests {
                 if udid == "ABC-123" && *device_port == 8080
         ));
         assert_eq!(driver.host(), "ABC-123");
+        assert_eq!(driver.port(), 8080);
+        assert!(!driver.is_connected());
+    }
+
+    #[test]
+    fn tunneld_creates_tunneld_target() {
+        let driver = AgentDriver::tunneld("fd00::1", 8080);
+        assert!(matches!(
+            driver.target(),
+            ConnectionTarget::Tunneld { tunnel_address, agent_port }
+                if tunnel_address == "fd00::1" && *agent_port == 8080
+        ));
+        assert_eq!(driver.host(), "fd00::1");
+        assert_eq!(driver.port(), 8080);
+        assert!(!driver.is_connected());
+    }
+
+    #[test]
+    fn core_device_creates_core_device_target() {
+        let driver = AgentDriver::core_device("00008140-000A15911AE3001C", 8080);
+        match driver.target() {
+            ConnectionTarget::CoreDevice { udid, port } => {
+                assert_eq!(udid, "00008140-000A15911AE3001C");
+                assert_eq!(*port, 8080);
+            }
+            other => panic!("Expected CoreDevice, got: {:?}", other),
+        }
+        assert_eq!(driver.host(), "00008140-000A15911AE3001C");
         assert_eq!(driver.port(), 8080);
         assert!(!driver.is_connected());
     }

@@ -60,6 +60,8 @@ If a read timeout occurs, the next command will report "Not connected". For mana
 3. Check the exact identifier/label: IDs are case-sensitive
 4. Try glob matching: `tap login-*` to match partial IDs
 5. Is the element in a different app? Use `set-target <bundle_id>` to switch
+6. **`get-value` with a dynamic label (e.g., "Tapped: 3"):** Label matching requires an exact match — `get-value -l "Tapped:"` won't find `"Tapped: 3"`. Use `screen-info` and grep for the current text, or use the element's accessibility ID instead.
+7. **Tapping a label doesn't focus the input field:** Tapping a `StaticText` element (e.g., the "Password" label above a text field) does not focus the associated field. Tap the field itself by its accessibility ID — use `screen-info` to find it (look for `TextField` or `SecureTextField` type).
 
 ## Element Not Hittable
 
@@ -86,9 +88,52 @@ If a read timeout occurs, the next command will report "Not connected". For mana
 
 **The agent handles this automatically** using coordinate-based tapping (`XCUICoordinate.tap()`) rather than element-based tapping, which bypasses the quiescence pathway. If you are on an older agent build, rebuild with `make -C qorvex-agent build`.
 
-## USB Tunnel Issues (Physical Devices)
+## Physical Device Issues
 
-**Symptoms:** "USB tunnel error", device not found
+### Device Not Found
+
+**Symptoms:** `list-physical-devices` returns empty, `use-device` says "not found"
+
+**Check:**
+1. USB: Is the device connected? `xcrun xctrace list devices`
+2. USB: Is usbmuxd running? `launchctl list | grep usbmuxd`
+3. USB: Has the device been trusted? Check for the "Trust This Computer" dialog
+4. WiFi: Is developer mode enabled? Settings → Privacy & Security → Developer Mode
+5. WiFi: Is the device on the same network? `ping <DeviceName>.local`
+6. Both: Run `qorvex list-physical-devices` — WiFi devices are discovered via CoreDevice (`xcrun devicectl`); USB devices via usbmuxd
+7. **Device name shows as "Unknown":** `list-physical-devices` uses usbmuxd which may not have the human-readable name. To confirm the device name, run `xcrun devicectl list devices` instead.
+
+### "Unlock X to Continue" / Agent Startup Timeout
+
+**Symptoms:** `start-agent` fails with "Agent failed to become ready within timeout", or xcodebuild prints "Unlock Hillbilly to Continue"
+
+**Cause:** The device is locked. xcodebuild waits indefinitely for unlock, but `start-agent` times out at 30s.
+
+**Fix:** Unlock the device and retry `start-agent`. Keep the device unlocked during the entire session.
+
+### LaunchServicesDataMismatch
+
+**Symptoms:** `start-agent` fails with "LaunchServices GUID and sequence number do not match expected values"
+
+**Cause:** iOS launch services cache is stale, often after a fresh deploy.
+
+**Fix:** Retry `start-agent` — the second attempt almost always succeeds. If it persists, delete the test runner app from the device (via Settings → General → iPhone Storage) and retry.
+
+### screen-info Hangs on Physical Device
+
+**Symptoms:** `screen-info` command hangs for minutes or is killed with timeout when the home screen is visible.
+
+**Cause:** The home screen (SpringBoard) has thousands of accessibility elements. Querying it over a network connection can take minutes.
+
+**Fix:** Always launch your target app before calling `screen-info`:
+```bash
+xcrun devicectl device process launch --device <udid> com.example.myapp
+qorvex screen-info   # Fast — only queries the app's element tree
+```
+
+### USB Tunnel Issues (USB-connected devices)
+
+**Symptoms:** "USB tunnel error", device not found on USB
 
 **Check:**
 

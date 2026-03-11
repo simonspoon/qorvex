@@ -19,8 +19,8 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Command | REPL | CLI |
 |---------|------|-----|
 | List simulators | `list-devices` | `qorvex list-devices` |
-| List physical devices | `list-physical-devices` | — |
-| Select device | `use-device <udid>` | — |
+| List physical devices | `list-physical-devices` | `qorvex list-physical-devices` |
+| Select device | `use-device <udid>` | `qorvex use-device <udid>` |
 | Boot + select | `boot-device <udid>` | `qorvex boot-device <udid>` |
 
 ## Agent Management
@@ -33,6 +33,12 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Get target app info | `get-target-info` | `qorvex target-info` |
 | Launch target app | `start-target` | `qorvex start-target` |
 | Terminate target app | `stop-target` | `qorvex stop-target` |
+
+> **Physical devices:** `start-target` and `stop-target` use `xcrun simctl` and only work for simulators. To launch or terminate an app on a physical device:
+> ```bash
+> xcrun devicectl device process launch --device <udid> <bundle_id>
+> xcrun devicectl device process terminate --device <udid> <bundle_id>
+> ```
 | Set default timeout | `set-timeout <ms>` | — |
 
 ## UI Interaction

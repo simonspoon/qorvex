@@ -34,6 +34,19 @@ pub struct ServerState {
     pub default_timeout_ms: u64,
     pub agent_port: u16,
     pub is_physical_device: bool,
+    /// The tunnel address for CoreDevice devices (from tunneld), if available.
+    pub tunnel_address: Option<String>,
+    /// Whether the selected physical device should use the native CoreDevice tunnel.
+    ///
+    /// Set to `true` when a device is selected via the CoreDevice path (not usbmuxd,
+    /// not tunneld). When `true` and `tunnel_address` is `None`, `AgentDriver::core_device()`
+    /// is used instead of `AgentDriver::usb_device()`.
+    pub use_core_device: bool,
+    /// mDNS hostname for direct TCP connection to a WiFi (localNetwork) device.
+    ///
+    /// When set, `AgentDriver::direct(hostname, port)` is used instead of any
+    /// tunnel approach. Typical value: `"Hillbilly.local"`.
+    pub direct_host: Option<String>,
 }
 
 impl ServerState {
@@ -66,6 +79,9 @@ impl ServerState {
             default_timeout_ms: 5000,
             agent_port,
             is_physical_device: false,
+            tunnel_address: None,
+            use_core_device: false,
+            direct_host: None,
         }
     }
 
@@ -162,12 +178,33 @@ impl ServerState {
                     info!("Auto-starting agent");
                     let mut lc_config = AgentLifecycleConfig::new(agent_source_dir);
                     lc_config.agent_port = self.agent_port;
+                    if self.is_physical_device {
+                        lc_config.is_physical = true;
+                        lc_config.tunnel_address = self.tunnel_address.clone();
+                        lc_config.direct_host = self.direct_host.clone();
+                    }
                     let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
                     match lifecycle.ensure_agent_ready().await {
                         Ok(()) => {
-                            let mut driver = AgentDriver::direct("127.0.0.1", self.agent_port)
-                                .with_lifecycle(lifecycle.clone());
+                            let mut driver = if self.is_physical_device {
+                                if let Some(ref addr) = self.tunnel_address {
+                                    AgentDriver::tunneld(addr.clone(), self.agent_port)
+                                        .with_lifecycle(lifecycle.clone())
+                                } else if let Some(ref host) = self.direct_host {
+                                    AgentDriver::direct(host.clone(), self.agent_port)
+                                        .with_lifecycle(lifecycle.clone())
+                                } else if self.use_core_device {
+                                    AgentDriver::core_device(udid.clone(), self.agent_port)
+                                        .with_lifecycle(lifecycle.clone())
+                                } else {
+                                    AgentDriver::usb_device(udid.clone(), self.agent_port)
+                                        .with_lifecycle(lifecycle.clone())
+                                }
+                            } else {
+                                AgentDriver::direct("127.0.0.1", self.agent_port)
+                                    .with_lifecycle(lifecycle.clone())
+                            };
                             self.agent_lifecycle = Some(lifecycle);
                             match driver.connect().await {
                                 Ok(()) => {
@@ -217,21 +254,38 @@ impl ServerState {
     }
 
     async fn handle_list_physical_devices(&mut self) -> IpcResponse {
-        match qorvex_core::usb_tunnel::list_devices().await {
-            Ok(devices) => IpcResponse::PhysicalDeviceList {
-                devices: devices
-                    .into_iter()
-                    .map(|d| qorvex_core::ipc::PhysicalDeviceInfo {
-                        udid: d.udid,
-                        name: None,
-                        connection: d.connection.to_string(),
-                    })
-                    .collect(),
-            },
-            Err(e) => IpcResponse::Error {
-                message: format!("USB tunnel error: {}", e),
-            },
+        let mut devices = Vec::new();
+        let mut seen_udids = std::collections::HashSet::new();
+
+        // 1. Try usbmuxd
+        if let Ok(usb_devices) = qorvex_core::usb_tunnel::list_devices().await {
+            for d in usb_devices {
+                seen_udids.insert(d.udid.clone());
+                devices.push(qorvex_core::ipc::PhysicalDeviceInfo {
+                    udid: d.udid,
+                    name: None,
+                    connection: d.connection.to_string(),
+                });
+            }
         }
+
+        // 2. Try CoreDevice
+        if let Ok(cd_devices) = qorvex_core::coredevice::list_devices().await {
+            for d in cd_devices {
+                let udid = d.udid.clone().unwrap_or(d.identifier.clone());
+                if seen_udids.contains(&udid) {
+                    continue;
+                }
+                seen_udids.insert(udid.clone());
+                devices.push(qorvex_core::ipc::PhysicalDeviceInfo {
+                    udid,
+                    name: Some(d.name),
+                    connection: d.transport_type,
+                });
+            }
+        }
+
+        IpcResponse::PhysicalDeviceList { devices }
     }
 
     async fn handle_use_device(&mut self, udid: &str) -> IpcResponse {
@@ -251,6 +305,8 @@ impl ServerState {
         // Check if the UDID belongs to a known simulator.
         if self.cached_devices.iter().any(|d| d.udid == udid) {
             self.is_physical_device = false;
+            self.use_core_device = false;
+            self.direct_host = None;
             self.simulator_udid = Some(udid.to_string());
             self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
             return IpcResponse::CommandResult {
@@ -259,33 +315,70 @@ impl ServerState {
             };
         }
         // Not a simulator — check physical devices via USB tunnel.
-        match qorvex_core::usb_tunnel::list_devices().await {
-            Ok(physical_devices) => {
-                if physical_devices.iter().any(|d| d.udid == udid) {
-                    self.is_physical_device = true;
-                    self.simulator_udid = Some(udid.to_string());
-                    self.executor = None;
-                    IpcResponse::CommandResult {
-                        success: true,
-                        message: format!("Using physical device {}", udid),
-                    }
+        if let Ok(physical_devices) = qorvex_core::usb_tunnel::list_devices().await {
+            if physical_devices.iter().any(|d| d.udid == udid) {
+                self.is_physical_device = true;
+                self.use_core_device = false;
+                self.direct_host = None;
+                self.simulator_udid = Some(udid.to_string());
+                self.tunnel_address = None;
+                self.executor = None;
+                return IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Using physical device {}", udid),
+                };
+            }
+        }
+
+        // Not in usbmuxd — check CoreDevice
+        if let Ok(cd_devices) = qorvex_core::coredevice::list_devices().await {
+            // Find by traditional UDID or CoreDevice identifier
+            if let Some(cd) = cd_devices.iter().find(|d| {
+                d.udid.as_deref() == Some(udid) || d.identifier == udid
+            }) {
+                self.is_physical_device = true;
+                self.simulator_udid = Some(udid.to_string());
+                self.executor = None;
+                self.direct_host = None;
+
+                if cd.transport_type == "localNetwork" {
+                    // WiFi device — connect directly to mDNS hostname (no tunnel needed).
+                    // iOS 17+ uses RPPairing which idevice doesn't support yet,
+                    // so we skip the CoreDevice tunnel and go straight to TCP.
+                    self.direct_host = cd.hostname.clone()
+                        .or_else(|| Some(format!("{}.local", cd.name)));
+                    self.tunnel_address = None;
+                    self.use_core_device = false;
                 } else {
-                    IpcResponse::CommandResult {
-                        success: false,
-                        message: format!(
-                            "Device {} not found (not a simulator and not connected via USB)",
-                            udid
-                        ),
+                    // Wired device — try tunneld first, then native CoreDevice tunnel.
+                    if let Ok(tunneld_devices) = qorvex_core::usb_tunnel::list_tunneld_devices().await {
+                        if let Some(td) = tunneld_devices.iter().find(|t| t.udid == udid) {
+                            self.tunnel_address = Some(td.tunnel_address.clone());
+                            self.use_core_device = false;
+                        } else {
+                            self.tunnel_address = None;
+                            self.use_core_device = true;
+                        }
+                    } else {
+                        self.tunnel_address = None;
+                        self.use_core_device = true;
                     }
                 }
+
+                return IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Using physical device {} ({})", cd.name, udid),
+                };
             }
-            Err(_) => IpcResponse::CommandResult {
-                success: false,
-                message: format!(
-                    "Device {} not found (not a simulator and not connected via USB)",
-                    udid
-                ),
-            },
+        }
+
+        // None found
+        IpcResponse::CommandResult {
+            success: false,
+            message: format!(
+                "Device {} not found (not a simulator, not USB, and not a CoreDevice)",
+                udid
+            ),
         }
     }
 
@@ -337,14 +430,27 @@ impl ServerState {
             lc_config.agent_port = self.agent_port;
             if self.is_physical_device {
                 lc_config.is_physical = true;
+                lc_config.tunnel_address = self.tunnel_address.clone();
+                lc_config.direct_host = self.direct_host.clone();
             }
             let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
             match lifecycle.ensure_running().await {
                 Ok(()) => {
                     let mut driver = if self.is_physical_device {
-                        AgentDriver::usb_device(udid.clone(), self.agent_port)
-                            .with_lifecycle(lifecycle.clone())
+                        if let Some(ref addr) = self.tunnel_address {
+                            AgentDriver::tunneld(addr.clone(), self.agent_port)
+                                .with_lifecycle(lifecycle.clone())
+                        } else if let Some(ref host) = self.direct_host {
+                            AgentDriver::direct(host.clone(), self.agent_port)
+                                .with_lifecycle(lifecycle.clone())
+                        } else if self.use_core_device {
+                            AgentDriver::core_device(udid.clone(), self.agent_port)
+                                .with_lifecycle(lifecycle.clone())
+                        } else {
+                            AgentDriver::usb_device(udid.clone(), self.agent_port)
+                                .with_lifecycle(lifecycle.clone())
+                        }
                     } else {
                         AgentDriver::direct("127.0.0.1", self.agent_port)
                             .with_lifecycle(lifecycle.clone())
@@ -377,14 +483,27 @@ impl ServerState {
                 lc_config.agent_port = self.agent_port;
                 if self.is_physical_device {
                     lc_config.is_physical = true;
+                    lc_config.tunnel_address = self.tunnel_address.clone();
+                    lc_config.direct_host = self.direct_host.clone();
                 }
                 let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
                 match lifecycle.ensure_agent_ready().await {
                     Ok(()) => {
                         let mut driver = if self.is_physical_device {
-                            AgentDriver::usb_device(udid.clone(), self.agent_port)
-                                .with_lifecycle(lifecycle.clone())
+                            if let Some(ref addr) = self.tunnel_address {
+                                AgentDriver::tunneld(addr.clone(), self.agent_port)
+                                    .with_lifecycle(lifecycle.clone())
+                            } else if let Some(ref host) = self.direct_host {
+                                AgentDriver::direct(host.clone(), self.agent_port)
+                                    .with_lifecycle(lifecycle.clone())
+                            } else if self.use_core_device {
+                                AgentDriver::core_device(udid.clone(), self.agent_port)
+                                    .with_lifecycle(lifecycle.clone())
+                            } else {
+                                AgentDriver::usb_device(udid.clone(), self.agent_port)
+                                    .with_lifecycle(lifecycle.clone())
+                            }
                         } else {
                             AgentDriver::direct("127.0.0.1", self.agent_port)
                                 .with_lifecycle(lifecycle.clone())
@@ -415,13 +534,23 @@ impl ServerState {
                 lc_config.agent_port = self.agent_port;
                 if self.is_physical_device {
                     lc_config.is_physical = true;
+                    lc_config.tunnel_address = self.tunnel_address.clone();
+                    lc_config.direct_host = self.direct_host.clone();
                 }
                 let lifecycle = AgentLifecycle::new(udid.clone(), lc_config);
 
                 match lifecycle.wait_for_ready().await {
                     Ok(()) => {
                         let mut driver = if self.is_physical_device {
-                            AgentDriver::usb_device(udid.clone(), self.agent_port)
+                            if let Some(ref addr) = self.tunnel_address {
+                                AgentDriver::tunneld(addr.clone(), self.agent_port)
+                            } else if let Some(ref host) = self.direct_host {
+                                AgentDriver::direct(host.clone(), self.agent_port)
+                            } else if self.use_core_device {
+                                AgentDriver::core_device(udid.clone(), self.agent_port)
+                            } else {
+                                AgentDriver::usb_device(udid.clone(), self.agent_port)
+                            }
                         } else {
                             AgentDriver::direct("127.0.0.1", self.agent_port)
                         };
@@ -812,14 +941,30 @@ impl ServerState {
 
 /// Validates a UDID format.
 ///
-/// Accepts simulator UDIDs (8-4-4-4-12 hex, 36 chars) and physical device
-/// UDIDs (40 contiguous hex characters).
+/// Accepts:
+/// - Simulator UDIDs: 8-4-4-4-12 hex groups (36 chars, e.g., `A1B2C3D4-…`)
+/// - Legacy physical UDIDs: 40 contiguous hex characters
+/// - Modern physical UDIDs (ECID-based): 8 hex + dash + 16 hex (25 chars,
+///   e.g., `00008140-000A15911AE3001C`)
+/// - CoreDevice identifiers: UUID format (same as simulator format)
 fn is_valid_udid(udid: &str) -> bool {
-    // Physical device UDID: 40 contiguous hex characters.
+    // Legacy physical device UDID: 40 contiguous hex characters.
     if udid.len() == 40 && udid.chars().all(|c| c.is_ascii_hexdigit()) {
         return true;
     }
-    // Simulator UDID: 8-4-4-4-12 hex groups separated by dashes (36 chars total).
+    // Modern ECID-based physical UDID: 8 hex digits, dash, 16 hex digits (25 chars).
+    if udid.len() == 25 {
+        let parts: Vec<&str> = udid.split('-').collect();
+        if parts.len() == 2
+            && parts[0].len() == 8
+            && parts[1].len() == 16
+            && parts[0].chars().all(|c| c.is_ascii_hexdigit())
+            && parts[1].chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return true;
+        }
+    }
+    // Simulator / CoreDevice UUID: 8-4-4-4-12 hex groups (36 chars).
     if udid.len() != 36 {
         return false;
     }

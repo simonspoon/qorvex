@@ -21,8 +21,9 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 
 | Target | Connection | Setup |
 |--------|------------|-------|
-| Simulators | Direct TCP (port 8080) | Build with Xcode, install via `simctl` |
-| Physical devices | USB tunnel via usbmuxd | Build with Xcode, deploy to device |
+| Simulators | Direct TCP (localhost:8080) | Build with Xcode, install via `simctl` |
+| Physical devices — WiFi | Direct TCP via mDNS (`<Name>.local`) | Same WiFi network, developer mode on |
+| Physical devices — USB | USB tunnel (usbmuxd or CoreDevice, iOS 17+) | USB cable, developer mode on |
 
 ## Requirements
 
@@ -30,7 +31,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 - Rust 1.70+
 - **For Swift agent**: [xcodegen](https://github.com/yonaskolb/XcodeGen) and Xcode (see `qorvex-agent/README.md`)
 - **For qorvex-streamer**: macOS 13+ and Screen Recording permission
-- **For physical devices**: USB-connected iOS device with developer mode enabled
+- **For physical devices**: iOS device with developer mode enabled; connected via USB or on the same WiFi network (iOS 17+)
 
 ## Installation
 
@@ -298,7 +299,7 @@ done
                               iOS Simulator / Device
 ```
 
-`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it tunnels through usbmuxd.
+`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it connects via direct mDNS (WiFi), usbmuxd tunnel (USB), or the native CoreDevice proxy (iOS 17+).
 
 ### Directory Structure
 

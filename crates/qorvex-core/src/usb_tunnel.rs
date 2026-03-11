@@ -170,6 +170,78 @@ pub async fn connect(
     Ok(Box::new(socket))
 }
 
+// ---------------------------------------------------------------------------
+// Tunneld support (pymobiledevice3)
+// ---------------------------------------------------------------------------
+
+/// A device available through pymobiledevice3's tunneld service.
+#[derive(Debug, Clone)]
+pub struct TunneldDeviceInfo {
+    /// Device UDID.
+    pub udid: String,
+    /// Tunnel IP address (typically an IPv6 link-local address).
+    pub tunnel_address: String,
+    /// Tunnel port number.
+    pub tunnel_port: u16,
+    /// Network interface name.
+    pub interface: String,
+}
+
+/// List physical devices available through pymobiledevice3's tunneld service.
+///
+/// Returns an empty list if tunneld is not running or unreachable.
+pub async fn list_tunneld_devices() -> Result<Vec<TunneldDeviceInfo>, UsbTunnelError> {
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    let addr = SocketAddr::new(
+        IpAddr::from_str("127.0.0.1").unwrap(),
+        idevice::tunneld::DEFAULT_PORT,
+    );
+
+    match idevice::tunneld::get_tunneld_devices(addr).await {
+        Ok(devices) => Ok(devices
+            .into_iter()
+            .map(|(udid, td)| TunneldDeviceInfo {
+                udid,
+                tunnel_address: td.tunnel_address,
+                tunnel_port: td.tunnel_port,
+                interface: td.interface,
+            })
+            .collect()),
+        Err(_) => Ok(Vec::new()), // tunneld not running — return empty, not error
+    }
+}
+
+/// Connect to a device's agent port through a pymobiledevice3 tunnel.
+///
+/// This establishes a direct TCP connection to the tunnel address/port provided
+/// by tunneld, then connects to the agent port on the device.
+///
+/// Note: tunneld already handles port forwarding — the `tunnel_address:agent_port`
+/// gives us a direct TCP path to the device.
+pub async fn connect_tunneld(
+    tunnel_address: &str,
+    agent_port: u16,
+) -> Result<Box<dyn AgentStream>, UsbTunnelError> {
+    use tokio::net::TcpStream;
+
+    // IPv6 addresses must be wrapped in brackets for the socket address string.
+    let addr = if tunnel_address.contains(':') {
+        format!("[{}]:{}", tunnel_address, agent_port)
+    } else {
+        format!("{}:{}", tunnel_address, agent_port)
+    };
+
+    let stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| UsbTunnelError::ConnectionFailed(format!(
+            "Failed to connect to tunnel {}:{}: {}", tunnel_address, agent_port, e
+        )))?;
+
+    Ok(Box::new(stream))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

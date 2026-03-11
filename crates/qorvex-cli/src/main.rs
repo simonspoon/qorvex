@@ -254,6 +254,17 @@ enum Command {
     /// List available simulator devices
     ListDevices,
 
+    /// List connected physical iOS devices
+    #[command(name = "list-physical-devices")]
+    ListPhysicalDevices,
+
+    /// Select a device (simulator or physical) by UDID
+    #[command(name = "use-device")]
+    UseDevice {
+        /// Device UDID
+        udid: String,
+    },
+
     /// Convert a JSONL action log to a shell script
     Convert {
         /// Path to the JSONL log file (reads from stdin if omitted)
@@ -520,6 +531,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Command::Log => {
             get_log(&mut client, &cli).await
+        }
+        Command::UseDevice { ref udid } => {
+            send_command(&mut client, IpcRequest::UseDevice { udid: udid.clone() }, &cli).await
+        }
+        Command::ListPhysicalDevices => {
+            list_physical_devices(&mut client, &cli).await
         }
         // These commands are handled before IPC connection above
         Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start | Command::Completions { .. } => unreachable!(),
@@ -899,6 +916,34 @@ async fn start_all(cli: &Cli) -> Result<(), CliError> {
         }
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response".to_string())),
+    }
+}
+
+async fn list_physical_devices(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::ListPhysicalDevices)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::PhysicalDeviceList { devices } => {
+            if cli.format == OutputFormat::Json {
+                println!("{}", serde_json::to_string_pretty(&devices)
+                    .map_err(|e| CliError::Protocol(e.to_string()))?);
+            } else {
+                if devices.is_empty() {
+                    eprintln!("No physical devices found");
+                } else {
+                    for device in &devices {
+                        let name = device.name.as_deref().unwrap_or("Unknown");
+                        println!("{} -- {} ({})", device.udid, name, device.connection);
+                    }
+                }
+            }
+            Ok(())
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 
