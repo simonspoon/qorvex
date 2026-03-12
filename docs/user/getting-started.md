@@ -19,7 +19,7 @@ cd qorvex
 ./install.sh
 ```
 
-`install.sh` installs all Rust binaries and records the agent project path in `~/.qorvex/config.json` so sessions can auto-build the Swift agent.
+`install.sh` installs all Rust binaries, records the agent project path in `~/.qorvex/config.json`, and pre-builds the Swift agent for **both simulator and physical devices**. Run it on every machine where you intend to use qorvex.
 
 ### Individual Crates
 
@@ -36,7 +36,7 @@ make -C qorvex-agent build      # XCTest automation agent
 make -C qorvex-streamer build   # Live video streamer (macOS 13+)
 ```
 
-`install.sh` builds both automatically.
+`install.sh` builds both automatically (agent is built for both simulator and physical devices).
 
 ## Shell Completions (Optional)
 

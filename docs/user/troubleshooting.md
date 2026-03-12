@@ -103,6 +103,14 @@ If a read timeout occurs, the next command will report "Not connected". For mana
 6. Both: Run `qorvex list-physical-devices` — WiFi devices are discovered via CoreDevice (`xcrun devicectl`); USB devices via usbmuxd
 7. **Device name shows as "Unknown":** `list-physical-devices` uses usbmuxd which may not have the human-readable name. To confirm the device name, run `xcrun devicectl list devices` instead.
 
+### Agent Startup Timeout on Physical Device After Fresh Install
+
+**Symptoms:** `start-agent` times out on a physical device immediately after running `install.sh` on a new machine, even though it works on the original machine.
+
+**Cause:** Older `install.sh` versions only pre-built the agent for simulator. The lifecycle manager detected the simulator `.xctestrun`, skipped the build, then silently failed to install on the physical device. Current `install.sh` builds for both platforms — re-running it fixes this.
+
+**Fix:** Re-run `./install.sh` from the qorvex source directory to build the physical device agent bundle.
+
 ### "Unlock X to Continue" / Agent Startup Timeout
 
 **Symptoms:** `start-agent` fails with "Agent failed to become ready within timeout", or xcodebuild prints "Unlock Hillbilly to Continue"

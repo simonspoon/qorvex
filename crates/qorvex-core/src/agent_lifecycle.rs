@@ -370,11 +370,25 @@ impl AgentLifecycle {
         if !products_dir.exists() {
             return false;
         }
+        // The xctestrun filename encodes the platform, e.g.:
+        //   QorvexAgentUITests_iphonesimulator18.0-arm64.xctestrun  (simulator)
+        //   QorvexAgentUITests_iphoneos18.0-arm64.xctestrun          (physical)
+        // Only match the platform that matches is_physical to avoid using
+        // a simulator build on a physical device (or vice versa).
+        let platform_prefix = if self.config.is_physical {
+            "iphoneos"
+        } else {
+            "iphonesimulator"
+        };
         std::fs::read_dir(&products_dir)
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().is_some_and(|ext| ext == "xctestrun"))
+                    .any(|e| {
+                        let name = e.file_name();
+                        let name = name.to_string_lossy();
+                        name.ends_with(".xctestrun") && name.contains(platform_prefix)
+                    })
             })
             .unwrap_or(false)
     }

@@ -53,11 +53,21 @@ fi
 echo "Agent source recorded: $AGENT_SOURCE_DIR"
 
 # Build agent for simulator (generic destination, no specific UDID needed)
-echo "Building qorvex-agent..."
+echo "Building qorvex-agent for simulator..."
 xcodebuild build-for-testing \
     -project "$AGENT_SOURCE_DIR/QorvexAgent.xcodeproj" \
     -scheme QorvexAgentUITests \
     -destination "generic/platform=iOS Simulator" \
     -derivedDataPath "$AGENT_SOURCE_DIR/.build" \
     -quiet
-echo "qorvex-agent built."
+echo "qorvex-agent built (simulator)."
+
+# Build agent for physical devices
+echo "Building qorvex-agent for physical devices..."
+xcodebuild build-for-testing \
+    -project "$AGENT_SOURCE_DIR/QorvexAgent.xcodeproj" \
+    -scheme QorvexAgentUITests \
+    -destination "generic/platform=iOS" \
+    -derivedDataPath "$AGENT_SOURCE_DIR/.build" \
+    -quiet
+echo "qorvex-agent built (physical)."

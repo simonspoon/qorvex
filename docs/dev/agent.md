@@ -148,11 +148,13 @@ Without bidirectional keepalive, the OS can silently drop idle connections and o
 
 |  | `ensure_running` | `ensure_agent_ready` |
 |---|---|---|
-| Builds agent | Only if `Build/Products/*.xctestrun` absent (pre-built by `install.sh` skips build) | No -- checks TCP reachability first; delegates to `ensure_running` if unreachable |
+| Builds agent | Only if no platform-matching `Build/Products/*.xctestrun` exists (pre-built by `install.sh` skips build; checks `iphoneos` vs `iphonesimulator` in filename) | No -- checks TCP reachability first; delegates to `ensure_running` if unreachable |
 | Use case | Fresh start or known stale agent | Idempotent startup, skip build/spawn if already running |
 | Retry behavior | Up to `max_retries + 1` attempts (spawn + health check) | Attempts health check first; delegates to `ensure_running` only if unreachable |
 
-`ensure_running` calls `is_agent_built()` to detect whether a `.xctestrun` file exists in `.build/Build/Products/`. If pre-built products are present (normal case after `install.sh`), the build step is skipped and startup reduces to spawn + health check.
+`ensure_running` calls `is_agent_built()` to detect whether a platform-matching `.xctestrun` file exists in `.build/Build/Products/`. The check looks for `iphonesimulator` in the filename when targeting a simulator and `iphoneos` when targeting a physical device — so a simulator pre-build does **not** satisfy a physical device session (and vice versa). If pre-built products are present (normal case after `install.sh`), the build step is skipped and startup reduces to spawn + health check.
+
+> **Pitfall:** Before this check was platform-aware, `install.sh` only pre-built for simulator. On a fresh install, selecting a physical device would silently use the simulator `.xctestrun`, causing `xcodebuild test-without-building` to fail (stderr suppressed) and `wait_for_ready` to time out. `install.sh` now builds for both platforms.
 
 ## Crash Recovery (via `AgentDriver::with_lifecycle`)
 
