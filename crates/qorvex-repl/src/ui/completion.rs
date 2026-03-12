@@ -26,9 +26,28 @@ impl<'a> CompletionPopup<'a> {
         }
     }
 
+    /// Calculate the width needed to display the widest candidate (including border).
+    fn content_width(&self) -> u16 {
+        let max_content = self.state.candidates.iter().map(|c| {
+            let kind_len = match c.kind {
+                CandidateKind::Command => 3,
+                CandidateKind::ElementId | CandidateKind::ElementSelectorById => 2,
+                CandidateKind::ElementLabel | CandidateKind::ElementSelectorByLabel => 3,
+                CandidateKind::DeviceUdid => 3,
+                CandidateKind::BundleId => 3,
+                CandidateKind::Option => 3,
+            };
+            // text + "  " + description + " [Kind]"
+            c.text.len() + 2 + c.description.len() + 2 + kind_len + 1
+        }).max().unwrap_or(0);
+        // +2 for borders
+        (max_content + 2) as u16
+    }
+
     /// Calculate the area for the popup based on cursor position.
     pub fn area(&self, cursor_x: u16, cursor_y: u16, container: Rect) -> Rect {
-        let width = 50u16;
+        let max_width = (container.width as f64 * 0.95) as u16;
+        let width = 50u16.max(self.content_width()).min(max_width);
         let height = (self.state.candidates.len().min(self.max_visible) + 2) as u16;
 
         // Position above the input line if not enough space below

@@ -68,6 +68,7 @@ The REPL provides a terminal UI with:
 - Tab completion for commands, element IDs, and device UDIDs
 - Output history with scrolling (arrow keys)
 - Session and device status in the title bar
+- Animated spinner in the input area while commands process (non-blocking — TUI stays responsive)
 
 Controls:
 - `Tab` — Trigger/navigate completion popup

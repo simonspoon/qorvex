@@ -34,8 +34,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_output(frame, app, chunks[1]);
     render_input(frame, app, chunks[2]);
 
-    // Render completion popup if visible
-    if app.completion.visible {
+    // Render completion popup if visible (not during processing)
+    if app.completion.visible && !app.is_processing {
         render_completion(frame, app, chunks[2]);
     }
 }
@@ -185,19 +185,30 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
 
     let inner = block.inner(area);
 
-    let input_text = app.input.value();
-    let input_line = Line::from(vec![
-        Span::styled("> ", Theme::prompt()),
-        Span::raw(input_text),
-    ]);
+    if app.is_processing {
+        let spinner = app.spinner_frame();
+        let input_line = Line::from(vec![
+            Span::styled(format!("{} ", spinner), Theme::prompt()),
+            Span::styled(&app.processing_label, Theme::muted()),
+            Span::styled(" …", Theme::muted()),
+        ]);
+        let paragraph = Paragraph::new(input_line).block(block);
+        frame.render_widget(paragraph, area);
+    } else {
+        let input_text = app.input.value();
+        let input_line = Line::from(vec![
+            Span::styled("> ", Theme::prompt()),
+            Span::raw(input_text),
+        ]);
 
-    let paragraph = Paragraph::new(input_line).block(block);
-    frame.render_widget(paragraph, area);
+        let paragraph = Paragraph::new(input_line).block(block);
+        frame.render_widget(paragraph, area);
 
-    // Position cursor
-    let cursor_x = inner.x + 2 + app.input.visual_cursor() as u16;
-    let cursor_y = inner.y;
-    frame.set_cursor_position((cursor_x, cursor_y));
+        // Position cursor
+        let cursor_x = inner.x + 2 + app.input.visual_cursor() as u16;
+        let cursor_y = inner.y;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn render_completion(frame: &mut Frame, app: &App, input_area: Rect) {

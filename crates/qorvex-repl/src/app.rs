@@ -82,6 +82,20 @@ impl SelectionState {
     }
 }
 
+/// Result from a background command execution task.
+pub(crate) struct CommandResult {
+    pub cmd: String,
+    pub result: Result<IpcResponse, String>,
+}
+
+/// Result from the deferred startup task.
+struct StartupResult {
+    client: Option<IpcClient>,
+    messages: Vec<Line<'static>>,
+    cached_elements: Vec<UIElement>,
+    cached_devices: Vec<SimulatorDevice>,
+}
+
 /// Application state.
 pub struct App {
     // --- TUI state (kept as-is) ---
@@ -135,6 +149,18 @@ pub struct App {
     pub elements_loading: bool,
     /// When the current fetch started (for 100ms threshold).
     fetch_started_at: Option<Instant>,
+
+    // --- Command processing (spinner) ---
+    /// Whether a command is currently being processed.
+    pub is_processing: bool,
+    /// Label shown next to the spinner (the command name).
+    pub processing_label: String,
+    /// When processing started (for spinner frame calculation).
+    pub processing_start: Option<Instant>,
+    /// Receiver for command execution results from the spawned task.
+    cmd_result_rx: Option<mpsc::Receiver<(CommandResult, IpcClient)>>,
+    /// Receiver for startup result (deferred server connect + session start).
+    startup_rx: Option<mpsc::Receiver<StartupResult>>,
 }
 
 /// Ensure the qorvex-server process is running for the given session.
@@ -170,15 +196,47 @@ fn ensure_server_running(session_name: &str) {
 
 impl App {
     /// Create a new App instance.
-    pub async fn new(session_name: String) -> Self {
-        // Ensure server is running
-        ensure_server_running(&session_name);
+    ///
+    /// Returns immediately with the TUI ready to render. Call `startup()`
+    /// after the first frame to connect to the server in the background.
+    pub fn new(session_name: String) -> Self {
+        // On-demand element fetch task
+        let (element_tx, element_rx) = mpsc::channel::<Vec<UIElement>>(4);
+        let (fetch_trigger_tx, mut fetch_trigger_rx) = mpsc::channel::<()>(1);
+        let fetch_session = session_name.clone();
+        tokio::spawn(async move {
+            while fetch_trigger_rx.recv().await.is_some() {
+                while fetch_trigger_rx.try_recv().is_ok() {}
+                let elements = match IpcClient::connect(&fetch_session).await {
+                    Ok(mut client) => {
+                        match client.send(&IpcRequest::FetchElements).await {
+                            Ok(IpcResponse::CompletionData { elements, .. }) => elements,
+                            _ => Vec::new(),
+                        }
+                    }
+                    Err(_) => Vec::new(),
+                };
+                if element_tx.send(elements).await.is_err() {
+                    break;
+                }
+            }
+        });
 
-        // Connect IPC client
-        let client = match IpcClient::connect(&session_name).await {
-            Ok(c) => Some(c),
-            Err(_) => None,
-        };
+        // On-demand app list fetch task
+        let (app_tx, app_rx) = mpsc::channel::<Vec<InstalledApp>>(4);
+        let (app_fetch_trigger_tx, mut app_fetch_trigger_rx) = mpsc::channel::<()>(1);
+        tokio::spawn(async move {
+            while app_fetch_trigger_rx.recv().await.is_some() {
+                while app_fetch_trigger_rx.try_recv().is_ok() {}
+                let apps = match Simctl::get_booted_udid() {
+                    Ok(udid) => Simctl::list_apps(&udid).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                };
+                if app_tx.send(apps).await.is_err() {
+                    break;
+                }
+            }
+        });
 
         let mut app = Self {
             input: Input::default(),
@@ -188,33 +246,47 @@ impl App {
             selection: SelectionState::default(),
             output_area: None,
             should_quit: false,
-            session_name: session_name.clone(),
-            client,
+            session_name,
+            client: None,
             cached_elements: Vec::new(),
             cached_devices: Vec::new(),
             cached_apps: Vec::new(),
-            app_update_rx: None,
-            app_fetch_trigger_tx: None,
+            app_update_rx: Some(app_rx),
+            app_fetch_trigger_tx: Some(app_fetch_trigger_tx),
             apps_loading: false,
             apps_fetch_started_at: None,
-            element_update_rx: None,
-            fetch_trigger_tx: None,
+            element_update_rx: Some(element_rx),
+            fetch_trigger_tx: Some(fetch_trigger_tx),
             active_fetch_command: None,
             elements_loading: false,
             fetch_started_at: None,
+            is_processing: false,
+            processing_label: String::new(),
+            processing_start: None,
+            cmd_result_rx: None,
+            startup_rx: None,
         };
 
-        // Show connection status
-        let sock = socket_path(&session_name);
-        if app.client.is_some() {
-            app.add_output(Line::from(format!(
-                "Connected to server | Session: {} | Socket: {:?}",
-                session_name, sock
-            )));
+        app.add_output(Line::from("Type 'help' for available commands."));
+        app.add_output(Line::from(""));
 
-            // Send StartSession
-            if let Some(ref mut client) = app.client {
-                match client.send(&IpcRequest::StartSession).await {
+        app
+    }
+
+    /// Create a new App with blocking server startup (for batch mode).
+    pub async fn new_blocking(session_name: String) -> Self {
+        let mut app = Self::new(session_name.clone());
+
+        ensure_server_running(&session_name);
+
+        let sock = socket_path(&session_name);
+        match IpcClient::connect(&session_name).await {
+            Ok(mut c) => {
+                app.add_output(Line::from(format!(
+                    "Connected to server | Session: {} | Socket: {:?}",
+                    session_name, sock
+                )));
+                match c.send(&IpcRequest::StartSession).await {
                     Ok(IpcResponse::CommandResult { success, message }) => {
                         app.add_output(format_result(success, &message));
                     }
@@ -226,77 +298,116 @@ impl App {
                     }
                     _ => {}
                 }
-            }
-
-            // Fetch initial completion data
-            if let Some(ref mut client) = app.client {
-                match client.send(&IpcRequest::GetCompletionData).await {
+                match c.send(&IpcRequest::GetCompletionData).await {
                     Ok(IpcResponse::CompletionData { elements, devices }) => {
                         app.cached_elements = elements;
                         app.cached_devices = devices;
                     }
                     _ => {}
                 }
+                app.client = Some(c);
             }
-        } else {
-            app.add_output(Line::from(format!(
-                "Failed to connect to server | Session: {} | Socket: {:?}",
-                session_name, sock
-            )));
-            app.add_output(Line::from("Is qorvex-server running? Try: qorvex-server -s <session>"));
+            Err(_) => {
+                app.add_output(Line::from(format!(
+                    "Failed to connect to server | Session: {} | Socket: {:?}",
+                    session_name, sock
+                )));
+                app.add_output(Line::from("Is qorvex-server running? Try: qorvex-server -s <session>"));
+            }
         }
 
-        app.add_output(Line::from("Type 'help' for available commands."));
-        app.add_output(Line::from(""));
-
-        // On-demand element fetch task
-        let (element_tx, element_rx) = mpsc::channel::<Vec<UIElement>>(4);
-        let (fetch_trigger_tx, mut fetch_trigger_rx) = mpsc::channel::<()>(1);
-        app.element_update_rx = Some(element_rx);
-        app.fetch_trigger_tx = Some(fetch_trigger_tx);
-        let fetch_session = session_name.clone();
-        tokio::spawn(async move {
-            while fetch_trigger_rx.recv().await.is_some() {
-                // Drain any extra triggers that queued up
-                while fetch_trigger_rx.try_recv().is_ok() {}
-
-                let elements = match IpcClient::connect(&fetch_session).await {
-                    Ok(mut client) => {
-                        match client.send(&IpcRequest::FetchElements).await {
-                            Ok(IpcResponse::CompletionData { elements, .. }) => elements,
-                            _ => Vec::new(),
-                        }
-                    }
-                    Err(_) => Vec::new(),
-                };
-                // Always send a result so loading state clears
-                if element_tx.send(elements).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        // On-demand app list fetch task
-        let (app_tx, app_rx) = mpsc::channel::<Vec<InstalledApp>>(4);
-        let (app_fetch_trigger_tx, mut app_fetch_trigger_rx) = mpsc::channel::<()>(1);
-        app.app_update_rx = Some(app_rx);
-        app.app_fetch_trigger_tx = Some(app_fetch_trigger_tx);
-        tokio::spawn(async move {
-            while app_fetch_trigger_rx.recv().await.is_some() {
-                // Drain any extra triggers
-                while app_fetch_trigger_rx.try_recv().is_ok() {}
-
-                let apps = match Simctl::get_booted_udid() {
-                    Ok(udid) => Simctl::list_apps(&udid).unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                };
-                if app_tx.send(apps).await.is_err() {
-                    break;
-                }
-            }
-        });
-
         app
+    }
+
+    /// Begin connecting to the server and starting the session in the background.
+    ///
+    /// Call this after the first TUI frame so the user sees the spinner.
+    pub fn startup(&mut self) {
+        let session_name = self.session_name.clone();
+        let (tx, rx) = mpsc::channel(1);
+        self.startup_rx = Some(rx);
+        self.is_processing = true;
+        self.processing_label = "connecting".to_string();
+        self.processing_start = Some(Instant::now());
+
+        tokio::spawn(async move {
+            let mut messages: Vec<Line<'static>> = Vec::new();
+            let mut cached_elements = Vec::new();
+            let mut cached_devices = Vec::new();
+
+            // Ensure server is running (may block briefly)
+            ensure_server_running(&session_name);
+
+            // Connect IPC client
+            let sock = socket_path(&session_name);
+            let client = match IpcClient::connect(&session_name).await {
+                Ok(mut c) => {
+                    messages.push(Line::from(format!(
+                        "Connected to server | Session: {} | Socket: {:?}",
+                        session_name, sock
+                    )));
+
+                    // Send StartSession
+                    match c.send(&IpcRequest::StartSession).await {
+                        Ok(IpcResponse::CommandResult { success, message }) => {
+                            messages.push(format_result(success, &message));
+                        }
+                        Ok(IpcResponse::Error { message }) => {
+                            messages.push(format_result(false, &message));
+                        }
+                        Err(e) => {
+                            messages.push(format_result(false, &format!("StartSession error: {}", e)));
+                        }
+                        _ => {}
+                    }
+
+                    // Fetch initial completion data
+                    match c.send(&IpcRequest::GetCompletionData).await {
+                        Ok(IpcResponse::CompletionData { elements, devices }) => {
+                            cached_elements = elements;
+                            cached_devices = devices;
+                        }
+                        _ => {}
+                    }
+
+                    Some(c)
+                }
+                Err(_) => {
+                    messages.push(Line::from(format!(
+                        "Failed to connect to server | Session: {} | Socket: {:?}",
+                        session_name, sock
+                    )));
+                    messages.push(Line::from("Is qorvex-server running? Try: qorvex-server -s <session>"));
+                    None
+                }
+            };
+
+            let _ = tx.send(StartupResult {
+                client,
+                messages,
+                cached_elements,
+                cached_devices,
+            }).await;
+        });
+    }
+
+    /// Check for startup completion (non-blocking).
+    pub fn check_startup_result(&mut self) {
+        if let Some(ref mut rx) = self.startup_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.client = result.client;
+                for line in result.messages {
+                    self.add_output(line);
+                }
+                self.cached_elements = result.cached_elements;
+                self.cached_devices = result.cached_devices;
+
+                self.is_processing = false;
+                self.processing_label.clear();
+                self.processing_start = None;
+                self.startup_rx = None;
+            }
+        }
     }
 
     /// Add a line to output history.
@@ -401,8 +512,8 @@ impl App {
         }
     }
 
-    /// Execute the current input as a command.
-    pub async fn execute_command(&mut self) {
+    /// Begin executing a command. Returns immediately — the result arrives via cmd_result_rx.
+    pub fn execute_command(&mut self) {
         let input = self.input.value().trim().to_string();
         if input.is_empty() {
             return;
@@ -411,8 +522,230 @@ impl App {
         // Add command to output
         self.add_output(format_command(&input));
 
-        // Process the command
-        self.process_command(&input).await;
+        // Parse and handle local commands synchronously
+        let (cmd, args) = parse_command(&input);
+        match cmd.as_str() {
+            "help" => {
+                self.show_help();
+                self.input = Input::default();
+                self.completion.hide();
+                return;
+            }
+            "quit" => {
+                self.should_quit = true;
+                return;
+            }
+            _ => {}
+        }
+
+        // Map command to IPC request
+        let request = match cmd.as_str() {
+            "start-session" => IpcRequest::StartSession,
+            "end-session" => IpcRequest::EndSession,
+            "list-devices" => IpcRequest::ListDevices,
+            "list-physical-devices" => IpcRequest::ListPhysicalDevices,
+            "use-device" => IpcRequest::UseDevice {
+                udid: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "boot-device" => IpcRequest::BootDevice {
+                udid: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "start-agent" => IpcRequest::StartAgent {
+                project_dir: args.positional.first().cloned(),
+            },
+            "stop-agent" => IpcRequest::StopAgent,
+            "set-target" => IpcRequest::SetTarget {
+                bundle_id: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "start-target" => IpcRequest::StartTarget,
+            "stop-target" => IpcRequest::StopTarget,
+            "get-target-info" => IpcRequest::GetTargetInfo,
+            "set-timeout" => {
+                let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
+                if ms_str.is_empty() {
+                    IpcRequest::GetTimeout
+                } else {
+                    match ms_str.parse::<u64>() {
+                        Ok(ms) => IpcRequest::SetTimeout { timeout_ms: ms },
+                        Err(_) => {
+                            self.add_output(format_result(false, "set-timeout requires a number in milliseconds"));
+                            self.input = Input::default();
+                            self.completion.hide();
+                            return;
+                        }
+                    }
+                }
+            },
+            "get-session-info" => IpcRequest::GetSessionInfo,
+            "get-screenshot" => IpcRequest::Execute {
+                action: ActionType::GetScreenshot,
+                tag: None,
+            },
+            "list-elements" | "get-screen-info" => IpcRequest::Execute {
+                action: ActionType::GetScreenInfo,
+                tag: None,
+            },
+            "tap" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "tap requires a selector: tap <selector>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
+                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
+                IpcRequest::Execute {
+                    action: ActionType::Tap { selector, by_label, element_type, timeout_ms },
+                    tag: None,
+                }
+            },
+            "swipe" => IpcRequest::Execute {
+                action: ActionType::Swipe {
+                    direction: args.positional.first().map(|s| s.to_lowercase()).unwrap_or_else(|| "up".to_string()),
+                },
+                tag: None,
+            },
+            "tap-location" => {
+                if args.positional.len() < 2 {
+                    self.add_output(format_result(false, "tap-location requires 2 arguments: tap-location <x> <y>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                match (args.positional[0].parse::<i32>(), args.positional[1].parse::<i32>()) {
+                    (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
+                        action: ActionType::TapLocation { x, y },
+                        tag: None,
+                    },
+                    _ => {
+                        self.add_output(format_result(false, "Invalid coordinates"));
+                        self.input = Input::default();
+                        self.completion.hide();
+                        return;
+                    }
+                }
+            },
+            "wait-for" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "wait-for requires a selector: wait-for <selector>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                let timeout_ms = args.timeout.unwrap_or(5000);
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
+                IpcRequest::Execute {
+                    action: ActionType::WaitFor { selector, by_label, element_type, timeout_ms, require_stable: true },
+                    tag: None,
+                }
+            },
+            "wait-for-not" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "wait-for-not requires a selector: wait-for-not <selector>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                let timeout_ms = args.timeout.unwrap_or(5000);
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
+                IpcRequest::Execute {
+                    action: ActionType::WaitForNot { selector, by_label, element_type, timeout_ms },
+                    tag: None,
+                }
+            },
+            "send-keys" => {
+                let text = args.positional.join(" ");
+                if text.is_empty() {
+                    self.add_output(format_result(false, "send-keys requires text: send-keys <text>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                IpcRequest::Execute {
+                    action: ActionType::SendKeys { text },
+                    tag: None,
+                }
+            },
+            "get-value" => {
+                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                if selector.is_empty() {
+                    self.add_output(format_result(false, "get-value requires a selector: get-value <selector>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                let by_label = args.label;
+                let element_type = args.element_type.clone();
+                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
+                IpcRequest::Execute {
+                    action: ActionType::GetValue { selector, by_label, element_type, timeout_ms },
+                    tag: None,
+                }
+            },
+            "log-comment" => {
+                let message = args.positional.join(" ");
+                if message.is_empty() {
+                    self.add_output(format_result(false, "log-comment requires a message: log-comment <message>"));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                IpcRequest::Execute {
+                    action: ActionType::LogComment { message },
+                    tag: None,
+                }
+            },
+            _ => {
+                self.add_output(format_result(false, &format!("Unknown command: {}", cmd)));
+                self.input = Input::default();
+                self.completion.hide();
+                return;
+            }
+        };
+
+        // Check we have a client
+        let Some(client) = self.client.take() else {
+            self.add_output(format_result(false, "Not connected to server"));
+            self.input = Input::default();
+            self.completion.hide();
+            return;
+        };
+
+        // Set processing state
+        self.is_processing = true;
+        self.processing_label = cmd.clone();
+        self.processing_start = Some(Instant::now());
+
+        // Spawn background task to send IPC request
+        let (tx, rx) = mpsc::channel(1);
+        self.cmd_result_rx = Some(rx);
+
+        tokio::spawn(async move {
+            let mut client = client;
+            let result = match client.send(&request).await {
+                Ok(response) => Ok((response, client)),
+                Err(e) => Err((format!("IPC error: {}", e), client)),
+            };
+
+            let (cmd_result, client) = match result {
+                Ok((response, client)) => (CommandResult {
+                    cmd,
+                    result: Ok(response),
+                }, client),
+                Err((err_msg, client)) => (CommandResult {
+                    cmd,
+                    result: Err(err_msg),
+                }, client),
+            };
+
+            let _ = tx.send((cmd_result, client)).await;
+        });
 
         // Clear input, completion, and fetch state
         self.input = Input::default();
@@ -515,6 +848,41 @@ impl App {
             if updated {
                 self.update_completion();
             }
+        }
+    }
+
+    /// Check for command execution results (non-blocking). Called each event loop iteration.
+    pub fn check_command_result(&mut self) {
+        if let Some(ref mut rx) = self.cmd_result_rx {
+            if let Ok((result, client)) = rx.try_recv() {
+                // Restore the IPC client
+                self.client = Some(client);
+
+                // Clear processing state
+                self.is_processing = false;
+                self.processing_label.clear();
+                self.processing_start = None;
+
+                // Display the result
+                match result.result {
+                    Ok(response) => self.display_response(&result.cmd, response),
+                    Err(err_msg) => self.add_output(format_result(false, &err_msg)),
+                }
+
+                self.cmd_result_rx = None;
+            }
+        }
+    }
+
+    /// Get the current spinner frame character based on elapsed time.
+    pub fn spinner_frame(&self) -> &'static str {
+        const FRAMES: &[&str] = &["\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}", "\u{2807}", "\u{280f}"];
+        if let Some(start) = self.processing_start {
+            let elapsed_ms = start.elapsed().as_millis() as usize;
+            let idx = (elapsed_ms / 80) % FRAMES.len();
+            FRAMES[idx]
+        } else {
+            FRAMES[0]
         }
     }
 
@@ -1128,6 +1496,11 @@ mod tests {
             active_fetch_command: None,
             elements_loading: false,
             fetch_started_at: None,
+            is_processing: false,
+            processing_label: String::new(),
+            processing_start: None,
+            cmd_result_rx: None,
+            startup_rx: None,
         };
 
         assert!(app.client.is_some(), "Client should be set before shutdown");
@@ -1168,6 +1541,11 @@ mod tests {
             active_fetch_command: None,
             elements_loading: false,
             fetch_started_at: None,
+            is_processing: false,
+            processing_label: String::new(),
+            processing_start: None,
+            cmd_result_rx: None,
+            startup_rx: None,
         };
 
         // Should not panic or error

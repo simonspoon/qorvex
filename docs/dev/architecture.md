@@ -17,7 +17,7 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 |-------|------|
 | `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor |
 | `qorvex-server` | Standalone automation server daemon -- manages sessions, agent lifecycle, and IPC |
-| `qorvex-repl` | TUI REPL client with tab completion, connects to server via IPC; auto-launches server if needed |
+| `qorvex-repl` | TUI REPL client with tab completion, connects to server via IPC; auto-launches server if needed; deferred startup keeps TUI responsive |
 | `qorvex-live` | TUI client with live video feed (via qorvex-streamer) and IPC reconnection |
 | `qorvex-cli` | Scriptable CLI client for automation pipelines, includes JSONL log-to-script converter |
 | `qorvex-agent` | Swift XCTest agent for native iOS accessibility (not a Cargo crate) |
@@ -27,7 +27,7 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 ## Data Flow
 
 1. **Server** (`qorvex-server`) starts, binds an `IpcServer` on the session socket, manages agent lifecycle.
-2. **REPL** auto-launches the server if the socket is absent, then connects as an IPC client. Sends commands (e.g., `StartSession`, `Execute`) via IPC.
+2. **REPL** renders its TUI immediately on launch (no blocking I/O). After the first frame is drawn, it spawns a background task (`startup()`) that launches the server if the socket is absent, connects as an IPC client, sends `StartSession`, and fetches initial completion data. A braille spinner in the input area animates while this is in progress. Subsequent commands (`execute_command`) also run non-blocking: the IPC send is dispatched to a tokio task, the spinner reappears, and results are polled via `check_command_result()` each event loop tick.
 3. **Server** executes actions via `ActionExecutor` (which delegates to `AutomationDriver`), logs to `Session`.
 4. **Session** broadcasts `SessionEvent`s to subscribers (broadcast channel, capacity 100).
 5. **Live TUI** connects via `IpcClient`, sends `Subscribe`, renders incoming `Event` responses in a TUI. Separately spawns `qorvex-streamer` and reads JPEG frames from a Unix socket for the live video feed.
@@ -186,6 +186,18 @@ Server constructors:
 - `IpcServer::new(session, name)` -- starts with empty driver slot; call `set_driver()` after the agent connects
 - `IpcServer::with_handler(handler)` -- attach a `RequestHandler` impl (builder pattern); when set, all requests are delegated to the handler instead of built-in logic
 - `shared_driver()` / `set_driver(driver)` -- wire the server to an already-connected driver so `Execute` requests reuse the existing TCP connection
+
+## REPL Non-Blocking Pattern (`qorvex-repl`)
+
+All IPC operations in the REPL are non-blocking — the crossterm event loop never awaits them directly.
+
+**Startup:** `App::new()` is synchronous and returns immediately. `startup()` spawns a tokio task that does the server launch, IPC connect, `StartSession`, and `GetCompletionData`. Results arrive via `startup_rx: mpsc::Receiver<StartupResult>`, polled by `check_startup_result()` each loop tick.
+
+**Commands:** `execute_command()` is synchronous. It builds the `IpcRequest`, takes the `IpcClient` out of `self.client` via `.take()`, and spawns a tokio task. The task sends the request, then returns `(CommandResult, IpcClient)` through `cmd_result_rx`. `check_command_result()` restores the client and calls `display_response()` when the channel has data.
+
+**Spinner:** `is_processing: bool` is set true before spawning and cleared on result. `spinner_frame()` computes the braille animation frame from `processing_start.elapsed()`. The event loop polls at 50ms while processing (vs 100ms idle) for smooth animation. New commands are blocked while `is_processing` is true.
+
+**Batch mode** cannot use this pattern (no event loop). Use `App::new_blocking()` which calls `ensure_server_running`, connects, and runs `StartSession` synchronously before returning.
 
 ## Live TUI Image Pipeline (`qorvex-live`)
 

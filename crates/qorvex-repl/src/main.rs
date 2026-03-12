@@ -62,8 +62,8 @@ async fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app
-    let mut app = App::new(args.session).await;
+    // Create app (fast — no blocking I/O)
+    let mut app = App::new(args.session);
 
     // Main loop
     let result = run_app(&mut terminal, &mut app).await;
@@ -153,7 +153,7 @@ fn mouse_to_text_position(
 async fn run_batch(session: String) -> io::Result<()> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let mut app = App::new(session).await;
+    let mut app = App::new_blocking(session).await;
 
     // Drain and print startup messages
     for line in app.output_history.drain(..) {
@@ -196,16 +196,27 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> io::Result<()> {
+    // Render the first frame, then kick off background startup
+    terminal.draw(|f| ui::render(f, app))?;
+    app.startup();
+
     loop {
-        // Check for element and app list updates
+        // Check for background task completions
+        app.check_startup_result();
         app.check_element_updates();
         app.check_app_updates();
+        app.check_command_result();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;
 
         // Poll for events with timeout
-        if event::poll(Duration::from_millis(100))? {
+        let poll_timeout = if app.is_processing {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(100)
+        };
+        if event::poll(poll_timeout)? {
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -250,7 +261,9 @@ async fn run_app(
                         else {
                             match key.code {
                                 KeyCode::Enter => {
-                                    app.execute_command().await;
+                                    if !app.is_processing {
+                                        app.execute_command();
+                                    }
                                 }
                                 KeyCode::Char('q') if app.input.value().is_empty() => {
                                     app.should_quit = true;
