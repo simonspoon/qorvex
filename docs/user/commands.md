@@ -6,7 +6,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Start server + session (one step) | — | `qorvex start` |
+| Start server + session (one step) | — | `qorvex start [--device <udid>]` |
 | Start session | `start-session` | `qorvex start-session` |
 | End session | `end-session` | — |
 | Stop server | — | `qorvex stop` |
@@ -162,6 +162,7 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 - `-s, --session <name>` -- Connect to named session (default: "default", or `$QORVEX_SESSION`)
 - `-f, --format <text|json>` -- Output format
 - `-q, --quiet` -- Suppress non-essential output
+- `start`: `-d, --device <udid>` -- Select a device (simulator or physical) before starting the session; equivalent to sending `use-device` then `start-session` in sequence
 - `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`, `--tag <text>`
 - `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000), `--tag <text>`
 - All action commands accept `--tag <text>` — annotates the JSONL log entry; replays as `--tag` in converted scripts

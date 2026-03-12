@@ -33,14 +33,14 @@ QORVEX_SESSION=my-session ./test-login.sh
 
 ## Writing Scripts by Hand
 
-Use `qorvex start` to launch the server and session in one step, and `qorvex stop` (via a `trap`) to clean up on exit or error:
+Use `qorvex start` to launch the server and session in one step, and `qorvex stop` (via a `trap`) to clean up on exit or error. Pass `--device <udid>` to target a specific simulator or physical device without a separate `use-device` call:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 export QORVEX_SESSION=my_test   # applies to both qorvex and qorvex-server
 
-qorvex start                    # spawns server, waits for socket, starts session
+qorvex start --device "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"  # select device + start in one step
 trap 'qorvex stop || true' EXIT # clean up on exit or error
 
 qorvex set-target com.example.myapp
@@ -77,6 +77,7 @@ done
 | Command | Description |
 |---------|-------------|
 | `qorvex start` | Start server + session in one step (use at top of script) |
+| `qorvex start --device <udid>` | Start server + session and select a specific device in one step |
 | `qorvex stop` | Stop the server cleanly (use in `trap`) |
 | `qorvex start-session` | Start session only (server must be running) |
 | `qorvex start-agent [--project-dir <path>]` | Start automation agent explicitly |

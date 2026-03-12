@@ -281,7 +281,11 @@ enum Command {
     ListSessions,
 
     /// Start server, session, and agent in one step
-    Start,
+    Start {
+        /// Device UDID (simulator or physical) to use for this session
+        #[arg(short, long)]
+        device: Option<String>,
+    },
 
     /// Start an automation session (auto-starts agent if configured)
     StartSession,
@@ -433,8 +437,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Err(e) => return Err(e),
             }
         }
-        Command::Start => {
-            return start_all(&cli).await;
+        Command::Start { ref device } => {
+            return start_all(&cli, device.clone()).await;
         }
         Command::Completions { shell } => {
             use clap::CommandFactory;
@@ -539,7 +543,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             list_physical_devices(&mut client, &cli).await
         }
         // These commands are handled before IPC connection above
-        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start | Command::Completions { .. } => unreachable!(),
+        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start { .. } | Command::Completions { .. } => unreachable!(),
     }
 }
 
@@ -862,7 +866,7 @@ async fn send_command(client: &mut IpcClient, request: IpcRequest, cli: &Cli) ->
     }
 }
 
-async fn start_all(cli: &Cli) -> Result<(), CliError> {
+async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     use qorvex_core::ipc::socket_path;
 
     let sock = socket_path(&cli.session);
@@ -897,6 +901,27 @@ async fn start_all(cli: &Cli) -> Result<(), CliError> {
     let mut client = IpcClient::connect(&cli.session)
         .await
         .map_err(|e| CliError::Connection(format!("Failed to connect: {}", e)))?;
+
+    // Select device before starting session so agent auto-start uses the right connection mode
+    if let Some(ref udid) = device {
+        let response = client
+            .send(&IpcRequest::UseDevice { udid: udid.clone() })
+            .await
+            .map_err(|e| CliError::Protocol(format!("Failed to select device: {}", e)))?;
+
+        match response {
+            IpcResponse::CommandResult { success, message } => {
+                if !success {
+                    return Err(CliError::ActionFailed(message));
+                }
+                if !cli.quiet {
+                    eprintln!("{}", message);
+                }
+            }
+            IpcResponse::Error { message } => return Err(CliError::ActionFailed(message)),
+            _ => return Err(CliError::Protocol("Unexpected response".to_string())),
+        }
+    }
 
     let response = client
         .send(&IpcRequest::StartSession)

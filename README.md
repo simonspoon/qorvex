@@ -246,13 +246,15 @@ eval "$(qorvex completions zsh)"
 
 ### Shell Scripting
 
-Automation scripts are plain bash that call `qorvex` CLI commands:
+Automation scripts are plain bash that call `qorvex` CLI commands. Use `qorvex start --device <udid>` to launch the server, select a device, and start the session in one step:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+export QORVEX_SESSION=my_test
 
-qorvex boot-device "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+qorvex start --device "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+trap 'qorvex stop || true' EXIT
 qorvex set-target com.example.myapp
 
 qorvex tap login-button
