@@ -118,7 +118,7 @@ Shows a live video feed of the Simulator window and the action log from your REP
 
 | | Simulator | Physical Device (WiFi) | Physical Device (USB) |
 |---|---|---|---|
-| Connection | Direct TCP on localhost:8080 | Direct TCP via mDNS (`<Name>.local`) | USB tunnel (usbmuxd or CoreDevice) |
+| Connection | Direct TCP on localhost:8080 | Direct TCP via mDNS (`<Name>.local`) | Direct TCP via mDNS (`<Name>.local`) |
 | Setup | Boot simulator, start agent | Same WiFi network, developer mode on | USB cable, developer mode on |
 | Select in REPL | `boot-device <udid>` | `use-device <udid>` | `use-device <udid>` |
 | Launch app | `start-target` | `xcrun devicectl device process launch` | `xcrun devicectl device process launch` |

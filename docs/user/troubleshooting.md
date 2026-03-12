@@ -115,7 +115,7 @@ If a read timeout occurs, the next command will report "Not connected". For mana
 
 **Symptoms:** `start-agent` fails with "Agent failed to become ready within timeout", or xcodebuild prints "Unlock Hillbilly to Continue"
 
-**Cause:** The device is locked. xcodebuild waits indefinitely for unlock, but `start-agent` times out at 30s.
+**Cause:** The device is locked. xcodebuild waits indefinitely for unlock, but `start-agent` times out at 120s.
 
 **Fix:** Unlock the device and retry `start-agent`. Keep the device unlocked during the entire session.
 

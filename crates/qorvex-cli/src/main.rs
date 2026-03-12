@@ -868,8 +868,65 @@ async fn send_command(client: &mut IpcClient, request: IpcRequest, cli: &Cli) ->
 
 async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     use qorvex_core::ipc::socket_path;
+    use qorvex_core::config::QorvexConfig;
 
     let sock = socket_path(&cli.session);
+
+    // For physical devices that need signing, build the agent in the foreground
+    // CLI process so interactive prompts (keychain, Apple ID) work properly.
+    // The server runs in the background with stdio redirected, so it can't
+    // handle interactive prompts.
+    if device.is_some() {
+        let config = QorvexConfig::load();
+        if let (Some(ref agent_dir), Some(ref team)) =
+            (&config.agent_source_dir, &config.development_team)
+        {
+            let xcodeproj = agent_dir.join("QorvexAgent.xcodeproj");
+            if xcodeproj.exists() {
+                let derived = agent_dir.join(".build");
+                let xcodeproj_str = xcodeproj.to_string_lossy().to_string();
+                let derived_str = derived.to_string_lossy().to_string();
+                if !cli.quiet {
+                    eprintln!("Building agent for physical device...");
+                }
+                let team_arg = format!("DEVELOPMENT_TEAM={}", team);
+                let bid_arg = config.agent_bundle_id.as_ref()
+                    .map(|bid| format!("PRODUCT_BUNDLE_IDENTIFIER={}", bid));
+                let mut args = vec![
+                    "build-for-testing",
+                    "-project", &xcodeproj_str,
+                    "-scheme", "QorvexAgentUITests",
+                    "-destination", "generic/platform=iOS",
+                    "-derivedDataPath", &derived_str,
+                    "-allowProvisioningUpdates",
+                    &team_arg,
+                    "CODE_SIGN_STYLE=Automatic",
+                    "CODE_SIGN_IDENTITY=Apple Development",
+                    "CODE_SIGNING_ALLOWED=YES",
+                    "CODE_SIGNING_REQUIRED=YES",
+                ];
+                if let Some(ref ba) = bid_arg {
+                    args.push(ba);
+                }
+                let status = std::process::Command::new("xcodebuild")
+                    .args(&args)
+                    .stdout(if cli.quiet {
+                        std::process::Stdio::null()
+                    } else {
+                        std::process::Stdio::inherit()
+                    })
+                    .stderr(std::process::Stdio::inherit())
+                    .stdin(std::process::Stdio::inherit())
+                    .status()
+                    .map_err(|e| CliError::ActionFailed(format!("Failed to run xcodebuild: {}", e)))?;
+                if !status.success() {
+                    return Err(CliError::ActionFailed(
+                        "Agent build failed (see output above)".to_string(),
+                    ));
+                }
+            }
+        }
+    }
 
     // Start server if not already running
     if !sock.exists() {

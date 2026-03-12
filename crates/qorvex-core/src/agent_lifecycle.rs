@@ -76,6 +76,13 @@ pub struct AgentLifecycleConfig {
     /// When set, the lifecycle connects directly to `{direct_host}:{agent_port}`
     /// instead of going through usbmuxd or the CoreDevice tunnel.
     pub direct_host: Option<String>,
+    /// Apple Development Team ID for code-signing on physical devices.
+    /// When set, xcodebuild overrides `DEVELOPMENT_TEAM`, `CODE_SIGN_IDENTITY`,
+    /// and `CODE_SIGN_STYLE` so the agent can be deployed without modifying
+    /// `project.yml` (important for open-source repos).
+    pub development_team: Option<String>,
+    /// Override bundle ID for the agent when the default is claimed by another team.
+    pub agent_bundle_id: Option<String>,
 }
 
 impl AgentLifecycleConfig {
@@ -89,6 +96,8 @@ impl AgentLifecycleConfig {
             is_physical: false,
             tunnel_address: None,
             direct_host: None,
+            development_team: None,
+            agent_bundle_id: None,
         }
     }
 }
@@ -201,21 +210,39 @@ impl AgentLifecycle {
             "generic/platform=iOS Simulator"
         };
 
+        let mut args = vec![
+            "build-for-testing".to_string(),
+            "-project".to_string(),
+            xcodeproj.to_string_lossy().to_string(),
+            "-scheme".to_string(),
+            SCHEME.to_string(),
+            "-destination".to_string(),
+            destination.to_string(),
+            "-derivedDataPath".to_string(),
+            self.config
+                .project_dir
+                .join(DERIVED_DATA_DIR)
+                .to_string_lossy()
+                .to_string(),
+        ];
+
+        // Override code-signing for physical devices when a team is configured.
+        if self.config.is_physical {
+            if let Some(ref team) = self.config.development_team {
+                args.push(format!("DEVELOPMENT_TEAM={}", team));
+                args.push("CODE_SIGN_STYLE=Automatic".to_string());
+                args.push("CODE_SIGN_IDENTITY=Apple Development".to_string());
+                args.push("CODE_SIGNING_ALLOWED=YES".to_string());
+                args.push("CODE_SIGNING_REQUIRED=YES".to_string());
+                args.push("-allowProvisioningUpdates".to_string());
+                if let Some(ref bid) = self.config.agent_bundle_id {
+                    args.push(format!("PRODUCT_BUNDLE_IDENTIFIER={}", bid));
+                }
+            }
+        }
+
         let output = Command::new("xcodebuild")
-            .args([
-                "build-for-testing",
-                "-project",
-                &xcodeproj.to_string_lossy(),
-                "-scheme",
-                SCHEME,
-                "-destination",
-                destination,
-                "-derivedDataPath",
-                &self.config
-                    .project_dir
-                    .join(DERIVED_DATA_DIR)
-                    .to_string_lossy(),
-            ])
+            .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .output()?;
@@ -519,6 +546,8 @@ mod tests {
             is_physical: false,
             tunnel_address: None,
             direct_host: None,
+            development_team: None,
+            agent_bundle_id: None,
         };
 
         assert_eq!(config.project_dir, PathBuf::from("/tmp/custom"));
@@ -630,6 +659,8 @@ mod tests {
             is_physical: false,
             tunnel_address: None,
             direct_host: None,
+            development_team: None,
+            agent_bundle_id: None,
         };
         let lifecycle = AgentLifecycle::new("ABCD-1234".to_string(), config);
 
@@ -655,6 +686,8 @@ mod tests {
             is_physical: false,
             tunnel_address: None,
             direct_host: None,
+            development_team: None,
+            agent_bundle_id: None,
         };
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 
@@ -671,6 +704,8 @@ mod tests {
             is_physical: false,
             tunnel_address: None,
             direct_host: None,
+            development_team: None,
+            agent_bundle_id: None,
         };
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 

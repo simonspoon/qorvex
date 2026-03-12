@@ -102,16 +102,15 @@ Two orchestration methods:
 | Target | Connection | Implementation |
 |--------|-----------|---------------|
 | Simulators | Direct TCP (localhost:8080) | `AgentDriver::direct(host, port)` |
-| Physical devices — WiFi (localNetwork) | Direct TCP via mDNS (`<Name>.local`) | `AgentDriver::direct(hostname, port)` |
-| Physical devices — USB (tunneld) | TCP through pymobiledevice3 tunnel | `AgentDriver::tunneld(tunnel_address, port)` using `usb_tunnel::connect_tunneld` |
-| Physical devices — USB (CoreDevice) | Userspace TCP via CoreDevice proxy (iOS 17+) | `AgentDriver::core_device(udid, port)` via `core_device_tunnel::connect_coredevice` |
-| Physical devices — USB (usbmuxd) | USB tunnel via usbmuxd | `AgentDriver::usb_device(udid, port)` using `idevice` crate |
+| Physical devices (any) | Direct TCP via Bonjour mDNS (`<Name>.local`) | `AgentDriver::direct(hostname, port)` |
 
-`ServerState.handle_use_device()` auto-selects the connection mode when a physical device is chosen:
-- `localNetwork` transport → sets `direct_host = Some("<Name>.local")` (WiFi direct)
-- Wired + tunneld running → sets `tunnel_address` from tunneld
-- Wired + no tunneld → sets `use_core_device = true` (native CoreDevice, iOS 17+)
-- Falls back to `usb_device` if discovered via usbmuxd
+All physical devices — whether WiFi or USB-connected — use `AgentDriver::direct` via `<Name>.local` Bonjour mDNS. This hostname resolves for both connection types and avoids the need for pairing files (required by the native CoreDevice tunnel) that modern macOS no longer stores in accessible locations.
+
+`ServerState.handle_use_device()` auto-selects the connection mode:
+- **Any CoreDevice device** (found via `xcrun devicectl`): sets `direct_host = Some("<Name>.local")`, `use_core_device = false`
+- **USB device found via usbmuxd**: also queries CoreDevice to populate `direct_host = Some("<Name>.local")`; falls back to `direct_host = None` only if CoreDevice lookup fails (in which case `AgentDriver::usb_device` is used)
+
+`AgentLifecycleConfig.startup_timeout` is set to **120 seconds** for physical devices (vs 30s default for simulators). `xcodebuild test-without-building` installs and launches the test runner on the device, which takes 30–60s on first deploy.
 
 The `usb_tunnel` module provides:
 - `list_devices()` -- enumerate USB-connected devices via usbmuxd
@@ -120,12 +119,12 @@ The `usb_tunnel` module provides:
 - `connect_tunneld(tunnel_address, port)` -- TCP through a tunneld address
 
 The `coredevice` module provides:
-- `list_devices()` -- enumerate paired physical devices via `xcrun devicectl list devices`
+- `list_devices()` -- enumerate paired physical devices via `xcrun devicectl list devices`; always populates `hostname = Some("<Name>.local")` for every device
 
 The `core_device_tunnel` module provides:
 - `connect_coredevice(udid, port)` -- userspace TCP tunnel via `CoreDeviceProxy` (iOS 17+, no root required)
 
-> **CoreDevice tunnel details:** Resolves the device via mDNS as `{UDID}.coredevice.local` (not `{Name}.local`). Requires a pairing file at `~/Library/Lockdown/PairRecords/{UDID}.plist` or `/var/db/lockdown/{UDID}.plist`. If either is missing, connection fails with `PairingFileNotFound`.
+> **CoreDevice tunnel caveat:** This path is no longer used by `handle_use_device`. It remains in the codebase for manual use but requires a pairing file at `~/Library/Lockdown/PairRecords/{UDID}.plist` or `/var/db/lockdown/{UDID}.plist`. On modern macOS (Ventura+), these files are not written to those paths, so this path reliably fails with `PairingFileNotFound`. Use `AgentDriver::direct("<Name>.local", port)` instead.
 
 ## Runtime Directory Structure
 

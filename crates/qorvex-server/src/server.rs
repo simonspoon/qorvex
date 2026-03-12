@@ -180,8 +180,11 @@ impl ServerState {
                     lc_config.agent_port = self.agent_port;
                     if self.is_physical_device {
                         lc_config.is_physical = true;
+                        lc_config.startup_timeout = std::time::Duration::from_secs(120);
                         lc_config.tunnel_address = self.tunnel_address.clone();
                         lc_config.direct_host = self.direct_host.clone();
+                        lc_config.development_team = config.development_team.clone();
+                        lc_config.agent_bundle_id = config.agent_bundle_id.clone();
                     }
                     let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
@@ -319,13 +322,25 @@ impl ServerState {
             if physical_devices.iter().any(|d| d.udid == udid) {
                 self.is_physical_device = true;
                 self.use_core_device = false;
-                self.direct_host = None;
                 self.simulator_udid = Some(udid.to_string());
                 self.tunnel_address = None;
                 self.executor = None;
+                // Also look up CoreDevice info for the mDNS hostname so
+                // we can connect via simple TCP (Bonjour) instead of
+                // relying on the USB tunnel or CoreDevice tunnel.
+                self.direct_host = None;
+                if let Ok(cd_devices) = qorvex_core::coredevice::list_devices().await {
+                    if let Some(cd) = cd_devices.iter().find(|d| {
+                        d.udid.as_deref() == Some(udid) || d.identifier == udid
+                    }) {
+                        self.direct_host = cd.hostname.clone()
+                            .or_else(|| Some(format!("{}.local", cd.name)));
+                    }
+                }
+                let name = self.direct_host.as_deref().unwrap_or(udid);
                 return IpcResponse::CommandResult {
                     success: true,
-                    message: format!("Using physical device {}", udid),
+                    message: format!("Using physical device {}", name),
                 };
             }
         }
@@ -337,33 +352,22 @@ impl ServerState {
                 d.udid.as_deref() == Some(udid) || d.identifier == udid
             }) {
                 self.is_physical_device = true;
-                self.simulator_udid = Some(udid.to_string());
+                // Prefer the traditional UDID (e.g. 00008140-…) over the CoreDevice
+                // UUID because xcodebuild -destination id=… requires the former.
+                self.simulator_udid = Some(
+                    cd.udid.clone().unwrap_or_else(|| udid.to_string()),
+                );
                 self.executor = None;
-                self.direct_host = None;
 
-                if cd.transport_type == "localNetwork" {
-                    // WiFi device — connect directly to mDNS hostname (no tunnel needed).
-                    // iOS 17+ uses RPPairing which idevice doesn't support yet,
-                    // so we skip the CoreDevice tunnel and go straight to TCP.
-                    self.direct_host = cd.hostname.clone()
-                        .or_else(|| Some(format!("{}.local", cd.name)));
-                    self.tunnel_address = None;
-                    self.use_core_device = false;
-                } else {
-                    // Wired device — try tunneld first, then native CoreDevice tunnel.
-                    if let Ok(tunneld_devices) = qorvex_core::usb_tunnel::list_tunneld_devices().await {
-                        if let Some(td) = tunneld_devices.iter().find(|t| t.udid == udid) {
-                            self.tunnel_address = Some(td.tunnel_address.clone());
-                            self.use_core_device = false;
-                        } else {
-                            self.tunnel_address = None;
-                            self.use_core_device = true;
-                        }
-                    } else {
-                        self.tunnel_address = None;
-                        self.use_core_device = true;
-                    }
-                }
+                // Always set direct_host from CoreDevice info — Bonjour
+                // mDNS (`Name.local`) works for both WiFi and USB-connected
+                // devices, and avoids the native CoreDevice tunnel which
+                // requires pairing files that modern macOS no longer stores
+                // in the expected locations.
+                self.direct_host = cd.hostname.clone()
+                    .or_else(|| Some(format!("{}.local", cd.name)));
+                self.tunnel_address = None;
+                self.use_core_device = false;
 
                 return IpcResponse::CommandResult {
                     success: true,
@@ -423,6 +427,8 @@ impl ServerState {
         }
         let udid = self.simulator_udid.clone().unwrap();
 
+        let config = QorvexConfig::load();
+
         if let Some(project_dir_str) = project_dir {
             // With path: build, spawn, wait, store lifecycle
             let project_dir = PathBuf::from(strip_quotes(&project_dir_str));
@@ -430,8 +436,11 @@ impl ServerState {
             lc_config.agent_port = self.agent_port;
             if self.is_physical_device {
                 lc_config.is_physical = true;
+                lc_config.startup_timeout = std::time::Duration::from_secs(120);
                 lc_config.tunnel_address = self.tunnel_address.clone();
                 lc_config.direct_host = self.direct_host.clone();
+                lc_config.development_team = config.development_team.clone();
+                lc_config.agent_bundle_id = config.agent_bundle_id.clone();
             }
             let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
@@ -483,8 +492,10 @@ impl ServerState {
                 lc_config.agent_port = self.agent_port;
                 if self.is_physical_device {
                     lc_config.is_physical = true;
+                    lc_config.startup_timeout = std::time::Duration::from_secs(120);
                     lc_config.tunnel_address = self.tunnel_address.clone();
                     lc_config.direct_host = self.direct_host.clone();
+                    lc_config.development_team = config.development_team.clone();
                 }
                 let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 
@@ -534,6 +545,7 @@ impl ServerState {
                 lc_config.agent_port = self.agent_port;
                 if self.is_physical_device {
                     lc_config.is_physical = true;
+                    lc_config.startup_timeout = std::time::Duration::from_secs(120);
                     lc_config.tunnel_address = self.tunnel_address.clone();
                     lc_config.direct_host = self.direct_host.clone();
                 }

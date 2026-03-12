@@ -23,7 +23,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 |--------|------------|-------|
 | Simulators | Direct TCP (localhost:8080) | Build with Xcode, install via `simctl` |
 | Physical devices — WiFi | Direct TCP via mDNS (`<Name>.local`) | Same WiFi network, developer mode on |
-| Physical devices — USB | USB tunnel (usbmuxd or CoreDevice, iOS 17+) | USB cable, developer mode on |
+| Physical devices — USB | Direct TCP via mDNS (`<Name>.local`) | USB cable, developer mode on |
 
 ## Requirements
 
@@ -302,7 +302,7 @@ done
                               iOS Simulator / Device
 ```
 
-`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it connects via direct mDNS (WiFi), usbmuxd tunnel (USB), or the native CoreDevice proxy (iOS 17+).
+`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it connects via Bonjour mDNS (`<Name>.local`), which works for both WiFi and USB-connected devices.
 
 ### Directory Structure
 

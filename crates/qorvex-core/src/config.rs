@@ -37,6 +37,16 @@ pub struct QorvexConfig {
     /// TCP port the Swift agent listens on. Defaults to 8080 if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_port: Option<u16>,
+
+    /// Apple Development Team ID for code-signing on physical devices.
+    /// Required when deploying the agent to a real device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub development_team: Option<String>,
+
+    /// Override bundle ID for the agent app when signing for physical devices.
+    /// Needed when the default `com.qorvex.agent` is already claimed by another team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_bundle_id: Option<String>,
 }
 
 impl QorvexConfig {
@@ -80,6 +90,8 @@ mod tests {
         let config = QorvexConfig {
             agent_source_dir: Some(PathBuf::from("/Users/test/qorvex-agent")),
             agent_port: None,
+            development_team: None,
+            agent_bundle_id: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let loaded: QorvexConfig = serde_json::from_str(&json).unwrap();
