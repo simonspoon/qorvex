@@ -29,9 +29,9 @@ jobs:
       - name: Build Rust binaries
         run: |
           mkdir -p dist
-          for crate in qorvex-server qorvex-repl qorvex-live qorvex-cli; do
-            cargo build --release -p "$crate"
-            cp "target/release/$crate" "dist/$crate"
+          cargo build --release --workspace
+          for bin in qorvex-server qorvex-repl qorvex-live qorvex; do
+            cp "target/release/$bin" "dist/$bin"
           done
 
       - name: Build qorvex-streamer
@@ -43,7 +43,7 @@ jobs:
         run: |
           cd dist
           tar czf qorvex-macos-arm64.tar.gz \
-            qorvex-server qorvex-repl qorvex-live qorvex-cli qorvex-streamer
+            qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer
           shasum -a 256 qorvex-macos-arm64.tar.gz > checksums.txt
 
       - name: Create GitHub Release
@@ -60,7 +60,7 @@ jobs:
 
             ```bash
             tar xzf qorvex-macos-arm64.tar.gz
-            mv qorvex-server qorvex-repl qorvex-live qorvex-cli qorvex-streamer ~/.cargo/bin/
+            mv qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer ~/.cargo/bin/
             ```
 
             The Swift agent (`qorvex-agent`) must still be built from source — it requires Xcode and your local iOS SDK:
