@@ -35,11 +35,29 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 
 ## Installation
 
+### From GitHub Releases
+
+Download the latest tarball from [Releases](https://github.com/simonspoon/qorvex/releases) and extract the pre-built binaries:
+
 ```bash
-# Install all Rust binaries, build qorvex-streamer, build qorvex-agent (simulator + physical), and record agent source dir
+tar xzf qorvex-macos-arm64.tar.gz
+mv qorvex-server qorvex-repl qorvex-live qorvex-cli qorvex-streamer ~/.cargo/bin/
+```
+
+The Swift agent must still be built from source (requires Xcode and iOS SDK):
+
+```bash
+git clone https://github.com/simonspoon/qorvex.git
+cd qorvex && ./install.sh
+```
+
+### From source
+
+```bash
+# Install everything: Rust binaries, Swift streamer, Swift agent (simulator + physical)
 ./install.sh
 
-# Or install individually
+# Or install Rust crates individually
 cargo install --path crates/qorvex-server
 cargo install --path crates/qorvex-repl
 cargo install --path crates/qorvex-live

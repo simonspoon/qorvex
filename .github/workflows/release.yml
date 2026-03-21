@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets
+
+      - name: Build Rust binaries
+        run: |
+          mkdir -p dist
+          for crate in qorvex-server qorvex-repl qorvex-live qorvex-cli; do
+            cargo build --release -p "$crate"
+            cp "target/release/$crate" "dist/$crate"
+          done
+
+      - name: Build qorvex-streamer
+        run: |
+          make -C qorvex-streamer build
+          cp qorvex-streamer/.build/release/qorvex-streamer dist/qorvex-streamer
+
+      - name: Create tarball
+        run: |
+          cd dist
+          tar czf qorvex-macos-arm64.tar.gz \
+            qorvex-server qorvex-repl qorvex-live qorvex-cli qorvex-streamer
+          shasum -a 256 qorvex-macos-arm64.tar.gz > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/qorvex-macos-arm64.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            Download and extract, then move binaries to a directory on your PATH:
+
+            ```bash
+            tar xzf qorvex-macos-arm64.tar.gz
+            mv qorvex-server qorvex-repl qorvex-live qorvex-cli qorvex-streamer ~/.cargo/bin/
+            ```
+
+            The Swift agent (`qorvex-agent`) must still be built from source — it requires Xcode and your local iOS SDK:
+
+            ```bash
+            git clone https://github.com/simonspoon/qorvex.git
+            cd qorvex
+            ./install.sh  # or just build the agent manually
+            ```
+
+            See README for full setup instructions.
