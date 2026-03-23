@@ -32,13 +32,13 @@
 //! }
 //! ```
 
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use async_trait::async_trait;
+use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use tracing::{debug, info_span, Instrument};
 
@@ -370,7 +370,9 @@ impl IpcServer {
     ///
     /// Callers can clone this handle and populate it with a connected driver
     /// so that IPC Execute requests use the same backend connection.
-    pub fn shared_driver(&self) -> Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>> {
+    pub fn shared_driver(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<Option<Arc<dyn crate::driver::AutomationDriver>>>> {
         self.shared_driver.clone()
     }
 
@@ -408,7 +410,9 @@ impl IpcServer {
 
             tokio::spawn(async move {
                 let span = info_span!("ipc_client");
-                let _ = Self::handle_client(stream, session, shared_driver, handler).instrument(span).await;
+                let _ = Self::handle_client(stream, session, shared_driver, handler)
+                    .instrument(span)
+                    .await;
             });
         }
     }
@@ -433,7 +437,9 @@ impl IpcServer {
             let request: IpcRequest = serde_json::from_str(line.trim())?;
 
             if let Some(ref handler) = handler {
-                handler.handle(request, session.clone(), &mut writer).await?;
+                handler
+                    .handle(request, session.clone(), &mut writer)
+                    .await?;
                 continue;
             }
 
@@ -445,7 +451,9 @@ impl IpcServer {
                     // LogComment doesn't require a driver
                     let response = if let ActionType::LogComment { ref message } = action {
                         let msg = format!("Logged: {}", message);
-                        session.log_action(action, ActionResult::Success, None, None, tag).await;
+                        session
+                            .log_action(action, ActionResult::Success, None, None, tag)
+                            .await;
 
                         IpcResponse::ActionResult {
                             success: true,
@@ -467,10 +475,20 @@ impl IpcServer {
                                 } else {
                                     ActionResult::Failure(result.message.clone())
                                 };
-                                let duration_ms = result.data.as_ref()
+                                let duration_ms = result
+                                    .data
+                                    .as_ref()
                                     .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                                     .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
-                                session.log_action(action, action_result, result.screenshot.clone(), duration_ms, tag).await;
+                                session
+                                    .log_action(
+                                        action,
+                                        action_result,
+                                        result.screenshot.clone(),
+                                        duration_ms,
+                                        tag,
+                                    )
+                                    .await;
 
                                 IpcResponse::ActionResult {
                                     success: result.success,
@@ -479,11 +497,10 @@ impl IpcServer {
                                     data: result.data,
                                 }
                             }
-                            None => {
-                                IpcResponse::Error {
-                                    message: "No automation backend connected for this session".to_string(),
-                                }
-                            }
+                            None => IpcResponse::Error {
+                                message: "No automation backend connected for this session"
+                                    .to_string(),
+                            },
                         }
                     };
 

@@ -146,10 +146,7 @@ pub async fn list_devices() -> Result<Vec<PhysicalDevice>, UsbTunnelError> {
 ///
 /// * `udid` - The UDID of the target device
 /// * `port` - The TCP port on the device to tunnel to (e.g., 8080 for the agent)
-pub async fn connect(
-    udid: &str,
-    port: u16,
-) -> Result<Box<dyn AgentStream>, UsbTunnelError> {
+pub async fn connect(udid: &str, port: u16) -> Result<Box<dyn AgentStream>, UsbTunnelError> {
     let mut muxd = UsbmuxdConnection::default()
         .await
         .map_err(|e| UsbTunnelError::UsbmuxdUnavailable(e.to_string()))?;
@@ -233,11 +230,12 @@ pub async fn connect_tunneld(
         format!("{}:{}", tunnel_address, agent_port)
     };
 
-    let stream = TcpStream::connect(&addr)
-        .await
-        .map_err(|e| UsbTunnelError::ConnectionFailed(format!(
-            "Failed to connect to tunnel {}:{}: {}", tunnel_address, agent_port, e
-        )))?;
+    let stream = TcpStream::connect(&addr).await.map_err(|e| {
+        UsbTunnelError::ConnectionFailed(format!(
+            "Failed to connect to tunnel {}:{}: {}",
+            tunnel_address, agent_port, e
+        ))
+    })?;
 
     Ok(Box::new(stream))
 }

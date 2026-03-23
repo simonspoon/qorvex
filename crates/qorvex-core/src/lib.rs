@@ -41,16 +41,16 @@
 
 pub mod action;
 pub mod agent_client;
-pub mod agent_lifecycle;
 pub mod agent_driver;
+pub mod agent_lifecycle;
 pub mod config;
+pub mod core_device_tunnel;
 pub mod coredevice;
-pub mod element;
 pub mod driver;
+pub mod element;
 pub mod executor;
 pub mod ipc;
 pub mod protocol;
 pub mod session;
 pub mod simctl;
-pub mod core_device_tunnel;
 pub mod usb_tunnel;

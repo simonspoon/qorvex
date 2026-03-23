@@ -85,10 +85,8 @@ fn list_devices_blocking() -> Result<Vec<CoreDeviceInfo>, CoreDeviceError> {
     use std::process::Command;
 
     // Create a temp file for JSON output.
-    let tmp_path = std::env::temp_dir().join(format!(
-        "qorvex_devicectl_{}.json",
-        std::process::id()
-    ));
+    let tmp_path =
+        std::env::temp_dir().join(format!("qorvex_devicectl_{}.json", std::process::id()));
     let tmp_str = tmp_path.display().to_string();
 
     // Verify devicectl is available.
@@ -122,8 +120,8 @@ fn list_devices_blocking() -> Result<Vec<CoreDeviceInfo>, CoreDeviceError> {
 
     // Read the JSON output file.
     let mut json_string = String::new();
-    let read_result = std::fs::File::open(&tmp_path)
-        .and_then(|mut f| f.read_to_string(&mut json_string));
+    let read_result =
+        std::fs::File::open(&tmp_path).and_then(|mut f| f.read_to_string(&mut json_string));
 
     // Clean up temp file regardless of read outcome.
     let _ = std::fs::remove_file(&tmp_path);
@@ -196,21 +194,13 @@ fn parse_devicectl_json(json: &str) -> Result<Vec<CoreDeviceInfo>, CoreDeviceErr
 
     for raw in output.result.devices {
         // Only include paired devices.
-        let paired = raw
-            .connection_properties
-            .pairing_state
-            .as_deref()
-            == Some("paired");
+        let paired = raw.connection_properties.pairing_state.as_deref() == Some("paired");
 
         if !paired {
             continue;
         }
 
-        let name = raw
-            .device_properties
-            .name
-            .clone()
-            .unwrap_or_default();
+        let name = raw.device_properties.name.clone().unwrap_or_default();
 
         let udid = extract_traditional_udid(
             &raw.connection_properties.potential_hostnames,
@@ -243,19 +233,13 @@ fn parse_devicectl_json(json: &str) -> Result<Vec<CoreDeviceInfo>, CoreDeviceErr
             hostname,
             name,
             model,
-            os_version: raw
-                .device_properties
-                .os_version_number
-                .unwrap_or_default(),
+            os_version: raw.device_properties.os_version_number.unwrap_or_default(),
             transport_type: raw
                 .connection_properties
                 .transport_type
                 .unwrap_or_else(|| "unknown".into()),
             is_paired: true,
-            developer_mode: raw
-                .device_properties
-                .developer_mode_status
-                .as_deref()
+            developer_mode: raw.device_properties.developer_mode_status.as_deref()
                 == Some("enabled"),
         });
     }

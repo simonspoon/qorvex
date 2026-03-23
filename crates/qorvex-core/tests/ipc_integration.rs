@@ -52,7 +52,10 @@ async fn test_ipc_client_fails_with_no_server() {
 
     // No server started - client should fail to connect
     let client_result = IpcClient::connect(&session_name).await;
-    assert!(client_result.is_err(), "Client should fail when no server exists");
+    assert!(
+        client_result.is_err(),
+        "Client should fail when no server exists"
+    );
 }
 
 #[tokio::test]
@@ -81,7 +84,8 @@ fn test_ipc_request_execute_serialization() {
         action: ActionType::Tap {
             selector: "button_submit".to_string(),
             by_label: false,
-            element_type: None, timeout_ms: None,
+            element_type: None,
+            timeout_ms: None,
         },
         tag: None,
     };
@@ -91,7 +95,12 @@ fn test_ipc_request_execute_serialization() {
 
     match deserialized {
         IpcRequest::Execute { action, .. } => match action {
-            ActionType::Tap { selector, by_label, element_type, .. } => {
+            ActionType::Tap {
+                selector,
+                by_label,
+                element_type,
+                ..
+            } => {
                 assert_eq!(selector, "button_submit");
                 assert!(!by_label);
                 assert!(element_type.is_none());
@@ -248,12 +257,14 @@ fn test_all_action_types_serialization() {
         ActionType::Tap {
             selector: "elem".to_string(),
             by_label: false,
-            element_type: None, timeout_ms: None,
+            element_type: None,
+            timeout_ms: None,
         },
         ActionType::Tap {
             selector: "Sign In".to_string(),
             by_label: true,
-            element_type: Some("Button".to_string()), timeout_ms: None,
+            element_type: Some("Button".to_string()),
+            timeout_ms: None,
         },
         ActionType::TapLocation { x: 100, y: 200 },
         ActionType::LogComment {
@@ -264,7 +275,8 @@ fn test_all_action_types_serialization() {
         ActionType::GetValue {
             selector: "field".to_string(),
             by_label: false,
-            element_type: None, timeout_ms: None,
+            element_type: None,
+            timeout_ms: None,
         },
         ActionType::SendKeys {
             text: "hello".to_string(),
@@ -302,7 +314,13 @@ async fn test_session_broadcasts_action_logged_event() {
 
     // Log an action
     session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::GetScreenshot,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
 
     // Should receive the event
@@ -326,7 +344,9 @@ async fn test_session_broadcasts_screenshot_updated_event() {
     let mut receiver = session.subscribe();
 
     // Update screenshot
-    session.update_screenshot("new_screenshot_data".to_string()).await;
+    session
+        .update_screenshot("new_screenshot_data".to_string())
+        .await;
 
     // Should receive the event
     let event = timeout(Duration::from_millis(100), receiver.recv())
@@ -417,14 +437,21 @@ async fn test_session_logs_actions() {
 
     // Log multiple actions
     session
-        .log_action(ActionType::StartSession, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::StartSession,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
     session
         .log_action(
             ActionType::Tap {
                 selector: "button".to_string(),
                 by_label: false,
-                element_type: None, timeout_ms: None,
+                element_type: None,
+                timeout_ms: None,
             },
             ActionResult::Success,
             None,
@@ -476,13 +503,19 @@ async fn test_session_stores_and_retrieves_screenshot() {
         .await;
 
     // Screenshot should be stored
-    assert_eq!(session.get_screenshot().await, Some(Arc::new("screenshot1".to_string())));
+    assert_eq!(
+        session.get_screenshot().await,
+        Some(Arc::new("screenshot1".to_string()))
+    );
 
     // Update screenshot directly
     session.update_screenshot("screenshot2".to_string()).await;
 
     // Should have new screenshot
-    assert_eq!(session.get_screenshot().await, Some(Arc::new("screenshot2".to_string())));
+    assert_eq!(
+        session.get_screenshot().await,
+        Some(Arc::new("screenshot2".to_string()))
+    );
 }
 
 #[tokio::test]
@@ -490,10 +523,22 @@ async fn test_action_log_has_unique_ids() {
     let session = Session::new(None, "test");
 
     let log1 = session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::GetScreenshot,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
     let log2 = session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::GetScreenshot,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
 
     assert_ne!(log1.id, log2.id, "Each action log should have a unique ID");
@@ -505,12 +550,24 @@ async fn test_action_log_has_timestamp() {
 
     let before = chrono::Utc::now();
     let log = session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::GetScreenshot,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
     let after = chrono::Utc::now();
 
-    assert!(log.timestamp >= before, "Timestamp should be after test start");
-    assert!(log.timestamp <= after, "Timestamp should be before test end");
+    assert!(
+        log.timestamp >= before,
+        "Timestamp should be after test start"
+    );
+    assert!(
+        log.timestamp <= after,
+        "Timestamp should be before test end"
+    );
 }
 
 // =============================================================================
@@ -549,10 +606,22 @@ async fn test_ipc_get_log_request() {
 
     // Pre-log some actions
     session
-        .log_action(ActionType::StartSession, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::StartSession,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
     session
-        .log_action(ActionType::GetScreenshot, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::GetScreenshot,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
 
     let _server_handle = start_server(session, &session_name).await;
@@ -596,9 +665,7 @@ async fn test_ipc_execute_action_request() {
 
     match response {
         IpcResponse::ActionResult {
-            success,
-            message,
-            ..
+            success, message, ..
         } => {
             assert!(success);
             assert!(message.contains("test comment"));
@@ -631,7 +698,8 @@ async fn test_ipc_execute_action_without_simulator_returns_error() {
             action: ActionType::Tap {
                 selector: "my_button".to_string(),
                 by_label: false,
-                element_type: None, timeout_ms: None,
+                element_type: None,
+                timeout_ms: None,
             },
             tag: None,
         })
@@ -691,19 +759,29 @@ async fn test_session_creates_persistent_log_file() {
     use std::path::PathBuf;
 
     // Create a unique session name to avoid conflicts
-    let session_name = format!("persistent_log_test_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string());
+    let session_name = format!(
+        "persistent_log_test_{}",
+        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+    );
     let session = Session::new(None, &session_name);
 
     // Log some actions
     session
-        .log_action(ActionType::StartSession, ActionResult::Success, None, None, None)
+        .log_action(
+            ActionType::StartSession,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        )
         .await;
     session
         .log_action(
             ActionType::Tap {
                 selector: "test_button".to_string(),
                 by_label: false,
-                element_type: None, timeout_ms: None,
+                element_type: None,
+                timeout_ms: None,
             },
             ActionResult::Success,
             None,
@@ -755,18 +833,37 @@ async fn test_session_creates_persistent_log_file() {
             .unwrap_or_else(|_| panic!("Line {} should be valid JSON", i));
 
         // Verify required fields exist
-        assert!(parsed.get("id").is_some(), "Line {} should have 'id' field", i);
-        assert!(parsed.get("timestamp").is_some(), "Line {} should have 'timestamp' field", i);
-        assert!(parsed.get("action").is_some(), "Line {} should have 'action' field", i);
-        assert!(parsed.get("result").is_some(), "Line {} should have 'result' field", i);
+        assert!(
+            parsed.get("id").is_some(),
+            "Line {} should have 'id' field",
+            i
+        );
+        assert!(
+            parsed.get("timestamp").is_some(),
+            "Line {} should have 'timestamp' field",
+            i
+        );
+        assert!(
+            parsed.get("action").is_some(),
+            "Line {} should have 'action' field",
+            i
+        );
+        assert!(
+            parsed.get("result").is_some(),
+            "Line {} should have 'result' field",
+            i
+        );
 
         // Verify id is a valid UUID string
         let id = parsed["id"].as_str().expect("id should be a string");
         uuid::Uuid::parse_str(id).expect("id should be a valid UUID");
 
         // Verify timestamp is a valid ISO 8601 string
-        let timestamp = parsed["timestamp"].as_str().expect("timestamp should be a string");
-        chrono::DateTime::parse_from_rfc3339(timestamp).expect("timestamp should be valid RFC 3339");
+        let timestamp = parsed["timestamp"]
+            .as_str()
+            .expect("timestamp should be a string");
+        chrono::DateTime::parse_from_rfc3339(timestamp)
+            .expect("timestamp should be valid RFC 3339");
 
         // Verify screenshot is null (file logging excludes screenshots)
         assert!(
@@ -790,7 +887,10 @@ async fn test_session_creates_persistent_log_file() {
     let third: serde_json::Value = serde_json::from_str(&lines[2]).unwrap();
     assert_eq!(third["action"]["type"].as_str(), Some("SendKeys"));
     assert_eq!(third["action"]["text"].as_str(), Some("hello world"));
-    assert_eq!(third["result"]["Failure"].as_str(), Some("Keyboard not available"));
+    assert_eq!(
+        third["result"]["Failure"].as_str(),
+        Some("Keyboard not available")
+    );
 
     // Clean up: remove test log file
     fs::remove_file(&log_file).expect("Should clean up test log file");
@@ -806,7 +906,10 @@ async fn test_ipc_server_creates_socket_file() {
     let session = Session::new(None, "test");
     let sock = qorvex_core::ipc::socket_path(&session_name);
 
-    assert!(!sock.exists(), "Socket should not exist before server starts");
+    assert!(
+        !sock.exists(),
+        "Socket should not exist before server starts"
+    );
 
     let server = IpcServer::new(session, &session_name);
     let server_handle = tokio::spawn(async move {
@@ -820,7 +923,10 @@ async fn test_ipc_server_creates_socket_file() {
     // Give Drop a moment to run
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    assert!(!sock.exists(), "Socket should be removed after server is dropped");
+    assert!(
+        !sock.exists(),
+        "Socket should be removed after server is dropped"
+    );
 }
 
 #[tokio::test]
@@ -867,7 +973,10 @@ async fn test_ipc_server_removes_stale_socket_on_start() {
 
     // A client should be able to connect (proving it's a real socket, not stale data)
     let client = IpcClient::connect(&session_name).await;
-    assert!(client.is_ok(), "Client should connect to server (not stale file)");
+    assert!(
+        client.is_ok(),
+        "Client should connect to server (not stale file)"
+    );
 
     server_handle.abort();
     let _ = server_handle.await;

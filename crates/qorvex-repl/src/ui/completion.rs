@@ -28,18 +28,24 @@ impl<'a> CompletionPopup<'a> {
 
     /// Calculate the width needed to display the widest candidate (including border).
     fn content_width(&self) -> u16 {
-        let max_content = self.state.candidates.iter().map(|c| {
-            let kind_len = match c.kind {
-                CandidateKind::Command => 3,
-                CandidateKind::ElementId | CandidateKind::ElementSelectorById => 2,
-                CandidateKind::ElementLabel | CandidateKind::ElementSelectorByLabel => 3,
-                CandidateKind::DeviceUdid => 3,
-                CandidateKind::BundleId => 3,
-                CandidateKind::Option => 3,
-            };
-            // text + "  " + description + " [Kind]"
-            c.text.len() + 2 + c.description.len() + 2 + kind_len + 1
-        }).max().unwrap_or(0);
+        let max_content = self
+            .state
+            .candidates
+            .iter()
+            .map(|c| {
+                let kind_len = match c.kind {
+                    CandidateKind::Command => 3,
+                    CandidateKind::ElementId | CandidateKind::ElementSelectorById => 2,
+                    CandidateKind::ElementLabel | CandidateKind::ElementSelectorByLabel => 3,
+                    CandidateKind::DeviceUdid => 3,
+                    CandidateKind::BundleId => 3,
+                    CandidateKind::Option => 3,
+                };
+                // text + "  " + description + " [Kind]"
+                c.text.len() + 2 + c.description.len() + 2 + kind_len + 1
+            })
+            .max()
+            .unwrap_or(0);
         // +2 for borders
         (max_content + 2) as u16
     }
@@ -60,7 +66,12 @@ impl<'a> CompletionPopup<'a> {
         // Ensure we don't overflow horizontally
         let x = cursor_x.min(container.width.saturating_sub(width));
 
-        Rect::new(x, y, width.min(container.width), height.min(container.height))
+        Rect::new(
+            x,
+            y,
+            width.min(container.width),
+            height.min(container.height),
+        )
     }
 }
 
@@ -88,7 +99,9 @@ impl Widget for CompletionPopup<'_> {
             0
         };
 
-        for (i, candidate) in self.state.candidates
+        for (i, candidate) in self
+            .state
+            .candidates
             .iter()
             .skip(scroll_offset)
             .take(visible_count)
@@ -160,7 +173,10 @@ fn format_candidate(candidate: &Candidate, selected: bool, max_width: usize) -> 
         .saturating_sub(separator_len);
 
     let desc = if candidate.description.len() > desc_max {
-        format!("{}...", &candidate.description[..desc_max.saturating_sub(3)])
+        format!(
+            "{}...",
+            &candidate.description[..desc_max.saturating_sub(3)]
+        )
     } else {
         candidate.description.clone()
     };
@@ -212,7 +228,11 @@ fn build_highlighted_spans(
         if should_highlight != in_highlight {
             // Style change - flush current span
             if !current_span.is_empty() {
-                let style = if in_highlight { highlight_style } else { normal_style };
+                let style = if in_highlight {
+                    highlight_style
+                } else {
+                    normal_style
+                };
                 spans.push(Span::styled(current_span, style));
                 current_span = String::new();
             }
@@ -224,7 +244,11 @@ fn build_highlighted_spans(
 
     // Flush remaining
     if !current_span.is_empty() {
-        let style = if in_highlight { highlight_style } else { normal_style };
+        let style = if in_highlight {
+            highlight_style
+        } else {
+            normal_style
+        };
         spans.push(Span::styled(current_span, style));
     }
 

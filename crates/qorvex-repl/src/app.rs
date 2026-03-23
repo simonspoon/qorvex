@@ -11,10 +11,12 @@ use tui_input::Input;
 use qorvex_core::action::ActionType;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse};
-use qorvex_core::simctl::{InstalledApp, SimulatorDevice, Simctl};
+use qorvex_core::simctl::{InstalledApp, Simctl, SimulatorDevice};
 
-use crate::completion::{CandidateKind, CompletionContext, CompletionState, parse_completion_context};
 use crate::completion::commands::ArgCompletion;
+use crate::completion::{
+    parse_completion_context, CandidateKind, CompletionContext, CompletionState,
+};
 use crate::format::{format_command, format_device, format_element, format_result};
 
 /// Maximum number of lines to keep in output history.
@@ -63,7 +65,11 @@ impl SelectionState {
     pub fn range(&self) -> Option<(TextPosition, TextPosition)> {
         match (self.anchor, self.endpoint) {
             (Some(a), Some(b)) if a != b => {
-                if a <= b { Some((a, b)) } else { Some((b, a)) }
+                if a <= b {
+                    Some((a, b))
+                } else {
+                    Some((b, a))
+                }
             }
             _ => None,
         }
@@ -180,7 +186,10 @@ fn ensure_server_running(session_name: &str) {
     let mut cmd = std::process::Command::new("qorvex-server");
     cmd.args(["-s", session_name]);
     if let Some(f) = log_file {
-        cmd.stdout(f.try_clone().unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()));
+        cmd.stdout(
+            f.try_clone()
+                .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()),
+        );
         cmd.stderr(f);
     }
     let _ = cmd.spawn();
@@ -208,12 +217,10 @@ impl App {
             while fetch_trigger_rx.recv().await.is_some() {
                 while fetch_trigger_rx.try_recv().is_ok() {}
                 let elements = match IpcClient::connect(&fetch_session).await {
-                    Ok(mut client) => {
-                        match client.send(&IpcRequest::FetchElements).await {
-                            Ok(IpcResponse::CompletionData { elements, .. }) => elements,
-                            _ => Vec::new(),
-                        }
-                    }
+                    Ok(mut client) => match client.send(&IpcRequest::FetchElements).await {
+                        Ok(IpcResponse::CompletionData { elements, .. }) => elements,
+                        _ => Vec::new(),
+                    },
                     Err(_) => Vec::new(),
                 };
                 if element_tx.send(elements).await.is_err() {
@@ -312,7 +319,9 @@ impl App {
                     "Failed to connect to server | Session: {} | Socket: {:?}",
                     session_name, sock
                 )));
-                app.add_output(Line::from("Is qorvex-server running? Try: qorvex-server -s <session>"));
+                app.add_output(Line::from(
+                    "Is qorvex-server running? Try: qorvex-server -s <session>",
+                ));
             }
         }
 
@@ -356,7 +365,8 @@ impl App {
                             messages.push(format_result(false, &message));
                         }
                         Err(e) => {
-                            messages.push(format_result(false, &format!("StartSession error: {}", e)));
+                            messages
+                                .push(format_result(false, &format!("StartSession error: {}", e)));
                         }
                         _ => {}
                     }
@@ -377,17 +387,21 @@ impl App {
                         "Failed to connect to server | Session: {} | Socket: {:?}",
                         session_name, sock
                     )));
-                    messages.push(Line::from("Is qorvex-server running? Try: qorvex-server -s <session>"));
+                    messages.push(Line::from(
+                        "Is qorvex-server running? Try: qorvex-server -s <session>",
+                    ));
                     None
                 }
             };
 
-            let _ = tx.send(StartupResult {
-                client,
-                messages,
-                cached_elements,
-                cached_devices,
-            }).await;
+            let _ = tx
+                .send(StartupResult {
+                    client,
+                    messages,
+                    cached_elements,
+                    cached_devices,
+                })
+                .await;
         });
     }
 
@@ -441,7 +455,12 @@ impl App {
 
         if needs_elements {
             // Extract command name
-            let cmd_name = input.trim_start().split_whitespace().next().unwrap_or("").to_string();
+            let cmd_name = input
+                .trim_start()
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string();
             if self.active_fetch_command.as_deref() != Some(&cmd_name) {
                 // New command context — clear cache and trigger fetch
                 self.cached_elements.clear();
@@ -469,11 +488,23 @@ impl App {
 
         // Only show loading indicator after 100ms threshold
         let show_loading = (self.elements_loading
-            && self.fetch_started_at.map(|t| t.elapsed().as_millis() >= 100).unwrap_or(false))
+            && self
+                .fetch_started_at
+                .map(|t| t.elapsed().as_millis() >= 100)
+                .unwrap_or(false))
             || (self.apps_loading
-                && self.apps_fetch_started_at.map(|t| t.elapsed().as_millis() >= 100).unwrap_or(false));
+                && self
+                    .apps_fetch_started_at
+                    .map(|t| t.elapsed().as_millis() >= 100)
+                    .unwrap_or(false));
 
-        self.completion.update(&input, &self.cached_elements, &self.cached_devices, &self.cached_apps, show_loading);
+        self.completion.update(
+            &input,
+            &self.cached_elements,
+            &self.cached_devices,
+            &self.cached_apps,
+            show_loading,
+        );
     }
 
     /// Accept the current completion.
@@ -486,7 +517,10 @@ impl App {
             let new_value = if matches!(kind, CandidateKind::Command) {
                 // Completing a command name — replace entire input
                 text
-            } else if matches!(kind, CandidateKind::ElementSelectorById | CandidateKind::ElementSelectorByLabel) {
+            } else if matches!(
+                kind,
+                CandidateKind::ElementSelectorById | CandidateKind::ElementSelectorByLabel
+            ) {
                 // Smart selector: replace everything after command name
                 if let Some(first_space) = current.find(' ') {
                     format!("{} {}", &current[..first_space], text)
@@ -568,14 +602,17 @@ impl App {
                     match ms_str.parse::<u64>() {
                         Ok(ms) => IpcRequest::SetTimeout { timeout_ms: ms },
                         Err(_) => {
-                            self.add_output(format_result(false, "set-timeout requires a number in milliseconds"));
+                            self.add_output(format_result(
+                                false,
+                                "set-timeout requires a number in milliseconds",
+                            ));
                             self.input = Input::default();
                             self.completion.hide();
                             return;
                         }
                     }
                 }
-            },
+            }
             "get-session-info" => IpcRequest::GetSessionInfo,
             "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
@@ -586,35 +623,61 @@ impl App {
                 tag: None,
             },
             "tap" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "tap requires a selector: tap <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "tap requires a selector: tap <selector>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
                 }
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
-                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
+                let timeout_ms = if args.no_wait {
+                    None
+                } else {
+                    Some(args.timeout.unwrap_or(5000))
+                };
                 IpcRequest::Execute {
-                    action: ActionType::Tap { selector, by_label, element_type, timeout_ms },
+                    action: ActionType::Tap {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                    },
                     tag: None,
                 }
-            },
+            }
             "swipe" => IpcRequest::Execute {
                 action: ActionType::Swipe {
-                    direction: args.positional.first().map(|s| s.to_lowercase()).unwrap_or_else(|| "up".to_string()),
+                    direction: args
+                        .positional
+                        .first()
+                        .map(|s| s.to_lowercase())
+                        .unwrap_or_else(|| "up".to_string()),
                 },
                 tag: None,
             },
             "tap-location" => {
                 if args.positional.len() < 2 {
-                    self.add_output(format_result(false, "tap-location requires 2 arguments: tap-location <x> <y>"));
+                    self.add_output(format_result(
+                        false,
+                        "tap-location requires 2 arguments: tap-location <x> <y>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
                 }
-                match (args.positional[0].parse::<i32>(), args.positional[1].parse::<i32>()) {
+                match (
+                    args.positional[0].parse::<i32>(),
+                    args.positional[1].parse::<i32>(),
+                ) {
                     (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
                         action: ActionType::TapLocation { x, y },
                         tag: None,
@@ -626,11 +689,18 @@ impl App {
                         return;
                     }
                 }
-            },
+            }
             "wait-for" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "wait-for requires a selector: wait-for <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "wait-for requires a selector: wait-for <selector>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
@@ -639,14 +709,27 @@ impl App {
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
-                    action: ActionType::WaitFor { selector, by_label, element_type, timeout_ms, require_stable: true },
+                    action: ActionType::WaitFor {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                        require_stable: true,
+                    },
                     tag: None,
                 }
-            },
+            }
             "wait-for-not" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "wait-for-not requires a selector: wait-for-not <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "wait-for-not requires a selector: wait-for-not <selector>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
@@ -655,14 +738,22 @@ impl App {
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
-                    action: ActionType::WaitForNot { selector, by_label, element_type, timeout_ms },
+                    action: ActionType::WaitForNot {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                    },
                     tag: None,
                 }
-            },
+            }
             "send-keys" => {
                 let text = args.positional.join(" ");
                 if text.is_empty() {
-                    self.add_output(format_result(false, "send-keys requires text: send-keys <text>"));
+                    self.add_output(format_result(
+                        false,
+                        "send-keys requires text: send-keys <text>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
@@ -671,27 +762,46 @@ impl App {
                     action: ActionType::SendKeys { text },
                     tag: None,
                 }
-            },
+            }
             "get-value" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "get-value requires a selector: get-value <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "get-value requires a selector: get-value <selector>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
                 }
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
-                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
+                let timeout_ms = if args.no_wait {
+                    None
+                } else {
+                    Some(args.timeout.unwrap_or(5000))
+                };
                 IpcRequest::Execute {
-                    action: ActionType::GetValue { selector, by_label, element_type, timeout_ms },
+                    action: ActionType::GetValue {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                    },
                     tag: None,
                 }
-            },
+            }
             "log-comment" => {
                 let message = args.positional.join(" ");
                 if message.is_empty() {
-                    self.add_output(format_result(false, "log-comment requires a message: log-comment <message>"));
+                    self.add_output(format_result(
+                        false,
+                        "log-comment requires a message: log-comment <message>",
+                    ));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
@@ -700,7 +810,7 @@ impl App {
                     action: ActionType::LogComment { message },
                     tag: None,
                 }
-            },
+            }
             _ => {
                 self.add_output(format_result(false, &format!("Unknown command: {}", cmd)));
                 self.input = Input::default();
@@ -734,14 +844,20 @@ impl App {
             };
 
             let (cmd_result, client) = match result {
-                Ok((response, client)) => (CommandResult {
-                    cmd,
-                    result: Ok(response),
-                }, client),
-                Err((err_msg, client)) => (CommandResult {
-                    cmd,
-                    result: Err(err_msg),
-                }, client),
+                Ok((response, client)) => (
+                    CommandResult {
+                        cmd,
+                        result: Ok(response),
+                    },
+                    client,
+                ),
+                Err((err_msg, client)) => (
+                    CommandResult {
+                        cmd,
+                        result: Err(err_msg),
+                    },
+                    client,
+                ),
             };
 
             let _ = tx.send((cmd_result, client)).await;
@@ -785,7 +901,11 @@ impl App {
             let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
             let start_col = if i == start.line { start.col } else { 0 };
-            let end_col = if i == end.line { end.col } else { line_str.len() };
+            let end_col = if i == end.line {
+                end.col
+            } else {
+                line_str.len()
+            };
 
             let start_col = start_col.min(line_str.len());
             let end_col = end_col.min(line_str.len());
@@ -803,7 +923,11 @@ impl App {
             }
         }
 
-        if result.is_empty() { None } else { Some(result) }
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
     }
 
     /// Copy the current selection to the system clipboard.
@@ -876,7 +1000,10 @@ impl App {
 
     /// Get the current spinner frame character based on elapsed time.
     pub fn spinner_frame(&self) -> &'static str {
-        const FRAMES: &[&str] = &["\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}", "\u{2827}", "\u{2807}", "\u{280f}"];
+        const FRAMES: &[&str] = &[
+            "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
+            "\u{2827}", "\u{2807}", "\u{280f}",
+        ];
         if let Some(start) = self.processing_start {
             let elapsed_ms = start.elapsed().as_millis() as usize;
             let idx = (elapsed_ms / 80) % FRAMES.len();
@@ -932,12 +1059,15 @@ impl App {
                     match ms_str.parse::<u64>() {
                         Ok(ms) => IpcRequest::SetTimeout { timeout_ms: ms },
                         Err(_) => {
-                            self.add_output(format_result(false, "set-timeout requires a number in milliseconds"));
+                            self.add_output(format_result(
+                                false,
+                                "set-timeout requires a number in milliseconds",
+                            ));
                             return;
                         }
                     }
                 }
-            },
+            }
             "get-session-info" => IpcRequest::GetSessionInfo,
             "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
@@ -948,31 +1078,57 @@ impl App {
                 tag: None,
             },
             "tap" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "tap requires a selector: tap <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "tap requires a selector: tap <selector>",
+                    ));
                     return;
                 }
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
-                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
+                let timeout_ms = if args.no_wait {
+                    None
+                } else {
+                    Some(args.timeout.unwrap_or(5000))
+                };
                 IpcRequest::Execute {
-                    action: ActionType::Tap { selector, by_label, element_type, timeout_ms },
+                    action: ActionType::Tap {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                    },
                     tag: None,
                 }
-            },
+            }
             "swipe" => IpcRequest::Execute {
                 action: ActionType::Swipe {
-                    direction: args.positional.first().map(|s| s.to_lowercase()).unwrap_or_else(|| "up".to_string()),
+                    direction: args
+                        .positional
+                        .first()
+                        .map(|s| s.to_lowercase())
+                        .unwrap_or_else(|| "up".to_string()),
                 },
                 tag: None,
             },
             "tap-location" => {
                 if args.positional.len() < 2 {
-                    self.add_output(format_result(false, "tap-location requires 2 arguments: tap-location <x> <y>"));
+                    self.add_output(format_result(
+                        false,
+                        "tap-location requires 2 arguments: tap-location <x> <y>",
+                    ));
                     return;
                 }
-                match (args.positional[0].parse::<i32>(), args.positional[1].parse::<i32>()) {
+                match (
+                    args.positional[0].parse::<i32>(),
+                    args.positional[1].parse::<i32>(),
+                ) {
                     (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
                         action: ActionType::TapLocation { x, y },
                         tag: None,
@@ -982,71 +1138,118 @@ impl App {
                         return;
                     }
                 }
-            },
+            }
             "wait-for" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "wait-for requires a selector: wait-for <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "wait-for requires a selector: wait-for <selector>",
+                    ));
                     return;
                 }
                 let timeout_ms = args.timeout.unwrap_or(5000);
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
-                    action: ActionType::WaitFor { selector, by_label, element_type, timeout_ms, require_stable: true },
+                    action: ActionType::WaitFor {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                        require_stable: true,
+                    },
                     tag: None,
                 }
-            },
+            }
             "wait-for-not" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "wait-for-not requires a selector: wait-for-not <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "wait-for-not requires a selector: wait-for-not <selector>",
+                    ));
                     return;
                 }
                 let timeout_ms = args.timeout.unwrap_or(5000);
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
-                    action: ActionType::WaitForNot { selector, by_label, element_type, timeout_ms },
+                    action: ActionType::WaitForNot {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                    },
                     tag: None,
                 }
-            },
+            }
             "send-keys" => {
                 let text = args.positional.join(" ");
                 if text.is_empty() {
-                    self.add_output(format_result(false, "send-keys requires text: send-keys <text>"));
+                    self.add_output(format_result(
+                        false,
+                        "send-keys requires text: send-keys <text>",
+                    ));
                     return;
                 }
                 IpcRequest::Execute {
                     action: ActionType::SendKeys { text },
                     tag: None,
                 }
-            },
+            }
             "get-value" => {
-                let selector = args.positional.first().map(|s| s.to_string()).unwrap_or_default();
+                let selector = args
+                    .positional
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 if selector.is_empty() {
-                    self.add_output(format_result(false, "get-value requires a selector: get-value <selector>"));
+                    self.add_output(format_result(
+                        false,
+                        "get-value requires a selector: get-value <selector>",
+                    ));
                     return;
                 }
                 let by_label = args.label;
                 let element_type = args.element_type.clone();
-                let timeout_ms = if args.no_wait { None } else { Some(args.timeout.unwrap_or(5000)) };
+                let timeout_ms = if args.no_wait {
+                    None
+                } else {
+                    Some(args.timeout.unwrap_or(5000))
+                };
                 IpcRequest::Execute {
-                    action: ActionType::GetValue { selector, by_label, element_type, timeout_ms },
+                    action: ActionType::GetValue {
+                        selector,
+                        by_label,
+                        element_type,
+                        timeout_ms,
+                    },
                     tag: None,
                 }
-            },
+            }
             "log-comment" => {
                 let message = args.positional.join(" ");
                 if message.is_empty() {
-                    self.add_output(format_result(false, "log-comment requires a message: log-comment <message>"));
+                    self.add_output(format_result(
+                        false,
+                        "log-comment requires a message: log-comment <message>",
+                    ));
                     return;
                 }
                 IpcRequest::Execute {
                     action: ActionType::LogComment { message },
                     tag: None,
                 }
-            },
+            }
             _ => {
                 self.add_output(format_result(false, &format!("Unknown command: {}", cmd)));
                 return;
@@ -1070,86 +1273,102 @@ impl App {
             IpcResponse::CommandResult { success, message } => {
                 self.add_output(format_result(success, &message));
             }
-            IpcResponse::ActionResult { success, message, data, .. } => {
-                match cmd {
-                    "list-elements" | "get-screen-info" => {
-                        if success {
-                            if let Some(ref data) = data {
-                                if let Ok(elements) = serde_json::from_str::<Vec<UIElement>>(data) {
-                                    self.cached_elements = elements.clone();
-                                    for elem in &elements {
-                                        self.add_output(format_element(elem));
-                                    }
-                                    self.add_output(format_result(true, &format!("{} elements", elements.len())));
-                                    return;
+            IpcResponse::ActionResult {
+                success,
+                message,
+                data,
+                ..
+            } => match cmd {
+                "list-elements" | "get-screen-info" => {
+                    if success {
+                        if let Some(ref data) = data {
+                            if let Ok(elements) = serde_json::from_str::<Vec<UIElement>>(data) {
+                                self.cached_elements = elements.clone();
+                                for elem in &elements {
+                                    self.add_output(format_element(elem));
                                 }
+                                self.add_output(format_result(
+                                    true,
+                                    &format!("{} elements", elements.len()),
+                                ));
+                                return;
                             }
                         }
-                        self.add_output(format_result(success, &message));
                     }
-                    "get-value" => {
-                        if success {
-                            let value = data.unwrap_or_else(|| "(null)".to_string());
-                            self.add_output(format_result(true, &format!("Value: {}", value)));
-                        } else {
-                            self.add_output(format_result(false, &message));
-                        }
+                    self.add_output(format_result(success, &message));
+                }
+                "get-value" => {
+                    if success {
+                        let value = data.unwrap_or_else(|| "(null)".to_string());
+                        self.add_output(format_result(true, &format!("Value: {}", value)));
+                    } else {
+                        self.add_output(format_result(false, &message));
                     }
-                    "get-screenshot" => {
-                        if success {
-                            let byte_count = data.as_ref().map(|d| d.len() * 3 / 4).unwrap_or(0);
-                            self.add_output(format_result(true, &format!("{} bytes (base64 logged)", byte_count)));
-                        } else {
-                            self.add_output(format_result(false, &message));
-                        }
+                }
+                "get-screenshot" => {
+                    if success {
+                        let byte_count = data.as_ref().map(|d| d.len() * 3 / 4).unwrap_or(0);
+                        self.add_output(format_result(
+                            true,
+                            &format!("{} bytes (base64 logged)", byte_count),
+                        ));
+                    } else {
+                        self.add_output(format_result(false, &message));
                     }
-                    "wait-for" | "wait-for-not" => {
-                        if success {
-                            self.add_output(format_result(true, &format!("{} ({})", message, data.unwrap_or_default())));
-                        } else {
-                            self.add_output(format_result(false, &message));
-                        }
+                }
+                "wait-for" | "wait-for-not" => {
+                    if success {
+                        self.add_output(format_result(
+                            true,
+                            &format!("{} ({})", message, data.unwrap_or_default()),
+                        ));
+                    } else {
+                        self.add_output(format_result(false, &message));
                     }
-                    "get-target-info" => {
-                        if success {
-                            if let Some(ref d) = data {
-                                if let Ok(info) = serde_json::from_str::<serde_json::Value>(d) {
-                                    if let Some(bid) = info.get("bundle_id").and_then(|v| v.as_str()) {
-                                        self.add_output(format!("  Bundle ID:    {}", bid).into());
+                }
+                "get-target-info" => {
+                    if success {
+                        if let Some(ref d) = data {
+                            if let Ok(info) = serde_json::from_str::<serde_json::Value>(d) {
+                                if let Some(bid) = info.get("bundle_id").and_then(|v| v.as_str()) {
+                                    self.add_output(format!("  Bundle ID:    {}", bid).into());
+                                }
+                                if let Some(name) =
+                                    info.get("display_name").and_then(|v| v.as_str())
+                                {
+                                    if !name.is_empty() {
+                                        self.add_output(format!("  Display Name: {}", name).into());
                                     }
-                                    if let Some(name) = info.get("display_name").and_then(|v| v.as_str()) {
-                                        if !name.is_empty() {
-                                            self.add_output(format!("  Display Name: {}", name).into());
-                                        }
+                                }
+                                if let Some(ver) = info.get("version").and_then(|v| v.as_str()) {
+                                    if !ver.is_empty() {
+                                        self.add_output(format!("  Version:      {}", ver).into());
                                     }
-                                    if let Some(ver) = info.get("version").and_then(|v| v.as_str()) {
-                                        if !ver.is_empty() {
-                                            self.add_output(format!("  Version:      {}", ver).into());
-                                        }
+                                }
+                                if let Some(build) = info.get("build").and_then(|v| v.as_str()) {
+                                    if !build.is_empty() {
+                                        self.add_output(
+                                            format!("  Build:        {}", build).into(),
+                                        );
                                     }
-                                    if let Some(build) = info.get("build").and_then(|v| v.as_str()) {
-                                        if !build.is_empty() {
-                                            self.add_output(format!("  Build:        {}", build).into());
-                                        }
-                                    }
-                                    if let Some(state) = info.get("state").and_then(|v| v.as_str()) {
-                                        self.add_output(format!("  State:        {}", state).into());
-                                    }
-                                } else {
-                                    self.add_output(format_result(true, &message));
+                                }
+                                if let Some(state) = info.get("state").and_then(|v| v.as_str()) {
+                                    self.add_output(format!("  State:        {}", state).into());
                                 }
                             } else {
                                 self.add_output(format_result(true, &message));
                             }
                         } else {
-                            self.add_output(format_result(false, &message));
+                            self.add_output(format_result(true, &message));
                         }
-                    }
-                    _ => {
-                        self.add_output(format_result(success, &message));
+                    } else {
+                        self.add_output(format_result(false, &message));
                     }
                 }
-            }
+                _ => {
+                    self.add_output(format_result(success, &message));
+                }
+            },
             IpcResponse::DeviceList { devices } => {
                 self.cached_devices = devices.clone();
                 for device in &devices {
@@ -1163,11 +1382,19 @@ impl App {
                 } else {
                     for d in &devices {
                         let name_part = d.name.as_deref().unwrap_or("unknown");
-                        self.add_output(Line::from(format!("  {} ({}) — {}", d.udid, d.connection, name_part)));
+                        self.add_output(Line::from(format!(
+                            "  {} ({}) — {}",
+                            d.udid, d.connection, name_part
+                        )));
                     }
                 }
             }
-            IpcResponse::SessionInfo { session_name, active, device_udid, action_count } => {
+            IpcResponse::SessionInfo {
+                session_name,
+                active,
+                device_udid,
+                action_count,
+            } => {
                 if active {
                     self.add_output(Line::from(format!("Session: {} (active)", session_name)));
                     self.add_output(Line::from(format!("Device: {:?}", device_udid)));
@@ -1177,7 +1404,10 @@ impl App {
                 }
             }
             IpcResponse::TimeoutValue { timeout_ms } => {
-                self.add_output(format_result(true, &format!("Current default timeout: {}ms", timeout_ms)));
+                self.add_output(format_result(
+                    true,
+                    &format!("Current default timeout: {}ms", timeout_ms),
+                ));
             }
             IpcResponse::CompletionData { elements, devices } => {
                 self.cached_elements = elements;
@@ -1377,7 +1607,8 @@ mod tests {
 
     #[test]
     fn test_parse_command_all_flags() {
-        let (cmd, args) = parse_command("tap \"Sign In\" --label --type Button --no-wait --timeout 3000");
+        let (cmd, args) =
+            parse_command("tap \"Sign In\" --label --type Button --no-wait --timeout 3000");
         assert_eq!(cmd, "tap");
         assert_eq!(args.positional, vec!["Sign In"]);
         assert!(args.label);
@@ -1447,7 +1678,7 @@ mod tests {
     /// file has been removed (server Drop cleans it up).
     #[tokio::test]
     async fn test_shutdown_removes_socket_and_clears_client() {
-        use qorvex_core::ipc::{IpcServer, socket_path};
+        use qorvex_core::ipc::{socket_path, IpcServer};
         use qorvex_core::session::Session;
 
         // Unique session name to avoid conflicts

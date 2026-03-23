@@ -27,7 +27,7 @@
 //! ```
 
 use async_trait::async_trait;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::element::UIElement;
@@ -158,7 +158,11 @@ fn parse_selector_index(selector: &str) -> (&str, Option<usize>) {
 
 fn collect_by_identifier(elements: &[UIElement], base: &str, result: &mut Vec<UIElement>) {
     for element in elements {
-        if element.identifier.as_deref().map_or(false, |id| glob_match(base, id)) {
+        if element
+            .identifier
+            .as_deref()
+            .map_or(false, |id| glob_match(base, id))
+        {
             result.push(element.clone());
         }
         collect_by_identifier(&element.children, base, result);
@@ -167,7 +171,11 @@ fn collect_by_identifier(elements: &[UIElement], base: &str, result: &mut Vec<UI
 
 fn collect_by_label(elements: &[UIElement], base: &str, result: &mut Vec<UIElement>) {
     for element in elements {
-        if element.label.as_deref().map_or(false, |l| glob_match(base, l)) {
+        if element
+            .label
+            .as_deref()
+            .map_or(false, |l| glob_match(base, l))
+        {
             result.push(element.clone());
         }
         collect_by_label(&element.children, base, result);
@@ -183,9 +191,15 @@ fn collect_with_type(
 ) {
     for element in elements {
         let selector_matches = if by_label {
-            element.label.as_deref().map_or(false, |l| glob_match(base, l))
+            element
+                .label
+                .as_deref()
+                .map_or(false, |l| glob_match(base, l))
         } else {
-            element.identifier.as_deref().map_or(false, |id| glob_match(base, id))
+            element
+                .identifier
+                .as_deref()
+                .map_or(false, |id| glob_match(base, id))
         };
         let type_matches = match element_type {
             Some(typ) => element.element_type.as_deref() == Some(typ),
@@ -211,7 +225,11 @@ fn search_by_identifier(elements: &[UIElement], selector: &str) -> Option<UIElem
     }
     // No index: existing DFS first-match behavior (unchanged)
     for element in elements {
-        if element.identifier.as_deref().map_or(false, |id| glob_match(base, id)) {
+        if element
+            .identifier
+            .as_deref()
+            .map_or(false, |id| glob_match(base, id))
+        {
             return Some(element.clone());
         }
         if let Some(found) = search_by_identifier(&element.children, selector) {
@@ -234,7 +252,11 @@ fn search_by_label(elements: &[UIElement], selector: &str) -> Option<UIElement> 
     }
     // No index: existing DFS first-match behavior (unchanged)
     for element in elements {
-        if element.label.as_deref().map_or(false, |l| glob_match(base, l)) {
+        if element
+            .label
+            .as_deref()
+            .map_or(false, |l| glob_match(base, l))
+        {
             return Some(element.clone());
         }
         if let Some(found) = search_by_label(&element.children, selector) {
@@ -513,10 +535,7 @@ pub trait AutomationDriver: Send + Sync {
     /// # Arguments
     ///
     /// * `identifier` - The accessibility identifier to find
-    async fn find_element(
-        &self,
-        identifier: &str,
-    ) -> Result<Option<UIElement>, DriverError> {
+    async fn find_element(&self, identifier: &str) -> Result<Option<UIElement>, DriverError> {
         let tree = self.dump_tree().await?;
         Ok(search_by_identifier(&tree, identifier))
     }
@@ -530,10 +549,7 @@ pub trait AutomationDriver: Send + Sync {
     /// # Arguments
     ///
     /// * `label` - The accessibility label to find
-    async fn find_element_by_label(
-        &self,
-        label: &str,
-    ) -> Result<Option<UIElement>, DriverError> {
+    async fn find_element_by_label(&self, label: &str) -> Result<Option<UIElement>, DriverError> {
         let tree = self.dump_tree().await?;
         Ok(search_by_label(&tree, label))
     }
@@ -572,7 +588,8 @@ pub trait AutomationDriver: Send + Sync {
         read_timeout_ms: Option<u64>,
     ) -> Result<Option<UIElement>, DriverError> {
         let _ = read_timeout_ms;
-        self.find_element_with_type(selector, by_label, element_type).await
+        self.find_element_with_type(selector, by_label, element_type)
+            .await
     }
 
     /// Get an element's value by its accessibility identifier.
@@ -584,10 +601,7 @@ pub trait AutomationDriver: Send + Sync {
     /// # Returns
     ///
     /// `Ok(Some(String))` if the element has a value, `Ok(None)` if it has no value.
-    async fn get_element_value(
-        &self,
-        identifier: &str,
-    ) -> Result<Option<String>, DriverError>;
+    async fn get_element_value(&self, identifier: &str) -> Result<Option<String>, DriverError>;
 
     /// Get an element's value by its accessibility label.
     ///
@@ -598,10 +612,7 @@ pub trait AutomationDriver: Send + Sync {
     /// # Returns
     ///
     /// `Ok(Some(String))` if the element has a value, `Ok(None)` if it has no value.
-    async fn get_element_value_by_label(
-        &self,
-        label: &str,
-    ) -> Result<Option<String>, DriverError>;
+    async fn get_element_value_by_label(&self, label: &str) -> Result<Option<String>, DriverError>;
 
     /// Get an element's value with a type filter.
     ///
@@ -665,7 +676,9 @@ pub trait AutomationDriver: Send + Sync {
     /// Not all backends support this. The default implementation returns
     /// an error.
     async fn set_target(&self, _bundle_id: &str) -> Result<(), DriverError> {
-        Err(DriverError::CommandFailed("set_target not supported by this backend".to_string()))
+        Err(DriverError::CommandFailed(
+            "set_target not supported by this backend".to_string(),
+        ))
     }
 
     /// Get metadata about the currently targeted application.
@@ -673,7 +686,9 @@ pub trait AutomationDriver: Send + Sync {
     /// Not all backends support this. The default implementation returns
     /// an error.
     async fn get_target_info(&self) -> Result<TargetInfo, DriverError> {
-        Err(DriverError::CommandFailed("get_target_info not supported by this backend".to_string()))
+        Err(DriverError::CommandFailed(
+            "get_target_info not supported by this backend".to_string(),
+        ))
     }
 }
 
@@ -765,7 +780,7 @@ mod tests {
                 },
             ],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -791,10 +806,10 @@ mod tests {
                 frame: None,
                 children: vec![],
                 role: None,
-                    hittable: None,
+                hittable: None,
             }],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -842,16 +857,16 @@ mod tests {
                         }),
                         children: vec![],
                         role: None,
-                    hittable: None,
+                        hittable: None,
                     }],
                     role: None,
                     hittable: None,
                 }],
                 role: None,
-                    hittable: None,
+                hittable: None,
             }],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -897,14 +912,14 @@ mod tests {
                         frame: None,
                         children: vec![],
                         role: None,
-                    hittable: None,
+                        hittable: None,
                     }],
                     role: None,
                     hittable: None,
                 },
             ],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let flat = flatten_elements(&elements);
@@ -933,10 +948,10 @@ mod tests {
                 frame: None,
                 children: vec![],
                 role: None,
-                    hittable: None,
+                hittable: None,
             }],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let found = search_by_identifier(&elements, "child-btn");
@@ -963,10 +978,10 @@ mod tests {
                 frame: None,
                 children: vec![],
                 role: None,
-                    hittable: None,
+                hittable: None,
             }],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let found = search_by_identifier(&elements, "login-*");
@@ -988,7 +1003,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let found = search_by_label(&elements, "Submit");
@@ -1008,7 +1023,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         let found = search_by_label(&elements, "Log*");
@@ -1026,7 +1041,7 @@ mod tests {
             frame: None,
             children: vec![],
             role: None,
-                    hittable: None,
+            hittable: None,
         }];
 
         // Match by ID with correct type
@@ -1160,7 +1175,13 @@ mod tests {
             make_element("row"),
             make_element("row"),
         ];
-        assert_eq!(search_by_identifier(&elements, "row[0]").unwrap().identifier.as_deref(), Some("row"));
+        assert_eq!(
+            search_by_identifier(&elements, "row[0]")
+                .unwrap()
+                .identifier
+                .as_deref(),
+            Some("row")
+        );
         assert!(search_by_identifier(&elements, "row[1]").is_some());
         assert!(search_by_identifier(&elements, "row[2]").is_some());
         assert!(search_by_identifier(&elements, "row[3]").is_none()); // out of bounds
@@ -1220,10 +1241,7 @@ mod tests {
     #[test]
     fn test_search_by_identifier_no_index_unchanged() {
         // Without index, behavior is unchanged: returns first match
-        let elements = vec![
-            make_element("row"),
-            make_element("row"),
-        ];
+        let elements = vec![make_element("row"), make_element("row")];
         let found = search_by_identifier(&elements, "row");
         assert!(found.is_some());
     }
@@ -1273,8 +1291,26 @@ mod tests {
     fn test_search_by_identifier_glob_plus_index() {
         // Glob + index: "cell_*[1]" → base="cell_*", index=1
         let elements = vec![
-            UIElement { identifier: Some("cell_A".to_string()), label: None, value: None, element_type: None, frame: None, children: vec![], role: None, hittable: None },
-            UIElement { identifier: Some("cell_B".to_string()), label: None, value: None, element_type: None, frame: None, children: vec![], role: None, hittable: None },
+            UIElement {
+                identifier: Some("cell_A".to_string()),
+                label: None,
+                value: None,
+                element_type: None,
+                frame: None,
+                children: vec![],
+                role: None,
+                hittable: None,
+            },
+            UIElement {
+                identifier: Some("cell_B".to_string()),
+                label: None,
+                value: None,
+                element_type: None,
+                frame: None,
+                children: vec![],
+                role: None,
+                hittable: None,
+            },
         ];
         let found = search_by_identifier(&elements, "cell_*[1]");
         assert_eq!(found.unwrap().identifier.as_deref(), Some("cell_B"));

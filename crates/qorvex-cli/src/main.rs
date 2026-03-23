@@ -54,7 +54,7 @@ mod converter;
 
 use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
-use qorvex_core::element::{UIElement, ElementFrame};
+use qorvex_core::element::{ElementFrame, UIElement};
 use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse};
 use qorvex_core::simctl::Simctl;
 use std::path::PathBuf;
@@ -392,20 +392,32 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             match Simctl::list_devices() {
                 Ok(devices) => {
                     if cli.format == OutputFormat::Json {
-                        println!("{}", serde_json::to_string_pretty(&devices)
-                            .map_err(|e| CliError::Protocol(e.to_string()))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&devices)
+                                .map_err(|e| CliError::Protocol(e.to_string()))?
+                        );
                     } else {
                         if devices.is_empty() {
                             eprintln!("No simulator devices found");
                         } else {
                             for device in &devices {
-                                let state = if device.state == "Booted" { " (Booted)" } else { "" };
+                                let state = if device.state == "Booted" {
+                                    " (Booted)"
+                                } else {
+                                    ""
+                                };
                                 println!("{} -- {}{}", device.udid, device.name, state);
                             }
                         }
                     }
                 }
-                Err(e) => return Err(CliError::ActionFailed(format!("Failed to list devices: {}", e))),
+                Err(e) => {
+                    return Err(CliError::ActionFailed(format!(
+                        "Failed to list devices: {}",
+                        e
+                    )))
+                }
             }
             return Ok(());
         }
@@ -418,7 +430,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                         eprintln!("Booted device {}", udid);
                     }
                 }
-                Err(e) => return Err(CliError::ActionFailed(format!("Failed to boot device: {}", e))),
+                Err(e) => {
+                    return Err(CliError::ActionFailed(format!(
+                        "Failed to boot device: {}",
+                        e
+                    )))
+                }
             }
             return Ok(());
         }
@@ -426,8 +443,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             let result = match log {
                 Some(path) => converter::LogConverter::convert_file(path)
                     .map_err(|e| CliError::ActionFailed(format!("Failed to convert log: {}", e))),
-                None => converter::LogConverter::convert_stdin()
-                    .map_err(|e| CliError::ActionFailed(format!("Failed to convert from stdin: {}", e))),
+                None => converter::LogConverter::convert_stdin().map_err(|e| {
+                    CliError::ActionFailed(format!("Failed to convert from stdin: {}", e))
+                }),
             };
             match result {
                 Ok(script) => {
@@ -451,105 +469,214 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     }
 
     // Connect to the IPC server
-    let mut client = IpcClient::connect(&cli.session)
-        .await
-        .map_err(|e| CliError::Connection(format!("Failed to connect to session '{}': {}", cli.session, e)))?;
+    let mut client = IpcClient::connect(&cli.session).await.map_err(|e| {
+        CliError::Connection(format!(
+            "Failed to connect to session '{}': {}",
+            cli.session, e
+        ))
+    })?;
 
     match cli.command {
-        Command::Tap { ref selector, label, ref element_type, no_wait, timeout, ref tag } => {
+        Command::Tap {
+            ref selector,
+            label,
+            ref element_type,
+            no_wait,
+            timeout,
+            ref tag,
+        } => {
             let timeout_ms = if no_wait { None } else { Some(timeout) };
-            execute_action(&mut client, ActionType::Tap {
-                selector: selector.clone(),
-                by_label: label,
-                element_type: element_type.clone(),
-                timeout_ms,
-            }, tag.clone(), &cli).await
+            execute_action(
+                &mut client,
+                ActionType::Tap {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                    timeout_ms,
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
         Command::TapLocation { x, y, ref tag } => {
-            execute_action(&mut client, ActionType::TapLocation { x, y }, tag.clone(), &cli).await
+            execute_action(
+                &mut client,
+                ActionType::TapLocation { x, y },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
         Command::SendKeys { ref text, ref tag } => {
-            execute_action(&mut client, ActionType::SendKeys { text: text.clone() }, tag.clone(), &cli).await
+            execute_action(
+                &mut client,
+                ActionType::SendKeys { text: text.clone() },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
         Command::Screenshot { ref tag } => {
             execute_action(&mut client, ActionType::GetScreenshot, tag.clone(), &cli).await
         }
-        Command::ScreenInfo { full, pretty, ref tag } => {
-            execute_screen_info(&mut client, &cli, full, pretty, tag.clone()).await
-        }
-        Command::GetValue { ref selector, label, ref element_type, no_wait, timeout, ref tag } => {
+        Command::ScreenInfo {
+            full,
+            pretty,
+            ref tag,
+        } => execute_screen_info(&mut client, &cli, full, pretty, tag.clone()).await,
+        Command::GetValue {
+            ref selector,
+            label,
+            ref element_type,
+            no_wait,
+            timeout,
+            ref tag,
+        } => {
             let timeout_ms = if no_wait { None } else { Some(timeout) };
-            execute_action(&mut client, ActionType::GetValue {
-                selector: selector.clone(),
-                by_label: label,
-                element_type: element_type.clone(),
-                timeout_ms,
-            }, tag.clone(), &cli).await
+            execute_action(
+                &mut client,
+                ActionType::GetValue {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                    timeout_ms,
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
-        Command::Swipe { ref direction, ref tag } => {
-            execute_action(&mut client, ActionType::Swipe { direction: direction.clone() }, tag.clone(), &cli).await
+        Command::Swipe {
+            ref direction,
+            ref tag,
+        } => {
+            execute_action(
+                &mut client,
+                ActionType::Swipe {
+                    direction: direction.clone(),
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
-        Command::SetTarget { ref bundle_id, ref tag } => {
-            execute_action(&mut client, ActionType::SetTarget { bundle_id: bundle_id.clone() }, tag.clone(), &cli).await
+        Command::SetTarget {
+            ref bundle_id,
+            ref tag,
+        } => {
+            execute_action(
+                &mut client,
+                ActionType::SetTarget {
+                    bundle_id: bundle_id.clone(),
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
-        Command::Comment { ref message, ref tag } => {
-            execute_action(&mut client, ActionType::LogComment { message: message.clone() }, tag.clone(), &cli).await
+        Command::Comment {
+            ref message,
+            ref tag,
+        } => {
+            execute_action(
+                &mut client,
+                ActionType::LogComment {
+                    message: message.clone(),
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
-        Command::WaitFor { ref selector, label, ref element_type, timeout, ref tag } => {
-            execute_action(&mut client, ActionType::WaitFor {
-                selector: selector.clone(),
-                by_label: label,
-                element_type: element_type.clone(),
-                timeout_ms: timeout,
-                require_stable: true,
-            }, tag.clone(), &cli).await
+        Command::WaitFor {
+            ref selector,
+            label,
+            ref element_type,
+            timeout,
+            ref tag,
+        } => {
+            execute_action(
+                &mut client,
+                ActionType::WaitFor {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                    timeout_ms: timeout,
+                    require_stable: true,
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
-        Command::WaitForNot { ref selector, label, ref element_type, timeout, ref tag } => {
-            execute_action(&mut client, ActionType::WaitForNot {
-                selector: selector.clone(),
-                by_label: label,
-                element_type: element_type.clone(),
-                timeout_ms: timeout,
-            }, tag.clone(), &cli).await
+        Command::WaitForNot {
+            ref selector,
+            label,
+            ref element_type,
+            timeout,
+            ref tag,
+        } => {
+            execute_action(
+                &mut client,
+                ActionType::WaitForNot {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                    timeout_ms: timeout,
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
         }
-        Command::StartTarget => {
-            send_command(&mut client, IpcRequest::StartTarget, &cli).await
-        }
-        Command::StopTarget => {
-            send_command(&mut client, IpcRequest::StopTarget, &cli).await
-        }
-        Command::TargetInfo => {
-            execute_target_info(&mut client, &cli).await
-        }
-        Command::StartSession => {
-            send_command(&mut client, IpcRequest::StartSession, &cli).await
-        }
+        Command::StartTarget => send_command(&mut client, IpcRequest::StartTarget, &cli).await,
+        Command::StopTarget => send_command(&mut client, IpcRequest::StopTarget, &cli).await,
+        Command::TargetInfo => execute_target_info(&mut client, &cli).await,
+        Command::StartSession => send_command(&mut client, IpcRequest::StartSession, &cli).await,
         Command::StartAgent { ref project_dir } => {
-            send_command(&mut client, IpcRequest::StartAgent { project_dir: project_dir.clone() }, &cli).await
+            send_command(
+                &mut client,
+                IpcRequest::StartAgent {
+                    project_dir: project_dir.clone(),
+                },
+                &cli,
+            )
+            .await
         }
-        Command::Stop => {
-            stop_server(&mut client, &cli).await
-        }
-        Command::Status => {
-            get_status(&mut client, &cli).await
-        }
-        Command::Log => {
-            get_log(&mut client, &cli).await
-        }
+        Command::Stop => stop_server(&mut client, &cli).await,
+        Command::Status => get_status(&mut client, &cli).await,
+        Command::Log => get_log(&mut client, &cli).await,
         Command::UseDevice { ref udid } => {
-            send_command(&mut client, IpcRequest::UseDevice { udid: udid.clone() }, &cli).await
+            send_command(
+                &mut client,
+                IpcRequest::UseDevice { udid: udid.clone() },
+                &cli,
+            )
+            .await
         }
-        Command::ListPhysicalDevices => {
-            list_physical_devices(&mut client, &cli).await
-        }
+        Command::ListPhysicalDevices => list_physical_devices(&mut client, &cli).await,
         // These commands are handled before IPC connection above
-        Command::ListSessions | Command::ListDevices | Command::BootDevice { .. } | Command::Convert { .. } | Command::Start { .. } | Command::Completions { .. } => unreachable!(),
+        Command::ListSessions
+        | Command::ListDevices
+        | Command::BootDevice { .. }
+        | Command::Convert { .. }
+        | Command::Start { .. }
+        | Command::Completions { .. } => unreachable!(),
     }
 }
 
-async fn execute_action(client: &mut IpcClient, action: ActionType, tag: Option<String>, cli: &Cli) -> Result<(), CliError> {
+async fn execute_action(
+    client: &mut IpcClient,
+    action: ActionType,
+    tag: Option<String>,
+    cli: &Cli,
+) -> Result<(), CliError> {
     let is_screenshot_action = matches!(action, ActionType::GetScreenshot);
-    let is_data_action = matches!(action, ActionType::GetScreenInfo | ActionType::GetValue { .. });
+    let is_data_action = matches!(
+        action,
+        ActionType::GetScreenInfo | ActionType::GetValue { .. }
+    );
     let action_label = action.display_name();
     let action_target = action.display_target();
     let request = IpcRequest::Execute { action, tag };
@@ -559,7 +686,12 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, tag: Option<
         .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
 
     match response {
-        IpcResponse::ActionResult { success, message, screenshot, data } => {
+        IpcResponse::ActionResult {
+            success,
+            message,
+            screenshot,
+            data,
+        } => {
             if cli.format == OutputFormat::Json {
                 let output = serde_json::json!({
                     "success": success,
@@ -585,12 +717,16 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, tag: Option<
                     }
                     if !cli.quiet {
                         let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3fZ");
-                        let duration_str = data.as_ref()
+                        let duration_str = data
+                            .as_ref()
                             .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                             .and_then(|parsed| parsed.get("elapsed_ms").and_then(|v| v.as_u64()))
                             .map(|ms| format!("{}ms", ms))
                             .unwrap_or_default();
-                        eprintln!("|{}|{}|{}|{}|", now, action_label, action_target, duration_str);
+                        eprintln!(
+                            "|{}|{}|{}|{}|",
+                            now, action_label, action_target, duration_str
+                        );
                     }
                 } else {
                     return Err(CliError::ActionFailed(message));
@@ -598,12 +734,8 @@ async fn execute_action(client: &mut IpcClient, action: ActionType, tag: Option<
             }
             Ok(())
         }
-        IpcResponse::Error { message } => {
-            Err(CliError::ActionFailed(message))
-        }
-        _ => {
-            Err(CliError::Protocol("Unexpected response type".to_string()))
-        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 
@@ -614,7 +746,12 @@ async fn execute_target_info(client: &mut IpcClient, cli: &Cli) -> Result<(), Cl
         .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
 
     match response {
-        IpcResponse::ActionResult { success, message, data, .. } => {
+        IpcResponse::ActionResult {
+            success,
+            message,
+            data,
+            ..
+        } => {
             if !success {
                 return Err(CliError::ActionFailed(message));
             }
@@ -652,7 +789,11 @@ async fn execute_target_info(client: &mut IpcClient, cli: &Cli) -> Result<(), Cl
             Ok(())
         }
         IpcResponse::CommandResult { success, message } => {
-            if success { Ok(()) } else { Err(CliError::ActionFailed(message)) }
+            if success {
+                Ok(())
+            } else {
+                Err(CliError::ActionFailed(message))
+            }
         }
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
@@ -732,14 +873,22 @@ async fn execute_screen_info(
     pretty: bool,
     tag: Option<String>,
 ) -> Result<(), CliError> {
-    let request = IpcRequest::Execute { action: ActionType::GetScreenInfo, tag };
+    let request = IpcRequest::Execute {
+        action: ActionType::GetScreenInfo,
+        tag,
+    };
     let response = client
         .send(&request)
         .await
         .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
 
     match response {
-        IpcResponse::ActionResult { success, message, data, .. } => {
+        IpcResponse::ActionResult {
+            success,
+            message,
+            data,
+            ..
+        } => {
             if !success {
                 return Err(CliError::ActionFailed(message));
             }
@@ -788,7 +937,10 @@ async fn get_status(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
         .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
 
     match response {
-        IpcResponse::State { session_id, screenshot } => {
+        IpcResponse::State {
+            session_id,
+            screenshot,
+        } => {
             if cli.format == OutputFormat::Json {
                 let output = serde_json::json!({
                     "session_id": session_id,
@@ -801,12 +953,8 @@ async fn get_status(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
             }
             Ok(())
         }
-        IpcResponse::Error { message } => {
-            Err(CliError::ActionFailed(message))
-        }
-        _ => {
-            Err(CliError::Protocol("Unexpected response type".to_string()))
-        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 
@@ -825,7 +973,8 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
                     println!("No actions logged");
                 } else {
                     for entry in entries {
-                        println!("[{}] {:?} - {:?}",
+                        println!(
+                            "[{}] {:?} - {:?}",
                             entry.timestamp.format("%H:%M:%S"),
                             entry.action,
                             entry.result
@@ -835,16 +984,16 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
             }
             Ok(())
         }
-        IpcResponse::Error { message } => {
-            Err(CliError::ActionFailed(message))
-        }
-        _ => {
-            Err(CliError::Protocol("Unexpected response type".to_string()))
-        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 
-async fn send_command(client: &mut IpcClient, request: IpcRequest, cli: &Cli) -> Result<(), CliError> {
+async fn send_command(
+    client: &mut IpcClient,
+    request: IpcRequest,
+    cli: &Cli,
+) -> Result<(), CliError> {
     let response = client
         .send(&request)
         .await
@@ -867,8 +1016,8 @@ async fn send_command(client: &mut IpcClient, request: IpcRequest, cli: &Cli) ->
 }
 
 async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
-    use qorvex_core::ipc::socket_path;
     use qorvex_core::config::QorvexConfig;
+    use qorvex_core::ipc::socket_path;
 
     let sock = socket_path(&cli.session);
 
@@ -890,14 +1039,20 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
                     eprintln!("Building agent for physical device...");
                 }
                 let team_arg = format!("DEVELOPMENT_TEAM={}", team);
-                let bid_arg = config.agent_bundle_id.as_ref()
+                let bid_arg = config
+                    .agent_bundle_id
+                    .as_ref()
                     .map(|bid| format!("PRODUCT_BUNDLE_IDENTIFIER={}", bid));
                 let mut args = vec![
                     "build-for-testing",
-                    "-project", &xcodeproj_str,
-                    "-scheme", "QorvexAgentUITests",
-                    "-destination", "generic/platform=iOS",
-                    "-derivedDataPath", &derived_str,
+                    "-project",
+                    &xcodeproj_str,
+                    "-scheme",
+                    "QorvexAgentUITests",
+                    "-destination",
+                    "generic/platform=iOS",
+                    "-derivedDataPath",
+                    &derived_str,
                     "-allowProvisioningUpdates",
                     &team_arg,
                     "CODE_SIGN_STYLE=Automatic",
@@ -918,7 +1073,9 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
                     .stderr(std::process::Stdio::inherit())
                     .stdin(std::process::Stdio::inherit())
                     .status()
-                    .map_err(|e| CliError::ActionFailed(format!("Failed to run xcodebuild: {}", e)))?;
+                    .map_err(|e| {
+                        CliError::ActionFailed(format!("Failed to run xcodebuild: {}", e))
+                    })?;
                 if !status.success() {
                     return Err(CliError::ActionFailed(
                         "Agent build failed (see output above)".to_string(),
@@ -936,7 +1093,10 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
         let mut cmd = std::process::Command::new("qorvex-server");
         cmd.args(["-s", &cli.session]);
         if let Some(f) = log_file {
-            cmd.stdout(f.try_clone().unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()));
+            cmd.stdout(
+                f.try_clone()
+                    .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()),
+            );
             cmd.stderr(f);
         }
         cmd.spawn()
@@ -950,7 +1110,9 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         if !sock.exists() {
-            return Err(CliError::Connection("Server did not start in time".to_string()));
+            return Err(CliError::Connection(
+                "Server did not start in time".to_string(),
+            ));
         }
     }
 
@@ -1010,8 +1172,11 @@ async fn list_physical_devices(client: &mut IpcClient, cli: &Cli) -> Result<(), 
     match response {
         IpcResponse::PhysicalDeviceList { devices } => {
             if cli.format == OutputFormat::Json {
-                println!("{}", serde_json::to_string_pretty(&devices)
-                    .map_err(|e| CliError::Protocol(e.to_string()))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&devices)
+                        .map_err(|e| CliError::Protocol(e.to_string()))?
+                );
             } else {
                 if devices.is_empty() {
                     eprintln!("No physical devices found");
@@ -1043,7 +1208,9 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
             Ok(())
         }
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
-        _ => Err(CliError::Protocol("Unexpected response to Shutdown".to_string())),
+        _ => Err(CliError::Protocol(
+            "Unexpected response to Shutdown".to_string(),
+        )),
     }
 }
 

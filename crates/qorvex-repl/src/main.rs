@@ -12,14 +12,17 @@ use clap::Parser;
 use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind, MouseButton},
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+            KeyModifiers, MouseButton, MouseEventKind,
+        },
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
     Terminal,
 };
-use tui_input::backend::crossterm::EventHandler;
 use tracing_subscriber::EnvFilter;
+use tui_input::backend::crossterm::EventHandler;
 
 use app::App;
 
@@ -84,11 +87,7 @@ async fn main() -> io::Result<()> {
 }
 
 /// Convert mouse (column, row) screen coordinates to a TextPosition in the output buffer.
-fn mouse_to_text_position(
-    column: u16,
-    row: u16,
-    app: &App,
-) -> Option<app::TextPosition> {
+fn mouse_to_text_position(column: u16, row: u16, app: &App) -> Option<app::TextPosition> {
     let area = app.output_area?;
 
     // Inner area (inside borders)
@@ -111,10 +110,17 @@ fn mouse_to_text_position(
     let lines: Vec<&ratatui::text::Line> = app.output_history.iter().collect();
 
     // Build a map of visual rows to (logical_line, char_offset)
-    let total_visual_lines: usize = lines.iter().map(|line| {
-        let w = line.width();
-        if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width }
-    }).sum();
+    let total_visual_lines: usize = lines
+        .iter()
+        .map(|line| {
+            let w = line.width();
+            if w == 0 || inner_width == 0 {
+                1
+            } else {
+                (w + inner_width - 1) / inner_width
+            }
+        })
+        .sum();
 
     let max_scroll = total_visual_lines.saturating_sub(inner_height);
     let scroll_y = max_scroll.saturating_sub(app.output_scroll_position);
@@ -125,7 +131,11 @@ fn mouse_to_text_position(
     for (line_idx, line) in lines.iter().enumerate() {
         let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         let w = line.width();
-        let wrapped_rows = if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width };
+        let wrapped_rows = if w == 0 || inner_width == 0 {
+            1
+        } else {
+            (w + inner_width - 1) / inner_width
+        };
 
         if target_visual_row < visual_row + wrapped_rows {
             // This is the line
@@ -177,7 +187,11 @@ async fn run_batch(session: String) -> io::Result<()> {
 
         // Drain output and print as plain text
         for output_line in app.output_history.drain(..) {
-            let text: String = output_line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let text: String = output_line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
             println!("{}", text);
         }
 
@@ -224,7 +238,9 @@ async fn run_app(
                     }
 
                     // Ctrl+C: copy if selection active, otherwise quit
-                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
                         if app.selection.has_selection() {
                             app.copy_selection_to_clipboard();
                         } else {
@@ -289,39 +305,39 @@ async fn run_app(
                         }
                     }
                 }
-                Event::Mouse(mouse) => {
-                    match mouse.kind {
-                        MouseEventKind::Down(MouseButton::Left) => {
-                            if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
-                                app.selection.clear();
-                                app.selection.anchor = Some(pos);
-                                app.selection.dragging = true;
-                            }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
+                            app.selection.clear();
+                            app.selection.anchor = Some(pos);
+                            app.selection.dragging = true;
                         }
-                        MouseEventKind::Drag(MouseButton::Left) => {
-                            if app.selection.dragging {
-                                if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
-                                    app.selection.endpoint = Some(pos);
-                                }
-                            }
-                        }
-                        MouseEventKind::Up(MouseButton::Left) => {
-                            if app.selection.dragging {
-                                if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
-                                    app.selection.endpoint = Some(pos);
-                                }
-                                app.selection.dragging = false;
-                            }
-                        }
-                        MouseEventKind::ScrollUp => {
-                            app.scroll_up();
-                        }
-                        MouseEventKind::ScrollDown => {
-                            app.scroll_down();
-                        }
-                        _ => {}
                     }
-                }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if app.selection.dragging {
+                            if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app)
+                            {
+                                app.selection.endpoint = Some(pos);
+                            }
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if app.selection.dragging {
+                            if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app)
+                            {
+                                app.selection.endpoint = Some(pos);
+                            }
+                            app.selection.dragging = false;
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        app.scroll_up();
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.scroll_down();
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }

@@ -30,19 +30,19 @@
 //! # }
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use tracing::{debug, info, warn, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::agent_client::{AgentClient, AgentClientError};
 use crate::agent_lifecycle::AgentLifecycle;
-use crate::element::UIElement;
 use crate::driver::{AutomationDriver, DriverError, TargetInfo};
+use crate::element::UIElement;
 use crate::protocol::{Request, Response};
 
 // ---------------------------------------------------------------------------
@@ -267,8 +267,12 @@ impl AgentDriver {
                 let stream = crate::usb_tunnel::connect(udid, *device_port).await?;
                 AgentClient::from_stream(stream)
             }
-            ConnectionTarget::Tunneld { tunnel_address, agent_port } => {
-                let stream = crate::usb_tunnel::connect_tunneld(tunnel_address, *agent_port).await?;
+            ConnectionTarget::Tunneld {
+                tunnel_address,
+                agent_port,
+            } => {
+                let stream =
+                    crate::usb_tunnel::connect_tunneld(tunnel_address, *agent_port).await?;
                 AgentClient::from_stream(stream)
             }
             ConnectionTarget::CoreDevice { udid, port } => {
@@ -300,10 +304,7 @@ impl AgentDriver {
     /// Terminates the agent, respawns it (skipping rebuild), waits for it to
     /// become ready, then reconnects and replaces the stored client.
     async fn attempt_recovery(&self) -> Result<(), DriverError> {
-        let lifecycle = self
-            .lifecycle
-            .as_ref()
-            .ok_or(DriverError::NotConnected)?;
+        let lifecycle = self.lifecycle.as_ref().ok_or(DriverError::NotConnected)?;
 
         info!("agent connection lost, attempting recovery");
 
@@ -343,9 +344,11 @@ impl AgentDriver {
         let bundle_id = self.target_bundle_id.lock().await.clone();
         if let Some(ref bid) = bundle_id {
             info!(bundle_id = %bid, "restoring target after recovery");
-            let response = self.send_raw(&Request::SetTarget {
-                bundle_id: bid.clone(),
-            }).await?;
+            let response = self
+                .send_raw(&Request::SetTarget {
+                    bundle_id: bid.clone(),
+                })
+                .await?;
             expect_ok(response)?;
         }
         Ok(())
@@ -400,7 +403,10 @@ impl AgentDriver {
         let mut guard = self.client.lock().await;
         let lock_elapsed = lock_start.elapsed();
         if lock_elapsed > Duration::from_millis(500) {
-            warn!(elapsed_ms = lock_elapsed.as_millis() as u64, "slow mutex acquisition on agent client");
+            warn!(
+                elapsed_ms = lock_elapsed.as_millis() as u64,
+                "slow mutex acquisition on agent client"
+            );
         }
         let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
         client.send(request).await.map_err(map_client_error)
@@ -575,10 +581,7 @@ impl AutomationDriver for AgentDriver {
         }
     }
 
-    async fn get_element_value(
-        &self,
-        identifier: &str,
-    ) -> Result<Option<String>, DriverError> {
+    async fn get_element_value(&self, identifier: &str) -> Result<Option<String>, DriverError> {
         let response = self
             .send(&Request::GetValue {
                 selector: identifier.to_string(),
@@ -595,10 +598,7 @@ impl AutomationDriver for AgentDriver {
         }
     }
 
-    async fn get_element_value_by_label(
-        &self,
-        label: &str,
-    ) -> Result<Option<String>, DriverError> {
+    async fn get_element_value_by_label(&self, label: &str) -> Result<Option<String>, DriverError> {
         let response = self
             .send(&Request::GetValue {
                 selector: label.to_string(),
@@ -800,9 +800,11 @@ impl AutomationDriver for AgentDriver {
 
     #[instrument(skip(self), level = "debug")]
     async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
-        let response = self.send(&Request::SetTarget {
-            bundle_id: bundle_id.to_string(),
-        }).await?;
+        let response = self
+            .send(&Request::SetTarget {
+                bundle_id: bundle_id.to_string(),
+            })
+            .await?;
         expect_ok(response)?;
         // Remember for restore after recovery.
         *self.target_bundle_id.lock().await = Some(bundle_id.to_string());
@@ -811,7 +813,11 @@ impl AutomationDriver for AgentDriver {
 
     #[instrument(skip(self), level = "debug")]
     async fn get_target_info(&self) -> Result<TargetInfo, DriverError> {
-        let bundle_id = self.target_bundle_id.lock().await.clone()
+        let bundle_id = self
+            .target_bundle_id
+            .lock()
+            .await
+            .clone()
             .unwrap_or_default();
         let response = self.send(&Request::GetTargetInfo).await?;
         match response {
@@ -834,7 +840,11 @@ impl AutomationDriver for AgentDriver {
                 let partial: AgentTargetInfo = serde_json::from_str(&json)
                     .map_err(|e| DriverError::JsonParse(e.to_string()))?;
                 Ok(TargetInfo {
-                    bundle_id: if partial.bundle_id.is_empty() { bundle_id } else { partial.bundle_id },
+                    bundle_id: if partial.bundle_id.is_empty() {
+                        bundle_id
+                    } else {
+                        partial.bundle_id
+                    },
                     display_name: partial.display_name,
                     version: partial.version,
                     build: partial.build,
@@ -1267,10 +1277,7 @@ mod tests {
         let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
         driver.connect().await.unwrap();
 
-        let value = driver
-            .get_element_value_by_label("Email")
-            .await
-            .unwrap();
+        let value = driver.get_element_value_by_label("Email").await.unwrap();
         assert_eq!(value.as_deref(), Some("typed text"));
     }
 
@@ -1361,9 +1368,7 @@ mod tests {
 
     #[test]
     fn map_connection_failed() {
-        let err = map_client_error(AgentClientError::ConnectionFailed(
-            "refused".to_string(),
-        ));
+        let err = map_client_error(AgentClientError::ConnectionFailed("refused".to_string()));
         match err {
             DriverError::ConnectionLost(msg) => assert_eq!(msg, "refused"),
             other => panic!("expected ConnectionLost, got: {other:?}"),
@@ -1383,9 +1388,9 @@ mod tests {
     #[test]
     fn map_protocol_error() {
         use crate::protocol::ProtocolError;
-        let err = map_client_error(AgentClientError::Protocol(
-            ProtocolError::InvalidOpCode(0xFF),
-        ));
+        let err = map_client_error(AgentClientError::Protocol(ProtocolError::InvalidOpCode(
+            0xFF,
+        )));
         match err {
             DriverError::CommandFailed(msg) => assert!(msg.contains("0xFF")),
             other => panic!("expected CommandFailed, got: {other:?}"),
@@ -1461,9 +1466,9 @@ mod tests {
     fn test_is_connection_error_classifier() {
         // Connection errors — should return true
         assert!(AgentDriver::is_connection_error(&DriverError::NotConnected));
-        assert!(AgentDriver::is_connection_error(&DriverError::ConnectionLost(
-            "reset".to_string()
-        )));
+        assert!(AgentDriver::is_connection_error(
+            &DriverError::ConnectionLost("reset".to_string())
+        ));
         assert!(AgentDriver::is_connection_error(&DriverError::Io(
             std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken")
         )));
@@ -1472,9 +1477,9 @@ mod tests {
         assert!(AgentDriver::is_connection_error(&DriverError::Timeout));
 
         // Non-connection errors — should return false
-        assert!(!AgentDriver::is_connection_error(&DriverError::CommandFailed(
-            "element not found".to_string()
-        )));
+        assert!(!AgentDriver::is_connection_error(
+            &DriverError::CommandFailed("element not found".to_string())
+        ));
         assert!(!AgentDriver::is_connection_error(&DriverError::JsonParse(
             "bad json".to_string()
         )));
@@ -1525,10 +1530,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Helper: handle one connection (heartbeat + one request/response).
-    async fn handle_one_connection(
-        stream: &mut tokio::net::TcpStream,
-        response: &Response,
-    ) {
+    async fn handle_one_connection(stream: &mut tokio::net::TcpStream, response: &Response) {
         let mut header = [0u8; 4];
 
         // Heartbeat
@@ -1665,7 +1667,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let tree_json = r#"[{"type":"Application","frame":{"x":0,"y":0,"width":390,"height":844},"children":[]}]"#;
-        let tree_response = Response::Tree { json: tree_json.to_string() };
+        let tree_response = Response::Tree {
+            json: tree_json.to_string(),
+        };
 
         tokio::spawn(async move {
             // --- First connection (initial connect) ---

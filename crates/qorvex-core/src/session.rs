@@ -43,16 +43,16 @@
 //! }
 //! ```
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
-use crate::action::{ActionLog, ActionType, ActionResult};
+use crate::action::{ActionLog, ActionResult, ActionType};
 use crate::ipc::qorvex_dir;
 
 /// Maximum number of action log entries to retain in the ring buffer.
@@ -128,7 +128,6 @@ pub struct Session {
 
     /// Buffered writer for persistent JSON Lines log file.
     log_writer: Mutex<Option<BufWriter<std::fs::File>>>,
-
 }
 
 impl Session {
@@ -159,7 +158,11 @@ impl Session {
     /// # Returns
     ///
     /// An `Arc<Session>` for safe sharing across async tasks.
-    pub fn new_with_log_dir(simulator_udid: Option<String>, session_name: &str, log_dir: PathBuf) -> Arc<Self> {
+    pub fn new_with_log_dir(
+        simulator_udid: Option<String>,
+        session_name: &str,
+        log_dir: PathBuf,
+    ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(100);
         let created_at = Utc::now();
 
@@ -169,9 +172,7 @@ impl Session {
         let log_writer = {
             let timestamp = created_at.format("%Y%m%d_%H%M%S");
             let log_path = log_dir.join(format!("{}_{}.jsonl", session_name, timestamp));
-            std::fs::File::create(&log_path)
-                .ok()
-                .map(BufWriter::new)
+            std::fs::File::create(&log_path).ok().map(BufWriter::new)
         };
 
         Arc::new(Self {
@@ -223,7 +224,14 @@ impl Session {
     /// The action log is maintained as a ring buffer. When the maximum size
     /// is reached, the oldest entry is removed. Actions are also persisted to
     /// the JSON Lines log file at `~/.qorvex/logs/`.
-    pub async fn log_action(&self, action: ActionType, result: ActionResult, screenshot: Option<String>, duration_ms: Option<u64>, tag: Option<String>) -> ActionLog {
+    pub async fn log_action(
+        &self,
+        action: ActionType,
+        result: ActionResult,
+        screenshot: Option<String>,
+        duration_ms: Option<u64>,
+        tag: Option<String>,
+    ) -> ActionLog {
         let screenshot_arc = screenshot.map(Arc::new);
         let log = ActionLog::new(action, result, screenshot_arc.clone(), duration_ms, tag);
         self.persist_action_log(log, screenshot_arc).await
@@ -247,7 +255,11 @@ impl Session {
         self.persist_action_log(log, screenshot_arc).await
     }
 
-    async fn persist_action_log(&self, log: ActionLog, screenshot_arc: Option<Arc<String>>) -> ActionLog {
+    async fn persist_action_log(
+        &self,
+        log: ActionLog,
+        screenshot_arc: Option<Arc<String>>,
+    ) -> ActionLog {
         // Update action log with ring buffer behavior
         {
             let mut action_log = self.action_log.write().await;
@@ -282,7 +294,9 @@ impl Session {
         // Update screenshot if provided
         if let Some(ref ss) = screenshot_arc {
             *self.current_screenshot.write().await = Some(ss.clone());
-            let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(ss.clone()));
+            let _ = self
+                .event_tx
+                .send(SessionEvent::ScreenshotUpdated(ss.clone()));
         }
 
         // Broadcast action (ignore if no subscribers)
@@ -310,7 +324,6 @@ impl Session {
     pub async fn get_screenshot(&self) -> Option<Arc<String>> {
         self.current_screenshot.read().await.clone()
     }
-
 }
 
 impl std::fmt::Debug for Session {
@@ -344,6 +357,8 @@ impl Session {
         let screenshot_arc = Arc::new(screenshot);
         *self.current_screenshot.write().await = Some(screenshot_arc.clone());
         // Ignore send errors - no subscribers is expected
-        let _ = self.event_tx.send(SessionEvent::ScreenshotUpdated(screenshot_arc));
+        let _ = self
+            .event_tx
+            .send(SessionEvent::ScreenshotUpdated(screenshot_arc));
     }
 }

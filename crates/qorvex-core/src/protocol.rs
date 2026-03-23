@@ -141,9 +141,15 @@ pub enum Request {
     /// Tap at absolute screen coordinates.
     TapCoord { x: i32, y: i32 },
     /// Tap an element by its accessibility identifier.
-    TapElement { selector: String, timeout_ms: Option<u64> },
+    TapElement {
+        selector: String,
+        timeout_ms: Option<u64>,
+    },
     /// Tap an element by its accessibility label.
-    TapByLabel { label: String, timeout_ms: Option<u64> },
+    TapByLabel {
+        label: String,
+        timeout_ms: Option<u64>,
+    },
     /// Tap an element with an explicit type filter.
     TapWithType {
         selector: String,
@@ -469,7 +475,10 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
             payload.extend_from_slice(&x.to_le_bytes());
             payload.extend_from_slice(&y.to_le_bytes());
         }
-        Request::TapElement { selector, timeout_ms } => {
+        Request::TapElement {
+            selector,
+            timeout_ms,
+        } => {
             payload.push(OpCode::TapElement as u8);
             write_string(&mut payload, selector);
             write_optional_u64(&mut payload, *timeout_ms);
@@ -585,7 +594,10 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
         OpCode::TapElement => {
             let selector = cur.read_string()?;
             let timeout_ms = cur.read_optional_trailing_u64()?;
-            Ok(Request::TapElement { selector, timeout_ms })
+            Ok(Request::TapElement {
+                selector,
+                timeout_ms,
+            })
         }
 
         OpCode::TapByLabel => {
@@ -1130,7 +1142,8 @@ mod tests {
     #[test]
     fn opcode_round_trip() {
         let codes: Vec<u8> = vec![
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x99, 0xA0,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14,
+            0x99, 0xA0,
         ];
         for &code in &codes {
             let op = OpCode::from_u8(code).unwrap();

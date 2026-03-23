@@ -12,7 +12,7 @@ use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
 use qorvex_core::config::QorvexConfig;
-use qorvex_core::driver::{AutomationDriver, flatten_elements};
+use qorvex_core::driver::{flatten_elements, AutomationDriver};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{IpcRequest, IpcResponse};
 use qorvex_core::session::Session;
@@ -311,7 +311,10 @@ impl ServerState {
             self.use_core_device = false;
             self.direct_host = None;
             self.simulator_udid = Some(udid.to_string());
-            self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
+            self.executor = Some(ActionExecutor::with_agent(
+                "localhost".to_string(),
+                self.agent_port,
+            ));
             return IpcResponse::CommandResult {
                 success: true,
                 message: format!("Using simulator {}", udid),
@@ -330,10 +333,13 @@ impl ServerState {
                 // relying on the USB tunnel or CoreDevice tunnel.
                 self.direct_host = None;
                 if let Ok(cd_devices) = qorvex_core::coredevice::list_devices().await {
-                    if let Some(cd) = cd_devices.iter().find(|d| {
-                        d.udid.as_deref() == Some(udid) || d.identifier == udid
-                    }) {
-                        self.direct_host = cd.hostname.clone()
+                    if let Some(cd) = cd_devices
+                        .iter()
+                        .find(|d| d.udid.as_deref() == Some(udid) || d.identifier == udid)
+                    {
+                        self.direct_host = cd
+                            .hostname
+                            .clone()
                             .or_else(|| Some(format!("{}.local", cd.name)));
                     }
                 }
@@ -348,15 +354,14 @@ impl ServerState {
         // Not in usbmuxd — check CoreDevice
         if let Ok(cd_devices) = qorvex_core::coredevice::list_devices().await {
             // Find by traditional UDID or CoreDevice identifier
-            if let Some(cd) = cd_devices.iter().find(|d| {
-                d.udid.as_deref() == Some(udid) || d.identifier == udid
-            }) {
+            if let Some(cd) = cd_devices
+                .iter()
+                .find(|d| d.udid.as_deref() == Some(udid) || d.identifier == udid)
+            {
                 self.is_physical_device = true;
                 // Prefer the traditional UDID (e.g. 00008140-…) over the CoreDevice
                 // UUID because xcodebuild -destination id=… requires the former.
-                self.simulator_udid = Some(
-                    cd.udid.clone().unwrap_or_else(|| udid.to_string()),
-                );
+                self.simulator_udid = Some(cd.udid.clone().unwrap_or_else(|| udid.to_string()));
                 self.executor = None;
 
                 // Always set direct_host from CoreDevice info — Bonjour
@@ -364,7 +369,9 @@ impl ServerState {
                 // devices, and avoids the native CoreDevice tunnel which
                 // requires pairing files that modern macOS no longer stores
                 // in the expected locations.
-                self.direct_host = cd.hostname.clone()
+                self.direct_host = cd
+                    .hostname
+                    .clone()
                     .or_else(|| Some(format!("{}.local", cd.name)));
                 self.tunnel_address = None;
                 self.use_core_device = false;
@@ -403,7 +410,10 @@ impl ServerState {
         match Simctl::boot(udid) {
             Ok(_) => {
                 self.simulator_udid = Some(udid.to_string());
-                self.executor = Some(ActionExecutor::with_agent("localhost".to_string(), self.agent_port));
+                self.executor = Some(ActionExecutor::with_agent(
+                    "localhost".to_string(),
+                    self.agent_port,
+                ));
                 IpcResponse::CommandResult {
                     success: true,
                     message: format!("Booted and using device {}", udid),
@@ -666,7 +676,9 @@ impl ServerState {
             }
         };
         self.log_action(
-            ActionType::SetTarget { bundle_id: bundle_id.to_string() },
+            ActionType::SetTarget {
+                bundle_id: bundle_id.to_string(),
+            },
             action_result,
             None,
             None,
@@ -707,7 +719,8 @@ impl ServerState {
                 )
             }
         };
-        self.log_action(ActionType::StartTarget, action_result, None, None).await;
+        self.log_action(ActionType::StartTarget, action_result, None, None)
+            .await;
         response
     }
 
@@ -743,7 +756,8 @@ impl ServerState {
                 )
             }
         };
-        self.log_action(ActionType::StopTarget, action_result, None, None).await;
+        self.log_action(ActionType::StopTarget, action_result, None, None)
+            .await;
         response
     }
 
@@ -843,7 +857,8 @@ impl ServerState {
         // LogComment doesn't require a driver
         if let ActionType::LogComment { ref message } = action {
             let msg = format!("Logged: {}", message);
-            self.log_action(action, ActionResult::Success, None, tag).await;
+            self.log_action(action, ActionResult::Success, None, tag)
+                .await;
             return IpcResponse::ActionResult {
                 success: true,
                 message: msg,
@@ -860,7 +875,9 @@ impl ServerState {
         let executor = if let Some(driver) = driver_opt {
             Some(ActionExecutor::new(driver))
         } else {
-            self.executor.as_ref().map(|e| ActionExecutor::new(e.driver().clone()))
+            self.executor
+                .as_ref()
+                .map(|e| ActionExecutor::new(e.driver().clone()))
         };
 
         match executor {
@@ -885,7 +902,8 @@ impl ServerState {
                     .as_ref()
                     .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
                     .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
-                self.log_action(action, action_result, duration_ms, tag).await;
+                self.log_action(action, action_result, duration_ms, tag)
+                    .await;
 
                 IpcResponse::ActionResult {
                     success: result.success,
@@ -948,7 +966,6 @@ impl ServerState {
                 .await;
         }
     }
-
 }
 
 /// Validates a UDID format.

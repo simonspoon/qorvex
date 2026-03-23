@@ -27,10 +27,10 @@
 
 use std::path::PathBuf;
 
-use idevice::IdeviceService;
 use idevice::pairing_file::PairingFile;
 use idevice::provider::TcpProvider;
 use idevice::services::core_device_proxy::CoreDeviceProxy;
+use idevice::IdeviceService;
 use thiserror::Error;
 use tokio::net::lookup_host;
 

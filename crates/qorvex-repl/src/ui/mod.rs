@@ -23,9 +23,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Title bar
-            Constraint::Min(5),     // Output history
-            Constraint::Length(3),  // Input line
+            Constraint::Length(3), // Title bar
+            Constraint::Min(5),    // Output history
+            Constraint::Length(3), // Input line
         ])
         .split(area);
 
@@ -73,10 +73,17 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
     let lines: Vec<Line> = app.output_history.iter().cloned().collect();
 
     // Calculate total visual lines after wrapping
-    let total_visual_lines: usize = lines.iter().map(|line| {
-        let w = line.width();
-        if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width }
-    }).sum();
+    let total_visual_lines: usize = lines
+        .iter()
+        .map(|line| {
+            let w = line.width();
+            if w == 0 || inner_width == 0 {
+                1
+            } else {
+                (w + inner_width - 1) / inner_width
+            }
+        })
+        .sum();
 
     // Clamp scroll offset and compute scroll position
     let max_scroll = total_visual_lines.saturating_sub(viewport_height);
@@ -100,7 +107,11 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
         for (line_idx, line) in lines_vec.iter().enumerate() {
             let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             let w = line.width();
-            let wrapped_rows = if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width };
+            let wrapped_rows = if w == 0 || inner_width == 0 {
+                1
+            } else {
+                (w + inner_width - 1) / inner_width
+            };
 
             for wrap_row in 0..wrapped_rows {
                 let vrow = visual_row + wrap_row;
@@ -146,7 +157,10 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     // Read the existing buffer cells and apply selection style on top
                     for dx in 0..width {
-                        if let Some(cell) = frame.buffer_mut().cell_mut(ratatui::layout::Position::new(x + dx, y)) {
+                        if let Some(cell) = frame
+                            .buffer_mut()
+                            .cell_mut(ratatui::layout::Position::new(x + dx, y))
+                        {
                             cell.set_style(sel_style);
                         }
                     }
@@ -166,12 +180,14 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"));
 
-        let mut scrollbar_state = ScrollbarState::new(max_scroll)
-            .position(scroll_y);
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll_y);
 
         frame.render_stateful_widget(
             scrollbar,
-            area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
             &mut scrollbar_state,
         );
     }

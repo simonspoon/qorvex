@@ -1,6 +1,3 @@
-use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -16,8 +13,11 @@ use ratatui::{
     Frame, Terminal,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, StatefulImage};
-use std::sync::Arc;
+use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -117,7 +117,8 @@ impl App {
     fn add_action(&mut self, log: ActionLog) {
         self.action_log.push(log);
         // Auto-scroll to bottom
-        self.list_state.select(Some(self.action_log.len().saturating_sub(1)));
+        self.list_state
+            .select(Some(self.action_log.len().saturating_sub(1)));
     }
 
     fn set_image_state(&mut self, state: StatefulProtocol) {
@@ -133,8 +134,16 @@ const MAX_DECODE_HEIGHT: u32 = 1800;
 
 /// Spawn a blocking task to decode JPEG bytes into a terminal image protocol.
 /// Returns false (and does nothing) if a decode is already in flight.
-fn spawn_decode_task(bytes: Vec<u8>, picker: Picker, tx: mpsc::Sender<AppEvent>, decoding: &Arc<AtomicBool>) -> bool {
-    if decoding.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+fn spawn_decode_task(
+    bytes: Vec<u8>,
+    picker: Picker,
+    tx: mpsc::Sender<AppEvent>,
+    decoding: &Arc<AtomicBool>,
+) -> bool {
+    if decoding
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return false; // decode already in flight, drop this frame
     }
     let flag = decoding.clone();
@@ -142,7 +151,8 @@ fn spawn_decode_task(bytes: Vec<u8>, picker: Picker, tx: mpsc::Sender<AppEvent>,
         if let Ok(dyn_img) = image::load_from_memory(&bytes) {
             // Downscale before handing to ratatui-image to avoid hashing/processing
             // the full-resolution pixel buffer (e.g. 1920x1080 RGBA = ~8MB) every frame.
-            let img = if dyn_img.width() > MAX_DECODE_WIDTH || dyn_img.height() > MAX_DECODE_HEIGHT {
+            let img = if dyn_img.width() > MAX_DECODE_WIDTH || dyn_img.height() > MAX_DECODE_HEIGHT
+            {
                 dyn_img.thumbnail(MAX_DECODE_WIDTH, MAX_DECODE_HEIGHT)
             } else {
                 dyn_img
@@ -157,7 +167,12 @@ fn spawn_decode_task(bytes: Vec<u8>, picker: Picker, tx: mpsc::Sender<AppEvent>,
 }
 
 /// Spawn a blocking task to decode base64 screenshot into a terminal image protocol
-fn spawn_decode_base64_task(base64_png: &Arc<String>, picker: Picker, tx: mpsc::Sender<AppEvent>, decoding: &Arc<AtomicBool>) {
+fn spawn_decode_base64_task(
+    base64_png: &Arc<String>,
+    picker: Picker,
+    tx: mpsc::Sender<AppEvent>,
+    decoding: &Arc<AtomicBool>,
+) {
     // Check the flag before doing the base64 decode to avoid wasted work
     if decoding.load(Ordering::SeqCst) {
         return;
@@ -171,9 +186,7 @@ fn spawn_decode_base64_task(base64_png: &Arc<String>, picker: Picker, tx: mpsc::
 /// Spawn a blocking task to capture a screenshot
 fn spawn_screenshot_task(udid: String, tx: mpsc::Sender<AppEvent>) {
     tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            Simctl::screenshot(&udid)
-        }).await;
+        let result = tokio::task::spawn_blocking(move || Simctl::screenshot(&udid)).await;
 
         if let Ok(Ok(bytes)) = result {
             let _ = tx.send(AppEvent::ScreenshotReady(bytes)).await;
@@ -189,9 +202,7 @@ fn spawn_streamer_task(
     tx: mpsc::Sender<AppEvent>,
     cancel: CancellationToken,
 ) {
-    let socket_dir = dirs::home_dir()
-        .expect("home dir")
-        .join(".qorvex");
+    let socket_dir = dirs::home_dir().expect("home dir").join(".qorvex");
     std::fs::create_dir_all(&socket_dir).ok();
     let socket_path = socket_dir.join(format!("streamer_{}.sock", session_name));
 
@@ -205,22 +216,30 @@ fn spawn_streamer_task(
         // Find the qorvex-streamer binary
         let streamer_bin = which_streamer().await;
         let Some(bin_path) = streamer_bin else {
-            let _ = tx.send(AppEvent::StreamerStatus(
-                StreamerStatus::NotAvailable("qorvex-streamer binary not found".into())
-            )).await;
+            let _ = tx
+                .send(AppEvent::StreamerStatus(StreamerStatus::NotAvailable(
+                    "qorvex-streamer binary not found".into(),
+                )))
+                .await;
             return;
         };
 
         tracing::info!(path = %bin_path.display(), "found qorvex-streamer binary");
-        let _ = tx.send(AppEvent::StreamerStatus(StreamerStatus::Connecting)).await;
+        let _ = tx
+            .send(AppEvent::StreamerStatus(StreamerStatus::Connecting))
+            .await;
 
         // Spawn the streamer process with stdio redirected to avoid TUI corruption
         use std::process::Stdio;
         let mut child = match tokio::process::Command::new(&bin_path)
-            .arg("--socket-path").arg(&socket_path_str)
-            .arg("--udid").arg(&udid)
-            .arg("--fps").arg(fps.to_string())
-            .arg("--quality").arg(quality.to_string())
+            .arg("--socket-path")
+            .arg(&socket_path_str)
+            .arg("--udid")
+            .arg(&udid)
+            .arg("--fps")
+            .arg(fps.to_string())
+            .arg("--quality")
+            .arg(quality.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -228,9 +247,11 @@ fn spawn_streamer_task(
         {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.send(AppEvent::StreamerStatus(
-                    StreamerStatus::NotAvailable(format!("Failed to spawn streamer: {e}"))
-                )).await;
+                let _ = tx
+                    .send(AppEvent::StreamerStatus(StreamerStatus::NotAvailable(
+                        format!("Failed to spawn streamer: {e}"),
+                    )))
+                    .await;
                 return;
             }
         };
@@ -252,9 +273,9 @@ fn spawn_streamer_task(
                     format!("Streamer failed: {stderr_msg}")
                 };
                 let _ = child.kill().await;
-                let _ = tx.send(AppEvent::StreamerStatus(
-                    StreamerStatus::NotAvailable(msg)
-                )).await;
+                let _ = tx
+                    .send(AppEvent::StreamerStatus(StreamerStatus::NotAvailable(msg)))
+                    .await;
                 return;
             }
 
@@ -269,9 +290,9 @@ fn spawn_streamer_task(
                     format!("Streamer exited with status: {status}")
                 };
                 tracing::warn!(msg, "streamer process exited");
-                let _ = tx.send(AppEvent::StreamerStatus(
-                    StreamerStatus::NotAvailable(msg)
-                )).await;
+                let _ = tx
+                    .send(AppEvent::StreamerStatus(StreamerStatus::NotAvailable(msg)))
+                    .await;
                 return;
             }
 
@@ -283,7 +304,9 @@ fn spawn_streamer_task(
             }
         };
 
-        let _ = tx.send(AppEvent::StreamerStatus(StreamerStatus::Connected)).await;
+        let _ = tx
+            .send(AppEvent::StreamerStatus(StreamerStatus::Connected))
+            .await;
 
         // Read frame loop
         let mut reader = tokio::io::BufReader::new(stream);
@@ -314,10 +337,8 @@ async fn read_child_stderr(child: &mut tokio::process::Child) -> String {
     use tokio::io::AsyncReadExt;
     if let Some(mut stderr) = child.stderr.take() {
         let mut buf = Vec::new();
-        let _ = tokio::time::timeout(
-            Duration::from_millis(500),
-            stderr.read_to_end(&mut buf),
-        ).await;
+        let _ =
+            tokio::time::timeout(Duration::from_millis(500), stderr.read_to_end(&mut buf)).await;
         let s = String::from_utf8_lossy(&buf).trim().to_string();
         // Return the last meaningful line
         s.lines()
@@ -334,7 +355,10 @@ async fn read_frame<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> std::io:
     use tokio::io::AsyncReadExt;
     let len = reader.read_u32_le().await? as usize;
     if len == 0 || len > 10_000_000 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid frame length"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid frame length",
+        ));
     }
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf).await?;
@@ -368,7 +392,11 @@ async fn which_streamer() -> Option<PathBuf> {
         let mut dir = exe.parent();
         while let Some(d) = dir {
             for profile in ["release", "debug"] {
-                let candidate = d.join("qorvex-streamer").join(".build").join(profile).join("qorvex-streamer");
+                let candidate = d
+                    .join("qorvex-streamer")
+                    .join(".build")
+                    .join(profile)
+                    .join("qorvex-streamer");
                 if candidate.exists() {
                     return Some(candidate);
                 }
@@ -379,7 +407,11 @@ async fn which_streamer() -> Option<PathBuf> {
     // Also check relative to the current working directory
     if let Ok(cwd) = std::env::current_dir() {
         for profile in ["release", "debug"] {
-            let candidate = cwd.join("qorvex-streamer").join(".build").join(profile).join("qorvex-streamer");
+            let candidate = cwd
+                .join("qorvex-streamer")
+                .join(".build")
+                .join(profile)
+                .join("qorvex-streamer");
             if candidate.exists() {
                 return Some(candidate);
             }
@@ -399,8 +431,14 @@ async fn run_batch(args: Args) -> io::Result<()> {
     let mut client = match qorvex_core::ipc::IpcClient::connect(session_name).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to connect to server for session '{}': {}", session_name, e);
-            return Err(io::Error::new(io::ErrorKind::ConnectionRefused, e.to_string()));
+            eprintln!(
+                "Failed to connect to server for session '{}': {}",
+                session_name, e
+            );
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                e.to_string(),
+            ));
         }
     };
 
@@ -410,7 +448,10 @@ async fn run_batch(args: Args) -> io::Result<()> {
         return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
     }
 
-    eprintln!("Connected to session '{}', streaming events...", session_name);
+    eprintln!(
+        "Connected to session '{}', streaming events...",
+        session_name
+    );
 
     let mut stdout = tokio::io::stdout();
     let deadline = duration.map(|d| tokio::time::Instant::now() + d);
@@ -627,7 +668,10 @@ async fn main() -> io::Result<()> {
                 AppEvent::StreamerStatus(status) => {
                     let changed = app.streamer_status != status;
                     app.streamer_status = status;
-                    if matches!(app.streamer_status, StreamerStatus::Disconnected | StreamerStatus::NotAvailable(_)) {
+                    if matches!(
+                        app.streamer_status,
+                        StreamerStatus::Disconnected | StreamerStatus::NotAvailable(_)
+                    ) {
                         app.streamer_active = false;
                     }
                     if changed {
@@ -736,10 +780,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Split into left (simulator) and right (log)
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(left_width),
-            Constraint::Min(0),
-        ])
+        .constraints([Constraint::Length(left_width), Constraint::Min(0)])
         .split(f.area());
 
     // Left: Simulator screenshot
@@ -752,7 +793,11 @@ fn ui(f: &mut Frame, app: &mut App) {
     let sim_block = Block::default()
         .title(sim_title.as_str())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if app.streamer_active { Color::Green } else { Color::Yellow }));
+        .border_style(Style::default().fg(if app.streamer_active {
+            Color::Green
+        } else {
+            Color::Yellow
+        }));
 
     let inner = sim_block.inner(chunks[0]);
     f.render_widget(sim_block, chunks[0]);
@@ -761,8 +806,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         let image = StatefulImage::default();
         f.render_stateful_widget(image, inner, state);
     } else {
-        let placeholder = Paragraph::new("No screenshot")
-            .style(Style::default().fg(Color::DarkGray));
+        let placeholder =
+            Paragraph::new("No screenshot").style(Style::default().fg(Color::DarkGray));
         f.render_widget(placeholder, inner);
     }
 
@@ -774,49 +819,61 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     let inner_width = log_block.inner(chunks[1]).width as usize;
 
-    let items: Vec<ListItem> = app.action_log.iter().map(|log| {
-        let timestamp = log.timestamp.format("%H:%M:%S%.3f").to_string();
-        let action_desc = format!("{:?}", log.action);
-        let result = match &log.result {
-            qorvex_core::action::ActionResult::Success => "success",
-            qorvex_core::action::ActionResult::Failure(e) => e.as_str(),
-        };
-        let has_screenshot = if log.screenshot.is_some() { " [img]" } else { "" };
-
-        let header = Line::from(vec![
-            Span::styled(timestamp, Style::default().fg(Color::Yellow)),
-            Span::raw(" -> "),
-            Span::styled(
-                result,
-                Style::default().fg(if result == "success" { Color::Green } else { Color::Red }),
-            ),
-            Span::raw(has_screenshot),
-        ]);
-
-        let indent = "  ";
-        let wrap_width = inner_width.saturating_sub(indent.len()).max(1);
-        let mut lines = vec![header];
-
-        let mut remaining = action_desc.as_str();
-        while !remaining.is_empty() {
-            let (chunk, rest) = if remaining.len() > wrap_width {
-                let break_at = remaining[..wrap_width]
-                    .rfind(|c: char| c == ' ' || c == ',' || c == '{' || c == '}')
-                    .map(|i| i + 1)
-                    .unwrap_or(wrap_width);
-                (&remaining[..break_at], &remaining[break_at..])
-            } else {
-                (remaining, "")
+    let items: Vec<ListItem> = app
+        .action_log
+        .iter()
+        .map(|log| {
+            let timestamp = log.timestamp.format("%H:%M:%S%.3f").to_string();
+            let action_desc = format!("{:?}", log.action);
+            let result = match &log.result {
+                qorvex_core::action::ActionResult::Success => "success",
+                qorvex_core::action::ActionResult::Failure(e) => e.as_str(),
             };
-            lines.push(Line::from(vec![
-                Span::raw(indent.to_string()),
-                Span::styled(chunk.to_string(), Style::default().fg(Color::White)),
-            ]));
-            remaining = rest;
-        }
+            let has_screenshot = if log.screenshot.is_some() {
+                " [img]"
+            } else {
+                ""
+            };
 
-        ListItem::new(Text::from(lines))
-    }).collect();
+            let header = Line::from(vec![
+                Span::styled(timestamp, Style::default().fg(Color::Yellow)),
+                Span::raw(" -> "),
+                Span::styled(
+                    result,
+                    Style::default().fg(if result == "success" {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                ),
+                Span::raw(has_screenshot),
+            ]);
+
+            let indent = "  ";
+            let wrap_width = inner_width.saturating_sub(indent.len()).max(1);
+            let mut lines = vec![header];
+
+            let mut remaining = action_desc.as_str();
+            while !remaining.is_empty() {
+                let (chunk, rest) = if remaining.len() > wrap_width {
+                    let break_at = remaining[..wrap_width]
+                        .rfind(|c: char| c == ' ' || c == ',' || c == '{' || c == '}')
+                        .map(|i| i + 1)
+                        .unwrap_or(wrap_width);
+                    (&remaining[..break_at], &remaining[break_at..])
+                } else {
+                    (remaining, "")
+                };
+                lines.push(Line::from(vec![
+                    Span::raw(indent.to_string()),
+                    Span::styled(chunk.to_string(), Style::default().fg(Color::White)),
+                ]));
+                remaining = rest;
+            }
+
+            ListItem::new(Text::from(lines))
+        })
+        .collect();
 
     let list = List::new(items)
         .block(log_block)

@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use tracing::{info, debug, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::agent_client::AgentClient;
 
@@ -278,14 +278,18 @@ impl AgentLifecycle {
                 "-destination",
                 &format!("id={}", self.udid),
                 "-derivedDataPath",
-                &self.config
+                &self
+                    .config
                     .project_dir
                     .join(DERIVED_DATA_DIR)
                     .to_string_lossy(),
                 "-only-testing",
                 TEST_CLASS,
             ])
-            .env("TEST_RUNNER_QORVEX_PORT", self.config.agent_port.to_string())
+            .env(
+                "TEST_RUNNER_QORVEX_PORT",
+                self.config.agent_port.to_string(),
+            )
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -294,7 +298,10 @@ impl AgentLifecycle {
         let mut guard = self.child.lock().unwrap();
         *guard = Some(child);
 
-        debug!(port = self.config.agent_port, "passing port to agent via TEST_RUNNER_QORVEX_PORT");
+        debug!(
+            port = self.config.agent_port,
+            "passing port to agent via TEST_RUNNER_QORVEX_PORT"
+        );
         info!("agent process spawned");
         Ok(())
     }
@@ -350,16 +357,27 @@ impl AgentLifecycle {
                 // 3. USB tunnel (usbmuxd) → CoreDevice tunnel (iOS 17+)
                 let reachable = if let Some(ref host) = self.config.direct_host {
                     let host_port = format!("{}:{}", host, self.config.agent_port);
-                    tokio::net::TcpStream::connect(host_port.as_str()).await.is_ok()
+                    tokio::net::TcpStream::connect(host_port.as_str())
+                        .await
+                        .is_ok()
                 } else if let Some(ref tunnel_addr) = self.config.tunnel_address {
-                    crate::usb_tunnel::connect_tunneld(tunnel_addr, self.config.agent_port).await.is_ok()
+                    crate::usb_tunnel::connect_tunneld(tunnel_addr, self.config.agent_port)
+                        .await
+                        .is_ok()
                 } else {
                     // Try usbmuxd first, then fall back to native CoreDevice tunnel (iOS 17+).
-                    let via_usb = crate::usb_tunnel::connect(&self.udid, self.config.agent_port).await.is_ok();
+                    let via_usb = crate::usb_tunnel::connect(&self.udid, self.config.agent_port)
+                        .await
+                        .is_ok();
                     if via_usb {
                         true
                     } else {
-                        crate::core_device_tunnel::connect_coredevice(&self.udid, self.config.agent_port).await.is_ok()
+                        crate::core_device_tunnel::connect_coredevice(
+                            &self.udid,
+                            self.config.agent_port,
+                        )
+                        .await
+                        .is_ok()
                     }
                 };
                 if reachable {
@@ -393,7 +411,11 @@ impl AgentLifecycle {
     /// `install.sh`), allowing [`ensure_running`](Self::ensure_running) to
     /// skip the build step.
     fn is_agent_built(&self) -> bool {
-        let products_dir = self.config.project_dir.join(DERIVED_DATA_DIR).join("Build/Products");
+        let products_dir = self
+            .config
+            .project_dir
+            .join(DERIVED_DATA_DIR)
+            .join("Build/Products");
         if !products_dir.exists() {
             return false;
         }
@@ -409,13 +431,11 @@ impl AgentLifecycle {
         };
         std::fs::read_dir(&products_dir)
             .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .any(|e| {
-                        let name = e.file_name();
-                        let name = name.to_string_lossy();
-                        name.ends_with(".xctestrun") && name.contains(platform_prefix)
-                    })
+                entries.filter_map(|e| e.ok()).any(|e| {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    name.ends_with(".xctestrun") && name.contains(platform_prefix)
+                })
             })
             .unwrap_or(false)
     }
@@ -469,16 +489,27 @@ impl AgentLifecycle {
             let check = async {
                 if let Some(ref host) = self.config.direct_host {
                     let host_port = format!("{}:{}", host, self.config.agent_port);
-                    tokio::net::TcpStream::connect(host_port.as_str()).await.is_ok()
+                    tokio::net::TcpStream::connect(host_port.as_str())
+                        .await
+                        .is_ok()
                 } else if let Some(ref tunnel_addr) = self.config.tunnel_address {
-                    crate::usb_tunnel::connect_tunneld(tunnel_addr, self.config.agent_port).await.is_ok()
+                    crate::usb_tunnel::connect_tunneld(tunnel_addr, self.config.agent_port)
+                        .await
+                        .is_ok()
                 } else {
                     // Try usbmuxd first, then fall back to native CoreDevice tunnel (iOS 17+).
-                    let via_usb = crate::usb_tunnel::connect(&self.udid, self.config.agent_port).await.is_ok();
+                    let via_usb = crate::usb_tunnel::connect(&self.udid, self.config.agent_port)
+                        .await
+                        .is_ok();
                     if via_usb {
                         true
                     } else {
-                        crate::core_device_tunnel::connect_coredevice(&self.udid, self.config.agent_port).await.is_ok()
+                        crate::core_device_tunnel::connect_coredevice(
+                            &self.udid,
+                            self.config.agent_port,
+                        )
+                        .await
+                        .is_ok()
                     }
                 }
             };
@@ -561,10 +592,7 @@ mod tests {
     #[test]
     fn error_display_project_not_found() {
         let err = AgentLifecycleError::ProjectNotFound(PathBuf::from("/missing/project"));
-        assert_eq!(
-            err.to_string(),
-            "Agent project not found: /missing/project"
-        );
+        assert_eq!(err.to_string(), "Agent project not found: /missing/project");
     }
 
     #[test]

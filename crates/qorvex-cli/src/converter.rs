@@ -45,7 +45,12 @@ impl LogConverter {
 
     fn action_to_command(action: &ActionType, tag: Option<&str>) -> Option<String> {
         let base = match action {
-            ActionType::Tap { selector, by_label, element_type, .. } => {
+            ActionType::Tap {
+                selector,
+                by_label,
+                element_type,
+                ..
+            } => {
                 let mut cmd = format!("qorvex tap {}", shell_escape(selector));
                 if *by_label {
                     cmd.push_str(" --label");
@@ -55,22 +60,21 @@ impl LogConverter {
                 }
                 Some(cmd)
             }
-            ActionType::TapLocation { x, y } => {
-                Some(format!("qorvex tap-location {} {}", x, y))
-            }
+            ActionType::TapLocation { x, y } => Some(format!("qorvex tap-location {} {}", x, y)),
             ActionType::Swipe { direction } => {
                 Some(format!("qorvex swipe {}", shell_escape(direction)))
             }
             ActionType::SendKeys { text } => {
                 Some(format!("qorvex send-keys {}", shell_escape(text)))
             }
-            ActionType::GetScreenshot => {
-                Some("qorvex screenshot".to_string())
-            }
-            ActionType::GetScreenInfo => {
-                Some("qorvex screen-info".to_string())
-            }
-            ActionType::GetValue { selector, by_label, element_type, .. } => {
+            ActionType::GetScreenshot => Some("qorvex screenshot".to_string()),
+            ActionType::GetScreenInfo => Some("qorvex screen-info".to_string()),
+            ActionType::GetValue {
+                selector,
+                by_label,
+                element_type,
+                ..
+            } => {
                 let mut cmd = format!("qorvex get-value {}", shell_escape(selector));
                 if *by_label {
                     cmd.push_str(" --label");
@@ -80,7 +84,13 @@ impl LogConverter {
                 }
                 Some(cmd)
             }
-            ActionType::WaitFor { selector, by_label, element_type, timeout_ms, .. } => {
+            ActionType::WaitFor {
+                selector,
+                by_label,
+                element_type,
+                timeout_ms,
+                ..
+            } => {
                 let mut cmd = format!("qorvex wait-for {}", shell_escape(selector));
                 if *by_label {
                     cmd.push_str(" --label");
@@ -91,7 +101,12 @@ impl LogConverter {
                 cmd.push_str(&format!(" -o {}", timeout_ms));
                 Some(cmd)
             }
-            ActionType::WaitForNot { selector, by_label, element_type, timeout_ms } => {
+            ActionType::WaitForNot {
+                selector,
+                by_label,
+                element_type,
+                timeout_ms,
+            } => {
                 let mut cmd = format!("qorvex wait-for-not {}", shell_escape(selector));
                 if *by_label {
                     cmd.push_str(" --label");
@@ -102,18 +117,17 @@ impl LogConverter {
                 cmd.push_str(&format!(" -o {}", timeout_ms));
                 Some(cmd)
             }
-            ActionType::LongPress { x, y, duration } => {
-                Some(format!("# TODO: long-press {} {} {} (not yet supported)", x, y, duration))
-            }
+            ActionType::LongPress { x, y, duration } => Some(format!(
+                "# TODO: long-press {} {} {} (not yet supported)",
+                x, y, duration
+            )),
             ActionType::SetTarget { bundle_id } => {
                 Some(format!("qorvex set-target {}", shell_escape(bundle_id)))
             }
             ActionType::StartTarget => Some("qorvex start-target".to_string()),
             ActionType::StopTarget => Some("qorvex stop-target".to_string()),
             ActionType::GetTargetInfo => Some("qorvex get-target-info".to_string()),
-            ActionType::LogComment { message } => {
-                Some(format!("# {}", message))
-            }
+            ActionType::LogComment { message } => Some(format!("# {}", message)),
             // Skip session management actions
             ActionType::StartSession | ActionType::EndSession | ActionType::Quit => None,
         };
@@ -131,7 +145,9 @@ impl LogConverter {
 
 /// Shell-escape a string using single quotes. Internal single quotes become `'\''`.
 fn shell_escape(s: &str) -> String {
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/') {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
+    {
         // Safe to use unquoted
         return s.to_string();
     }
@@ -209,7 +225,9 @@ mod tests {
 
     #[test]
     fn test_swipe_to_command() {
-        let action = ActionType::Swipe { direction: "up".to_string() };
+        let action = ActionType::Swipe {
+            direction: "up".to_string(),
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex swipe up".to_string())
@@ -218,7 +236,9 @@ mod tests {
 
     #[test]
     fn test_send_keys_to_command() {
-        let action = ActionType::SendKeys { text: "hello".to_string() };
+        let action = ActionType::SendKeys {
+            text: "hello".to_string(),
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex send-keys hello".to_string())
@@ -227,7 +247,9 @@ mod tests {
 
     #[test]
     fn test_send_keys_with_spaces() {
-        let action = ActionType::SendKeys { text: "hello world".to_string() };
+        let action = ActionType::SendKeys {
+            text: "hello world".to_string(),
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex send-keys 'hello world'".to_string())
@@ -236,7 +258,9 @@ mod tests {
 
     #[test]
     fn test_send_keys_with_single_quotes() {
-        let action = ActionType::SendKeys { text: "it's".to_string() };
+        let action = ActionType::SendKeys {
+            text: "it's".to_string(),
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex send-keys 'it'\\''s'".to_string())
@@ -304,7 +328,11 @@ mod tests {
 
     #[test]
     fn test_long_press_to_command() {
-        let action = ActionType::LongPress { x: 100, y: 200, duration: 1.5 };
+        let action = ActionType::LongPress {
+            x: 100,
+            y: 200,
+            duration: 1.5,
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("# TODO: long-press 100 200 1.5 (not yet supported)".to_string())
@@ -313,7 +341,9 @@ mod tests {
 
     #[test]
     fn test_set_target_to_command() {
-        let action = ActionType::SetTarget { bundle_id: "com.example.App".to_string() };
+        let action = ActionType::SetTarget {
+            bundle_id: "com.example.App".to_string(),
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex set-target com.example.App".to_string())
@@ -322,7 +352,9 @@ mod tests {
 
     #[test]
     fn test_log_comment_to_command() {
-        let action = ActionType::LogComment { message: "test step".to_string() };
+        let action = ActionType::LogComment {
+            message: "test step".to_string(),
+        };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("# test step".to_string())
@@ -340,15 +372,32 @@ mod tests {
     fn test_convert_jsonl() {
         use qorvex_core::action::ActionResult;
 
-        let log1 = ActionLog::new(ActionType::StartSession, ActionResult::Success, None, None, None);
-        let log2 = ActionLog::new(
-            ActionType::Tap { selector: "btn".to_string(), by_label: false, element_type: None, timeout_ms: None },
+        let log1 = ActionLog::new(
+            ActionType::StartSession,
             ActionResult::Success,
             None,
             None,
             None,
         );
-        let log3 = ActionLog::new(ActionType::EndSession, ActionResult::Success, None, None, None);
+        let log2 = ActionLog::new(
+            ActionType::Tap {
+                selector: "btn".to_string(),
+                by_label: false,
+                element_type: None,
+                timeout_ms: None,
+            },
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        );
+        let log3 = ActionLog::new(
+            ActionType::EndSession,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        );
 
         let jsonl = format!(
             "{}\n{}\n{}\n",
@@ -387,7 +436,12 @@ mod tests {
         use qorvex_core::action::ActionResult;
 
         let log = ActionLog::new(
-            ActionType::Tap { selector: "btn".to_string(), by_label: false, element_type: None, timeout_ms: None },
+            ActionType::Tap {
+                selector: "btn".to_string(),
+                by_label: false,
+                element_type: None,
+                timeout_ms: None,
+            },
             ActionResult::Success,
             None,
             None,
@@ -405,9 +459,15 @@ mod tests {
     #[test]
     fn test_tag_with_spaces() {
         let cmd = LogConverter::action_to_command(
-            &ActionType::Tap { selector: "btn".to_string(), by_label: false, element_type: None, timeout_ms: None },
+            &ActionType::Tap {
+                selector: "btn".to_string(),
+                by_label: false,
+                element_type: None,
+                timeout_ms: None,
+            },
             Some("my tag"),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(cmd, "qorvex tap btn --tag 'my tag'");
     }
 

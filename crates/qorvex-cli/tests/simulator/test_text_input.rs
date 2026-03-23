@@ -115,7 +115,10 @@ fn test_clear_resets_fields() {
     scroll_down();
 
     let value = get_value("text-username-value");
-    assert!(value.contains("cleartest"), "Should have typed text: {value}");
+    assert!(
+        value.contains("cleartest"),
+        "Should have typed text: {value}"
+    );
 
     // Clear all
     run(&["tap", "text-clear-button"]);

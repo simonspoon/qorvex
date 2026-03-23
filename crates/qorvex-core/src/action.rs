@@ -31,12 +31,14 @@
 //! println!("Action {} at {}", log.id, log.timestamp);
 //! ```
 
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// The result of executing an action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,10 +235,18 @@ impl ActionType {
     /// Returns a formatted target string for CLI output.
     pub fn display_target(&self) -> String {
         match self {
-            ActionType::Tap { selector, by_label, .. }
-            | ActionType::WaitFor { selector, by_label, .. }
-            | ActionType::WaitForNot { selector, by_label, .. }
-            | ActionType::GetValue { selector, by_label, .. } => {
+            ActionType::Tap {
+                selector, by_label, ..
+            }
+            | ActionType::WaitFor {
+                selector, by_label, ..
+            }
+            | ActionType::WaitForNot {
+                selector, by_label, ..
+            }
+            | ActionType::GetValue {
+                selector, by_label, ..
+            } => {
                 if *by_label {
                     format!("label:'{}'", selector)
                 } else {
@@ -255,7 +265,9 @@ impl ActionType {
             }
             ActionType::LogComment { message } => message.clone(),
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
-            ActionType::StartTarget | ActionType::StopTarget | ActionType::GetTargetInfo => String::new(),
+            ActionType::StartTarget | ActionType::StopTarget | ActionType::GetTargetInfo => {
+                String::new()
+            }
             _ => String::new(),
         }
     }
@@ -315,7 +327,13 @@ impl ActionLog {
     /// # Returns
     ///
     /// A new `ActionLog` instance with a unique ID and current timestamp.
-    pub fn new(action: ActionType, result: ActionResult, screenshot: Option<Arc<String>>, duration_ms: Option<u64>, tag: Option<String>) -> Self {
+    pub fn new(
+        action: ActionType,
+        result: ActionResult,
+        screenshot: Option<Arc<String>>,
+        duration_ms: Option<u64>,
+        tag: Option<String>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),

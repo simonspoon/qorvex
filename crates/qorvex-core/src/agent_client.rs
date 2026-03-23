@@ -37,7 +37,7 @@ use tokio::time::timeout;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::protocol::{
-    ProtocolError, Request, Response, decode_response, encode_request, read_frame_length,
+    decode_response, encode_request, read_frame_length, ProtocolError, Request, Response,
 };
 
 // ---------------------------------------------------------------------------
@@ -207,7 +207,9 @@ impl AgentClient {
                 Response::Error { message } => Err(AgentClientError::AgentError(message)),
                 other => Ok(other),
             }
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Convenience method to send a heartbeat and verify the agent is alive.
@@ -294,7 +296,10 @@ impl AgentClient {
                 // stale bytes in the TCP buffer. Drop the stream so the next
                 // caller gets NotConnected instead of reading a mismatched
                 // response from a previous request.
-                warn!(timeout_secs = read_timeout.as_secs_f64(), "read timeout, dropping connection");
+                warn!(
+                    timeout_secs = read_timeout.as_secs_f64(),
+                    "read timeout, dropping connection"
+                );
                 self.stream.take();
                 Err(AgentClientError::Timeout)
             }
@@ -473,8 +478,8 @@ mod tests {
         let frame = encode_request(&big_request);
 
         // Temporarily override the timeout to keep the test fast.
-        let result = tokio::time::timeout(Duration::from_millis(200), client.write_frame(&frame))
-            .await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(200), client.write_frame(&frame)).await;
 
         // Either our outer timeout or the inner WRITE_TIMEOUT fires.
         // In both cases the stream should be dropped.

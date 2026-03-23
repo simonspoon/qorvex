@@ -32,7 +32,8 @@ fn tap_action() -> ActionType {
     ActionType::Tap {
         selector: "test-button".to_string(),
         by_label: false,
-        element_type: None, timeout_ms: None,
+        element_type: None,
+        timeout_ms: None,
     }
 }
 
@@ -51,7 +52,11 @@ async fn test_agent_drops_connection_mid_session() {
 
     // First action should succeed.
     let result = executor.execute(tap_action()).await;
-    assert!(result.success, "first action should succeed: {}", result.message);
+    assert!(
+        result.success,
+        "first action should succeed: {}",
+        result.message
+    );
 
     // Second action should fail gracefully (no panic).
     let result = executor.execute(tap_action()).await;
@@ -107,10 +112,7 @@ async fn test_agent_sends_garbage_bytes() {
     .await;
 
     let result = executor.execute(tap_action()).await;
-    assert!(
-        !result.success,
-        "action should fail on garbage response"
-    );
+    assert!(!result.success, "action should fail on garbage response");
     // Should be a protocol/parse/IO error, not a panic.
     assert!(
         !result.message.is_empty(),
@@ -125,7 +127,7 @@ async fn test_agent_sends_garbage_bytes() {
 #[tokio::test]
 async fn test_agent_delayed_response_succeeds() {
     let executor = programmable_executor(vec![
-        MockBehavior::Respond(Response::Ok),                           // heartbeat
+        MockBehavior::Respond(Response::Ok), // heartbeat
         MockBehavior::Delay(Duration::from_millis(200), Response::Ok), // action with 200ms delay
     ])
     .await;
@@ -153,10 +155,7 @@ async fn test_execute_after_disconnect_returns_error() {
     // First execute triggers the drop — the AgentClient will detect the I/O
     // error and clear its stream.
     let result1 = executor.execute(tap_action()).await;
-    assert!(
-        !result1.success,
-        "first action after drop should fail"
-    );
+    assert!(!result1.success, "first action after drop should fail");
 
     // Second execute should also fail cleanly with a "not connected" style error.
     let result2 = executor.execute(tap_action()).await;
@@ -167,7 +166,9 @@ async fn test_execute_after_disconnect_returns_error() {
     // The underlying error should indicate the connection is gone.
     let msg_lower = result2.message.to_lowercase();
     assert!(
-        msg_lower.contains("not connected") || msg_lower.contains("connection") || msg_lower.contains("io error"),
+        msg_lower.contains("not connected")
+            || msg_lower.contains("connection")
+            || msg_lower.contains("io error"),
         "error should indicate connection loss, got: {}",
         result2.message
     );
@@ -217,9 +218,9 @@ async fn test_wait_for_not_succeeds_on_transient_error() {
     };
 
     let executor = programmable_executor(vec![
-        MockBehavior::Respond(Response::Ok),          // heartbeat during connect
-        MockBehavior::Respond(tree_with_spinner),      // 1st poll: spinner is present
-        MockBehavior::Drop,                            // 2nd poll: connection drops
+        MockBehavior::Respond(Response::Ok), // heartbeat during connect
+        MockBehavior::Respond(tree_with_spinner), // 1st poll: spinner is present
+        MockBehavior::Drop,                  // 2nd poll: connection drops
     ])
     .await;
 
@@ -261,7 +262,9 @@ async fn test_connection_drop_without_lifecycle_no_recovery() {
     // Verify the error is connection-related
     let msg_lower = result.message.to_lowercase();
     assert!(
-        msg_lower.contains("io error") || msg_lower.contains("not connected") || msg_lower.contains("connection"),
+        msg_lower.contains("io error")
+            || msg_lower.contains("not connected")
+            || msg_lower.contains("connection"),
         "error should be connection-related, got: {}",
         result.message
     );

@@ -25,8 +25,8 @@
 //! }
 //! ```
 
-use std::process::Command;
 use serde::{Deserialize, Serialize};
+use std::process::Command;
 use thiserror::Error;
 
 /// Errors that can occur when interacting with simctl.
@@ -114,15 +114,12 @@ impl Simctl {
 
         if !output.status.success() {
             return Err(SimctlError::CommandFailed(
-                String::from_utf8_lossy(&output.stderr).to_string()
+                String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
 
         let device_list: DeviceList = serde_json::from_slice(&output.stdout)?;
-        let devices: Vec<SimulatorDevice> = device_list.devices
-            .into_values()
-            .flatten()
-            .collect();
+        let devices: Vec<SimulatorDevice> = device_list.devices.into_values().flatten().collect();
 
         Ok(devices)
     }
@@ -142,7 +139,8 @@ impl Simctl {
     /// - Any errors from [`Self::list_devices`]
     pub fn get_booted_udid() -> Result<String, SimctlError> {
         let devices = Self::list_devices()?;
-        devices.into_iter()
+        devices
+            .into_iter()
             .find(|d| d.state == "Booted")
             .map(|d| d.udid)
             .ok_or(SimctlError::NoBootedSimulator)
@@ -175,7 +173,7 @@ impl Simctl {
 
         if !output.status.success() {
             return Err(SimctlError::CommandFailed(
-                String::from_utf8_lossy(&output.stderr).to_string()
+                String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
 
@@ -365,7 +363,9 @@ impl Simctl {
         apps.sort_by(|a, b| {
             let a_is_user = a.app_type == "User";
             let b_is_user = b.app_type == "User";
-            b_is_user.cmp(&a_is_user).then(a.bundle_id.cmp(&b.bundle_id))
+            b_is_user
+                .cmp(&a_is_user)
+                .then(a.bundle_id.cmp(&b.bundle_id))
         });
 
         Ok(apps)
@@ -390,10 +390,7 @@ impl Simctl {
     /// - [`SimctlError::JsonParse`] if the JSON is invalid or has unexpected structure
     pub fn parse_device_list(json: &[u8]) -> Result<Vec<SimulatorDevice>, SimctlError> {
         let device_list: DeviceList = serde_json::from_slice(json)?;
-        let devices: Vec<SimulatorDevice> = device_list.devices
-            .into_values()
-            .flatten()
-            .collect();
+        let devices: Vec<SimulatorDevice> = device_list.devices.into_values().flatten().collect();
         Ok(devices)
     }
 
@@ -540,7 +537,11 @@ mod tests {
         assert_eq!(booted.name, "iPhone 15 Pro");
         assert_eq!(booted.state, "Booted");
         assert!(booted.device_type.is_some());
-        assert!(booted.device_type.as_ref().unwrap().contains("iPhone-15-Pro"));
+        assert!(booted
+            .device_type
+            .as_ref()
+            .unwrap()
+            .contains("iPhone-15-Pro"));
     }
 
     #[test]
@@ -612,8 +613,8 @@ mod tests {
 
     #[test]
     fn test_parse_app_list_success() {
-        let apps = Simctl::parse_app_list(SAMPLE_APP_LIST.as_bytes())
-            .expect("Should parse valid JSON");
+        let apps =
+            Simctl::parse_app_list(SAMPLE_APP_LIST.as_bytes()).expect("Should parse valid JSON");
 
         assert_eq!(apps.len(), 3);
         // User apps should come first

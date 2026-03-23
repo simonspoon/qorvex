@@ -83,7 +83,10 @@ async fn run_accept_loop(
         let shutdown_tx = shutdown_tx.clone();
         tokio::spawn(async move {
             let span = info_span!("ipc_client");
-            if let Err(e) = handle_client(stream, state, shutdown_tx).instrument(span).await {
+            if let Err(e) = handle_client(stream, state, shutdown_tx)
+                .instrument(span)
+                .await
+            {
                 debug!(error = %e, "Client disconnected");
             }
         });

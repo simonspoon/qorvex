@@ -36,7 +36,8 @@ async fn test_tap_via_ipc_to_mock_agent() {
             action: ActionType::Tap {
                 selector: "login-btn".to_string(),
                 by_label: false,
-                element_type: None, timeout_ms: None,
+                element_type: None,
+                timeout_ms: None,
             },
             tag: None,
         })
@@ -67,8 +68,10 @@ async fn test_screenshot_via_ipc_to_mock_agent() {
     let png_header = vec![0x89, 0x50, 0x4E, 0x47];
 
     let harness = TestHarness::start(vec![
-        Response::Ok,                                    // heartbeat
-        Response::Screenshot { data: png_header.clone() }, // screenshot
+        Response::Ok, // heartbeat
+        Response::Screenshot {
+            data: png_header.clone(),
+        }, // screenshot
     ])
     .await;
 
@@ -132,8 +135,10 @@ async fn test_screen_info_via_ipc_to_mock_agent() {
     }]"#;
 
     let harness = TestHarness::start(vec![
-        Response::Ok,                                      // heartbeat
-        Response::Tree { json: tree_json.to_string() },    // dump tree
+        Response::Ok, // heartbeat
+        Response::Tree {
+            json: tree_json.to_string(),
+        }, // dump tree
     ])
     .await;
 
@@ -148,11 +153,7 @@ async fn test_screen_info_via_ipc_to_mock_agent() {
         .unwrap();
 
     match response {
-        IpcResponse::ActionResult {
-            success,
-            data,
-            ..
-        } => {
+        IpcResponse::ActionResult { success, data, .. } => {
             assert!(success, "get-screen-info should succeed");
             let data = data.expect("should have data");
             assert!(
@@ -190,7 +191,8 @@ async fn test_action_logged_after_ipc_execute() {
             action: ActionType::Tap {
                 selector: "submit-btn".to_string(),
                 by_label: false,
-                element_type: None, timeout_ms: None,
+                element_type: None,
+                timeout_ms: None,
             },
             tag: None,
         })
@@ -223,8 +225,10 @@ async fn test_screenshot_event_broadcasts_via_full_stack() {
     let png_data = vec![0x89, 0x50, 0x4E, 0x47];
 
     let harness = TestHarness::start(vec![
-        Response::Ok,                                   // heartbeat
-        Response::Screenshot { data: png_data.clone() }, // screenshot
+        Response::Ok, // heartbeat
+        Response::Screenshot {
+            data: png_data.clone(),
+        }, // screenshot
     ])
     .await;
 
@@ -273,9 +277,9 @@ async fn test_multiple_sequential_actions_via_ipc() {
     let png_data = vec![0x89, 0x50, 0x4E, 0x47];
 
     let harness = TestHarness::start(vec![
-        Response::Ok, // heartbeat
-        Response::Ok, // tap
-        Response::Ok, // send-keys
+        Response::Ok,                            // heartbeat
+        Response::Ok,                            // tap
+        Response::Ok,                            // send-keys
         Response::Screenshot { data: png_data }, // screenshot
     ])
     .await;
@@ -288,13 +292,17 @@ async fn test_multiple_sequential_actions_via_ipc() {
             action: ActionType::Tap {
                 selector: "username-field".to_string(),
                 by_label: false,
-                element_type: None, timeout_ms: None,
+                element_type: None,
+                timeout_ms: None,
             },
             tag: None,
         })
         .await
         .unwrap();
-    assert!(matches!(r1, IpcResponse::ActionResult { success: true, .. }));
+    assert!(matches!(
+        r1,
+        IpcResponse::ActionResult { success: true, .. }
+    ));
 
     // 2. SendKeys
     let r2 = client
@@ -306,7 +314,10 @@ async fn test_multiple_sequential_actions_via_ipc() {
         })
         .await
         .unwrap();
-    assert!(matches!(r2, IpcResponse::ActionResult { success: true, .. }));
+    assert!(matches!(
+        r2,
+        IpcResponse::ActionResult { success: true, .. }
+    ));
 
     // 3. Screenshot
     let r3 = client
@@ -316,7 +327,10 @@ async fn test_multiple_sequential_actions_via_ipc() {
         })
         .await
         .unwrap();
-    assert!(matches!(r3, IpcResponse::ActionResult { success: true, .. }));
+    assert!(matches!(
+        r3,
+        IpcResponse::ActionResult { success: true, .. }
+    ));
 
     // Retrieve the log and verify all 3 actions in order.
     let log_response = client.send(&IpcRequest::GetLog).await.unwrap();

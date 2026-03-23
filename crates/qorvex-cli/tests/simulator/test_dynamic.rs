@@ -113,7 +113,10 @@ fn test_counter_increments() {
         .trim()
         .parse()
         .unwrap_or(0);
-    assert!(count > 0, "Counter should have incremented above 0: {count}");
+    assert!(
+        count > 0,
+        "Counter should have incremented above 0: {count}"
+    );
 
     // Stop counter
     run(&["tap", "dynamic-stop-counter"]);

@@ -1,8 +1,8 @@
 //! Pretty formatters for output display.
 
-use ratatui::text::{Line, Span};
 use qorvex_core::element::UIElement;
 use qorvex_core::simctl::SimulatorDevice;
+use ratatui::text::{Line, Span};
 
 use crate::ui::theme::Theme;
 
@@ -28,7 +28,10 @@ pub fn format_element(elem: &UIElement) -> Line<'static> {
 
     // Element label
     if let Some(label) = &elem.label {
-        spans.push(Span::styled(format!("\"{}\"", label), Theme::element_label()));
+        spans.push(Span::styled(
+            format!("\"{}\"", label),
+            Theme::element_label(),
+        ));
         spans.push(Span::raw(" "));
     }
 

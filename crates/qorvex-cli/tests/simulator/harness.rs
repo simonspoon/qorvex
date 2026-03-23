@@ -113,7 +113,11 @@ pub fn run_fail(args: &[&str]) -> String {
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     // Return whichever has content (some errors go to stdout)
-    if stderr.is_empty() { stdout } else { stderr }
+    if stderr.is_empty() {
+        stdout
+    } else {
+        stderr
+    }
 }
 
 /// Run a qorvex command with JSON output, parse the result.
@@ -127,9 +131,8 @@ pub fn run_json(args: &[&str]) -> serde_json::Value {
         .assert()
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
-        panic!("Failed to parse JSON from stdout: {e}\nStdout was: {stdout}")
-    })
+    serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("Failed to parse JSON from stdout: {e}\nStdout was: {stdout}"))
 }
 
 /// Get the value of an element by accessibility ID. Returns trimmed stdout.

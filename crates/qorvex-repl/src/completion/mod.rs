@@ -6,7 +6,7 @@ pub mod fuzzy;
 use qorvex_core::element::UIElement;
 use qorvex_core::simctl::{InstalledApp, SimulatorDevice};
 
-use self::commands::{find_command, commands_matching, ArgCompletion, CommandDef};
+use self::commands::{commands_matching, find_command, ArgCompletion, CommandDef};
 use self::fuzzy::FuzzyFilter;
 use crate::app::shell_tokenize;
 
@@ -21,9 +21,7 @@ pub enum CompletionContext {
         arg_index: usize,
     },
     /// Completing a flag/option for a command.
-    Option {
-        command: &'static CommandDef,
-    },
+    Option { command: &'static CommandDef },
 }
 
 /// A completion candidate.
@@ -122,42 +120,35 @@ impl CompletionState {
         let (context, prefix) = parse_completion_context(input);
 
         self.candidates = match context {
-            CompletionContext::Command => {
-                commands_matching(&prefix)
-            }
+            CompletionContext::Command => commands_matching(&prefix),
             CompletionContext::Argument { command, arg_index } => {
                 let arg_cands = if let Some(arg_spec) = command.args.get(arg_index) {
                     match arg_spec.completion {
-                        ArgCompletion::ElementId => {
-                            element_candidates(&prefix, cached_elements)
-                        }
+                        ArgCompletion::ElementId => element_candidates(&prefix, cached_elements),
                         ArgCompletion::ElementLabel => {
                             element_label_candidates(&prefix, cached_elements)
                         }
                         ArgCompletion::ElementSelector => {
                             element_selector_candidates(&prefix, cached_elements, command.name)
                         }
-                        ArgCompletion::DeviceUdid => {
-                            device_candidates(&prefix, cached_devices)
-                        }
-                        ArgCompletion::BundleId => {
-                            bundle_id_candidates(&prefix, cached_apps)
-                        }
+                        ArgCompletion::DeviceUdid => device_candidates(&prefix, cached_devices),
+                        ArgCompletion::BundleId => bundle_id_candidates(&prefix, cached_apps),
                         ArgCompletion::None => Vec::new(),
                     }
                 } else {
                     Vec::new()
                 };
 
-                if arg_cands.is_empty() && arg_index >= command.args.len() && !command.options.is_empty() {
+                if arg_cands.is_empty()
+                    && arg_index >= command.args.len()
+                    && !command.options.is_empty()
+                {
                     option_candidates(&prefix, command, input)
                 } else {
                     arg_cands
                 }
             }
-            CompletionContext::Option { command } => {
-                option_candidates(&prefix, command, input)
-            }
+            CompletionContext::Option { command } => option_candidates(&prefix, command, input),
         };
 
         // Show loading placeholder when fetching elements
@@ -484,7 +475,9 @@ fn element_selector_candidates(
 
             // Determine uniqueness
             let id_is_unique = id.map(|i| id_counts.get(i) == Some(&1)).unwrap_or(false);
-            let label_is_unique = label.map(|l| label_counts.get(l) == Some(&1)).unwrap_or(false);
+            let label_is_unique = label
+                .map(|l| label_counts.get(l) == Some(&1))
+                .unwrap_or(false);
 
             // Determine best selector strategy
             // Priority: unique ID > non-unique ID with label > unique label > ID + type > label + type

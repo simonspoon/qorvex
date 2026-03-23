@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tracing::{info, info_span, debug, Instrument};
+use tracing::{debug, info, info_span, Instrument};
 
 use crate::action::ActionType;
 use crate::driver::{AutomationDriver, DriverError};
@@ -126,11 +126,16 @@ impl ActionExecutor {
     /// * `host` - The hostname or IP of the Swift agent
     /// * `port` - The TCP port the agent is listening on
     pub fn with_agent(host: impl Into<String>, port: u16) -> Self {
-        Self::new(Arc::new(crate::agent_driver::AgentDriver::direct(host, port)))
+        Self::new(Arc::new(crate::agent_driver::AgentDriver::direct(
+            host, port,
+        )))
     }
 
     /// Like [`with_agent`](Self::with_agent) but connects immediately.
-    pub async fn with_agent_connected(host: impl Into<String>, port: u16) -> Result<Self, crate::driver::DriverError> {
+    pub async fn with_agent_connected(
+        host: impl Into<String>,
+        port: u16,
+    ) -> Result<Self, crate::driver::DriverError> {
         let mut driver = crate::agent_driver::AgentDriver::direct(host, port);
         driver.connect().await?;
         Ok(Self::new(Arc::new(driver)))
@@ -147,16 +152,20 @@ impl ActionExecutor {
     pub fn from_config(config: crate::driver::DriverConfig) -> Self {
         match config {
             crate::driver::DriverConfig::Agent { host, port } => Self::with_agent(host, port),
-            crate::driver::DriverConfig::Device { udid, device_port } => {
-                Self::new(Arc::new(crate::agent_driver::AgentDriver::usb_device(udid, device_port)))
-            }
+            crate::driver::DriverConfig::Device { udid, device_port } => Self::new(Arc::new(
+                crate::agent_driver::AgentDriver::usb_device(udid, device_port),
+            )),
         }
     }
 
     /// Like [`from_config`](Self::from_config) but connects immediately.
-    pub async fn from_config_connected(config: crate::driver::DriverConfig) -> Result<Self, crate::driver::DriverError> {
+    pub async fn from_config_connected(
+        config: crate::driver::DriverConfig,
+    ) -> Result<Self, crate::driver::DriverError> {
         match config {
-            crate::driver::DriverConfig::Agent { host, port } => Self::with_agent_connected(host, port).await,
+            crate::driver::DriverConfig::Agent { host, port } => {
+                Self::with_agent_connected(host, port).await
+            }
             crate::driver::DriverConfig::Device { udid, device_port } => {
                 let mut driver = crate::agent_driver::AgentDriver::usb_device(udid, device_port);
                 driver.connect().await?;
@@ -191,22 +200,45 @@ impl ActionExecutor {
             let start = Instant::now();
             let result = self.execute_inner(action).await;
             let elapsed = start.elapsed();
-            debug!(elapsed_ms = elapsed.as_millis() as u64, success = result.success, "action complete");
+            debug!(
+                elapsed_ms = elapsed.as_millis() as u64,
+                success = result.success,
+                "action complete"
+            );
             result
-        }.instrument(span).await
+        }
+        .instrument(span)
+        .await
     }
 
     async fn execute_inner(&self, action: ActionType) -> ExecutionResult {
         match action {
-            ActionType::Tap { ref selector, by_label, ref element_type, timeout_ms } => {
+            ActionType::Tap {
+                ref selector,
+                by_label,
+                ref element_type,
+                timeout_ms,
+            } => {
                 let start = Instant::now();
 
                 let tap_result = if timeout_ms.is_some() {
                     // Forward timeout to agent — it handles retry internally.
                     match element_type {
-                        Some(typ) => self.driver.tap_with_type_with_timeout(selector, by_label, typ, timeout_ms).await,
-                        None if by_label => self.driver.tap_by_label_with_timeout(selector, timeout_ms).await,
-                        None => self.driver.tap_element_with_timeout(selector, timeout_ms).await,
+                        Some(typ) => {
+                            self.driver
+                                .tap_with_type_with_timeout(selector, by_label, typ, timeout_ms)
+                                .await
+                        }
+                        None if by_label => {
+                            self.driver
+                                .tap_by_label_with_timeout(selector, timeout_ms)
+                                .await
+                        }
+                        None => {
+                            self.driver
+                                .tap_element_with_timeout(selector, timeout_ms)
+                                .await
+                        }
                     }
                 } else {
                     // No timeout — single attempt (no retry)
@@ -228,9 +260,9 @@ impl ActionExecutor {
                         ExecutionResult::success(msg)
                             .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms))
                     }
-                    Err(e) => ExecutionResult::failure(format!(
-                        "Timeout after {}ms: {}", elapsed_ms, e
-                    )),
+                    Err(e) => {
+                        ExecutionResult::failure(format!("Timeout after {}ms: {}", elapsed_ms, e))
+                    }
                 }
             }
 
@@ -265,7 +297,11 @@ impl ActionExecutor {
                     }
                 };
 
-                match self.driver.swipe(start_x, start_y, end_x, end_y, Some(0.3)).await {
+                match self
+                    .driver
+                    .swipe(start_x, start_y, end_x, end_y, Some(0.3))
+                    .await
+                {
                     Ok(_) => ExecutionResult::success(format!("Swiped {}", direction)),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
@@ -274,63 +310,64 @@ impl ActionExecutor {
             ActionType::LongPress { x, y, duration } => {
                 match self.driver.long_press(x, y, duration).await {
                     Ok(_) => ExecutionResult::success(format!(
-                        "Long pressed at ({}, {}) for {:.1}s", x, y, duration
+                        "Long pressed at ({}, {}) for {:.1}s",
+                        x, y, duration
                     )),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 
-            ActionType::SendKeys { ref text } => {
-                match self.driver.type_text(text).await {
-                    Ok(_) => ExecutionResult::success(format!("Sent keys: '{}'", text)),
-                    Err(e) => ExecutionResult::failure(e.to_string()),
-                }
-            }
+            ActionType::SendKeys { ref text } => match self.driver.type_text(text).await {
+                Ok(_) => ExecutionResult::success(format!("Sent keys: '{}'", text)),
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
 
-            ActionType::GetScreenshot => {
-                match self.driver.screenshot().await {
-                    Ok(bytes) => {
-                        use base64::Engine;
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        ExecutionResult::success("Screenshot captured")
-                            .with_screenshot(b64.clone())
-                            .with_data(b64)
-                    }
-                    Err(e) => ExecutionResult::failure(e.to_string()),
+            ActionType::GetScreenshot => match self.driver.screenshot().await {
+                Ok(bytes) => {
+                    use base64::Engine;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    ExecutionResult::success("Screenshot captured")
+                        .with_screenshot(b64.clone())
+                        .with_data(b64)
                 }
-            }
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
 
-            ActionType::GetScreenInfo => {
-                match self.driver.list_elements().await {
-                    Ok(elements) => {
-                        match serde_json::to_string(&elements) {
-                            Ok(json) => {
-                                ExecutionResult::success("Screen info retrieved")
-                                    .with_data(json)
-                            }
-                            Err(e) => ExecutionResult::failure(format!("JSON serialization error: {}", e)),
-                        }
-                    }
-                    Err(e) => ExecutionResult::failure(e.to_string()),
-                }
-            }
+            ActionType::GetScreenInfo => match self.driver.list_elements().await {
+                Ok(elements) => match serde_json::to_string(&elements) {
+                    Ok(json) => ExecutionResult::success("Screen info retrieved").with_data(json),
+                    Err(e) => ExecutionResult::failure(format!("JSON serialization error: {}", e)),
+                },
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
 
-            ActionType::GetValue { ref selector, by_label, ref element_type, timeout_ms } => {
+            ActionType::GetValue {
+                ref selector,
+                by_label,
+                ref element_type,
+                timeout_ms,
+            } => {
                 let start = Instant::now();
 
                 let value_result = if timeout_ms.is_some() {
                     // Forward timeout to agent — it handles retry internally.
-                    self.driver.get_value_with_timeout(
-                        selector,
-                        by_label,
-                        element_type.as_deref(),
-                        timeout_ms,
-                    ).await
-                        // Normalize into the same Result<Option<String>> shape
+                    self.driver
+                        .get_value_with_timeout(
+                            selector,
+                            by_label,
+                            element_type.as_deref(),
+                            timeout_ms,
+                        )
+                        .await
+                    // Normalize into the same Result<Option<String>> shape
                 } else {
                     // No timeout — single attempt (no retry)
                     match element_type {
-                        Some(typ) => self.driver.get_value_with_type(selector, by_label, typ).await,
+                        Some(typ) => {
+                            self.driver
+                                .get_value_with_type(selector, by_label, typ)
+                                .await
+                        }
                         None if by_label => self.driver.get_element_value_by_label(selector).await,
                         None => self.driver.get_element_value(selector).await,
                     }
@@ -354,9 +391,9 @@ impl ActionExecutor {
                         };
                         ExecutionResult::success(msg).with_data("null".to_string())
                     }
-                    Err(e) => ExecutionResult::failure(format!(
-                        "Timeout after {}ms: {}", elapsed_ms, e
-                    )),
+                    Err(e) => {
+                        ExecutionResult::failure(format!("Timeout after {}ms: {}", elapsed_ms, e))
+                    }
                 }
             }
 
@@ -364,7 +401,13 @@ impl ActionExecutor {
                 ExecutionResult::success(format!("Logged: {}", message))
             }
 
-            ActionType::WaitFor { ref selector, by_label, ref element_type, timeout_ms, require_stable } => {
+            ActionType::WaitFor {
+                ref selector,
+                by_label,
+                ref element_type,
+                timeout_ms,
+                require_stable,
+            } => {
                 let mut start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
@@ -374,12 +417,16 @@ impl ActionExecutor {
                 let mut last_recovery = self.driver.recovery_count();
 
                 loop {
-                    if let Ok(found) = self.driver.find_element_with_read_timeout(
-                        selector,
-                        by_label,
-                        element_type.as_deref(),
-                        Some(timeout_ms),
-                    ).await {
+                    if let Ok(found) = self
+                        .driver
+                        .find_element_with_read_timeout(
+                            selector,
+                            by_label,
+                            element_type.as_deref(),
+                            Some(timeout_ms),
+                        )
+                        .await
+                    {
                         if let Some(element) = found {
                             if require_stable {
                                 // Skip elements that exist but aren't hittable yet
@@ -394,14 +441,18 @@ impl ActionExecutor {
                                         } else {
                                             format!("Timeout after {}ms: element '{}' exists but is not hittable", elapsed_ms, selector)
                                         };
-                                        return ExecutionResult::failure(msg)
-                                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                                        return ExecutionResult::failure(msg).with_data(format!(
+                                            r#"{{"elapsed_ms":{}}}"#,
+                                            elapsed_ms
+                                        ));
                                     }
                                     tokio::time::sleep(poll_interval).await;
                                     continue;
                                 }
 
-                                let current_frame = element.frame.as_ref()
+                                let current_frame = element
+                                    .frame
+                                    .as_ref()
                                     .map(|f| (f.x, f.y, f.width, f.height));
 
                                 // Require the frame to be stable across multiple consecutive
@@ -442,8 +493,10 @@ impl ActionExecutor {
                                         } else {
                                             format!("Timeout after {}ms: element '{}' exists but is not hittable", elapsed_ms, selector)
                                         };
-                                        return ExecutionResult::failure(msg)
-                                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
+                                        return ExecutionResult::failure(msg).with_data(format!(
+                                            r#"{{"elapsed_ms":{}}}"#,
+                                            elapsed_ms
+                                        ));
                                     }
                                     tokio::time::sleep(poll_interval).await;
                                     continue;
@@ -473,9 +526,15 @@ impl ActionExecutor {
                     if start.elapsed() >= timeout {
                         let elapsed_ms = start.elapsed().as_millis() as u64;
                         let msg = if by_label {
-                            format!("Timeout after {}ms waiting for element with label '{}'", elapsed_ms, selector)
+                            format!(
+                                "Timeout after {}ms waiting for element with label '{}'",
+                                elapsed_ms, selector
+                            )
                         } else {
-                            format!("Timeout after {}ms waiting for element '{}'", elapsed_ms, selector)
+                            format!(
+                                "Timeout after {}ms waiting for element '{}'",
+                                elapsed_ms, selector
+                            )
                         };
                         return ExecutionResult::failure(msg)
                             .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
@@ -484,26 +543,35 @@ impl ActionExecutor {
                 }
             }
 
-            ActionType::WaitForNot { ref selector, by_label, ref element_type, timeout_ms } => {
+            ActionType::WaitForNot {
+                ref selector,
+                by_label,
+                ref element_type,
+                timeout_ms,
+            } => {
                 let mut start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
                 let mut last_recovery = self.driver.recovery_count();
 
                 loop {
-                    let found = self.driver.find_element_with_read_timeout(
-                        selector,
-                        by_label,
-                        element_type.as_deref(),
-                        Some(timeout_ms),
-                    ).await;
+                    let found = self
+                        .driver
+                        .find_element_with_read_timeout(
+                            selector,
+                            by_label,
+                            element_type.as_deref(),
+                            Some(timeout_ms),
+                        )
+                        .await;
 
                     match found {
                         Err(e) => {
                             return ExecutionResult::failure(format!("{}", e));
                         }
                         Ok(ref opt) => {
-                            let element_present = matches!(opt, Some(ref el) if el.hittable != Some(false));
+                            let element_present =
+                                matches!(opt, Some(ref el) if el.hittable != Some(false));
                             if !element_present {
                                 let elapsed_ms = start.elapsed().as_millis() as u64;
                                 let msg = if by_label {
@@ -528,7 +596,10 @@ impl ActionExecutor {
                         let msg = if by_label {
                             format!("Timeout after {}ms waiting for element with label '{}' to disappear", elapsed_ms, selector)
                         } else {
-                            format!("Timeout after {}ms waiting for element '{}' to disappear", elapsed_ms, selector)
+                            format!(
+                                "Timeout after {}ms waiting for element '{}' to disappear",
+                                elapsed_ms, selector
+                            )
                         };
                         return ExecutionResult::failure(msg)
                             .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms));
@@ -539,18 +610,20 @@ impl ActionExecutor {
 
             ActionType::SetTarget { ref bundle_id } => {
                 match self.driver.set_target(bundle_id).await {
-                    Ok(_) => {
-                        ExecutionResult::success(format!("Target set to '{}'", bundle_id))
-                    }
+                    Ok(_) => ExecutionResult::success(format!("Target set to '{}'", bundle_id)),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
 
             // Session management actions should be handled by the caller
-            ActionType::StartSession | ActionType::EndSession | ActionType::Quit
-            | ActionType::StartTarget | ActionType::StopTarget | ActionType::GetTargetInfo => {
-                ExecutionResult::failure("Session management actions must be handled by the session manager")
-            }
+            ActionType::StartSession
+            | ActionType::EndSession
+            | ActionType::Quit
+            | ActionType::StartTarget
+            | ActionType::StopTarget
+            | ActionType::GetTargetInfo => ExecutionResult::failure(
+                "Session management actions must be handled by the session manager",
+            ),
         }
     }
 }
@@ -577,16 +650,14 @@ mod tests {
 
     #[test]
     fn test_execution_result_with_screenshot() {
-        let result = ExecutionResult::success("ok")
-            .with_screenshot("base64data".to_string());
+        let result = ExecutionResult::success("ok").with_screenshot("base64data".to_string());
         assert!(result.success);
         assert_eq!(result.screenshot, Some("base64data".to_string()));
     }
 
     #[test]
     fn test_execution_result_with_data() {
-        let result = ExecutionResult::success("ok")
-            .with_data("{\"key\": \"value\"}".to_string());
+        let result = ExecutionResult::success("ok").with_data("{\"key\": \"value\"}".to_string());
         assert!(result.success);
         assert_eq!(result.data, Some("{\"key\": \"value\"}".to_string()));
     }
@@ -600,7 +671,10 @@ mod tests {
     #[test]
     fn test_executor_from_config_agent() {
         use crate::driver::DriverConfig;
-        let config = DriverConfig::Agent { host: "localhost".to_string(), port: 9800 };
+        let config = DriverConfig::Agent {
+            host: "localhost".to_string(),
+            port: 9800,
+        };
         let executor = ActionExecutor::from_config(config);
         assert!(!executor.driver().is_connected());
     }
@@ -608,7 +682,10 @@ mod tests {
     #[test]
     fn test_executor_from_config_device() {
         use crate::driver::DriverConfig;
-        let config = DriverConfig::Device { udid: "ABC-123".to_string(), device_port: 8080 };
+        let config = DriverConfig::Device {
+            udid: "ABC-123".to_string(),
+            device_port: 8080,
+        };
         let executor = ActionExecutor::from_config(config);
         assert!(!executor.driver().is_connected());
     }
