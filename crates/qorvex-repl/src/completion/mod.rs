@@ -61,7 +61,7 @@ pub enum CandidateKind {
 }
 
 /// State for the completion popup.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CompletionState {
     /// Current candidates to show.
     pub candidates: Vec<Candidate>,
@@ -71,15 +71,6 @@ pub struct CompletionState {
     pub visible: bool,
 }
 
-impl Default for CompletionState {
-    fn default() -> Self {
-        Self {
-            candidates: Vec::new(),
-            selected: 0,
-            visible: false,
-        }
-    }
-}
 
 impl CompletionState {
     /// Move selection up.

@@ -105,8 +105,8 @@ pub enum SessionEvent {
 /// - The current screenshot (if any)
 /// - A broadcast channel for notifying watchers of state changes
 /// - A persistent log file in `~/.qorvex/logs/`
-/// Sessions are created via [`Session::new`], which returns an `Arc<Session>`
-/// for safe sharing across async tasks.
+///   Sessions are created via [`Session::new`], which returns an `Arc<Session>`
+///   for safe sharing across async tasks.
 pub struct Session {
     /// The unique identifier for this session.
     pub id: Uuid,
@@ -238,6 +238,7 @@ impl Session {
     }
 
     /// Like `log_action`, but also records per-phase timing for tap actions.
+    #[allow(clippy::too_many_arguments)]
     pub async fn log_action_timed(
         &self,
         action: ActionType,

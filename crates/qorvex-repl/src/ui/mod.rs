@@ -80,7 +80,7 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
             if w == 0 || inner_width == 0 {
                 1
             } else {
-                (w + inner_width - 1) / inner_width
+                w.div_ceil(inner_width)
             }
         })
         .sum();
@@ -110,7 +110,7 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
             let wrapped_rows = if w == 0 || inner_width == 0 {
                 1
             } else {
-                (w + inner_width - 1) / inner_width
+                w.div_ceil(inner_width)
             };
 
             for wrap_row in 0..wrapped_rows {

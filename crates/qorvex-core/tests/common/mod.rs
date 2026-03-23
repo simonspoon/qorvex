@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test helpers for qorvex-core integration tests.
 //!
 //! This module provides reusable mock infrastructure for tests that exercise
@@ -68,7 +69,7 @@ pub async fn connected_executor(responses: Vec<Response>) -> ActionExecutor {
 pub fn unique_session_name() -> String {
     format!(
         "test_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     )
 }
 

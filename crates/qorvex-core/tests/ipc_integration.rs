@@ -761,7 +761,7 @@ async fn test_session_creates_persistent_log_file() {
     // Create a unique session name to avoid conflicts
     let session_name = format!(
         "persistent_log_test_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     );
     let session = Session::new(None, &session_name);
 
@@ -823,7 +823,7 @@ async fn test_session_creates_persistent_log_file() {
     // Read and verify file contents
     let file = fs::File::open(&log_file).expect("Should open log file");
     let reader = BufReader::new(file);
-    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
 
     assert_eq!(lines.len(), 3, "Should have 3 log entries");
 

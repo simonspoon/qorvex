@@ -117,7 +117,7 @@ fn mouse_to_text_position(column: u16, row: u16, app: &App) -> Option<app::TextP
             if w == 0 || inner_width == 0 {
                 1
             } else {
-                (w + inner_width - 1) / inner_width
+                w.div_ceil(inner_width)
             }
         })
         .sum();
@@ -134,7 +134,7 @@ fn mouse_to_text_position(column: u16, row: u16, app: &App) -> Option<app::TextP
         let wrapped_rows = if w == 0 || inner_width == 0 {
             1
         } else {
-            (w + inner_width - 1) / inner_width
+            w.div_ceil(inner_width)
         };
 
         if target_visual_row < visual_row + wrapped_rows {

@@ -80,6 +80,7 @@ pub fn harness() -> &'static SimulatorHarness {
 }
 
 /// Build a Command for the qorvex binary.
+#[allow(deprecated)]
 pub fn qorvex_cmd() -> Command {
     Command::cargo_bin("qorvex").unwrap()
 }

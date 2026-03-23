@@ -305,12 +305,9 @@ impl App {
                     }
                     _ => {}
                 }
-                match c.send(&IpcRequest::GetCompletionData).await {
-                    Ok(IpcResponse::CompletionData { elements, devices }) => {
-                        app.cached_elements = elements;
-                        app.cached_devices = devices;
-                    }
-                    _ => {}
+                if let Ok(IpcResponse::CompletionData { elements, devices }) = c.send(&IpcRequest::GetCompletionData).await {
+                    app.cached_elements = elements;
+                    app.cached_devices = devices;
                 }
                 app.client = Some(c);
             }
@@ -372,12 +369,9 @@ impl App {
                     }
 
                     // Fetch initial completion data
-                    match c.send(&IpcRequest::GetCompletionData).await {
-                        Ok(IpcResponse::CompletionData { elements, devices }) => {
-                            cached_elements = elements;
-                            cached_devices = devices;
-                        }
-                        _ => {}
+                    if let Ok(IpcResponse::CompletionData { elements, devices }) = c.send(&IpcRequest::GetCompletionData).await {
+                        cached_elements = elements;
+                        cached_devices = devices;
                     }
 
                     Some(c)
@@ -456,7 +450,6 @@ impl App {
         if needs_elements {
             // Extract command name
             let cmd_name = input
-                .trim_start()
                 .split_whitespace()
                 .next()
                 .unwrap_or("")

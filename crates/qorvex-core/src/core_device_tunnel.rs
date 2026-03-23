@@ -118,7 +118,7 @@ fn find_pairing_file(udid: &str) -> Option<PathBuf> {
 ///
 /// * `udid`       – The device's UDID (e.g. `"00008140-000A15911AE3001C"`).
 /// * `agent_port` – The TCP port the Swift agent is listening on inside the
-///                  tunnel (typically 8080).
+///   tunnel (typically 8080).
 ///
 /// # Errors
 ///

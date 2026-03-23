@@ -144,8 +144,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 fn parse_selector_index(selector: &str) -> (&str, Option<usize>) {
     if let Some(bracket_pos) = selector.rfind('[') {
         let after = &selector[bracket_pos + 1..];
-        if after.ends_with(']') {
-            let digits = &after[..after.len() - 1];
+        if let Some(digits) = after.strip_suffix(']') {
             if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
                 if let Ok(n) = digits.parse::<usize>() {
                     return (&selector[..bracket_pos], Some(n));
@@ -161,7 +160,7 @@ fn collect_by_identifier(elements: &[UIElement], base: &str, result: &mut Vec<UI
         if element
             .identifier
             .as_deref()
-            .map_or(false, |id| glob_match(base, id))
+            .is_some_and(|id| glob_match(base, id))
         {
             result.push(element.clone());
         }
@@ -174,7 +173,7 @@ fn collect_by_label(elements: &[UIElement], base: &str, result: &mut Vec<UIEleme
         if element
             .label
             .as_deref()
-            .map_or(false, |l| glob_match(base, l))
+            .is_some_and(|l| glob_match(base, l))
         {
             result.push(element.clone());
         }
@@ -194,12 +193,12 @@ fn collect_with_type(
             element
                 .label
                 .as_deref()
-                .map_or(false, |l| glob_match(base, l))
+                .is_some_and(|l| glob_match(base, l))
         } else {
             element
                 .identifier
                 .as_deref()
-                .map_or(false, |id| glob_match(base, id))
+                .is_some_and(|id| glob_match(base, id))
         };
         let type_matches = match element_type {
             Some(typ) => element.element_type.as_deref() == Some(typ),
@@ -228,7 +227,7 @@ fn search_by_identifier(elements: &[UIElement], selector: &str) -> Option<UIElem
         if element
             .identifier
             .as_deref()
-            .map_or(false, |id| glob_match(base, id))
+            .is_some_and(|id| glob_match(base, id))
         {
             return Some(element.clone());
         }
@@ -255,7 +254,7 @@ fn search_by_label(elements: &[UIElement], selector: &str) -> Option<UIElement> 
         if element
             .label
             .as_deref()
-            .map_or(false, |l| glob_match(base, l))
+            .is_some_and(|l| glob_match(base, l))
         {
             return Some(element.clone());
         }
@@ -289,12 +288,12 @@ fn search_with_type(
             element
                 .label
                 .as_deref()
-                .map_or(false, |l| glob_match(base, l))
+                .is_some_and(|l| glob_match(base, l))
         } else {
             element
                 .identifier
                 .as_deref()
-                .map_or(false, |id| glob_match(base, id))
+                .is_some_and(|id| glob_match(base, id))
         };
 
         // Check if type matches (if type filter is specified)

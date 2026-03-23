@@ -445,7 +445,7 @@ async fn run_batch(args: Args) -> io::Result<()> {
     // Subscribe to events
     if let Err(e) = client.subscribe().await {
         eprintln!("Failed to subscribe to events: {}", e);
-        return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+        return Err(io::Error::other(e.to_string()));
     }
 
     eprintln!(
@@ -857,7 +857,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             while !remaining.is_empty() {
                 let (chunk, rest) = if remaining.len() > wrap_width {
                     let break_at = remaining[..wrap_width]
-                        .rfind(|c: char| c == ' ' || c == ',' || c == '{' || c == '}')
+                        .rfind([' ', ',', '{', '}'])
                         .map(|i| i + 1)
                         .unwrap_or(wrap_width);
                     (&remaining[..break_at], &remaining[break_at..])

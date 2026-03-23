@@ -108,7 +108,7 @@ fn test_counter_increments() {
     // Extract the number and verify it incremented
     let count: i32 = value
         .split(':')
-        .last()
+        .next_back()
         .unwrap_or("0")
         .trim()
         .parse()
