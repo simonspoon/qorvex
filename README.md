@@ -35,6 +35,12 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install simonspoon/tap/qorvex
+```
+
 ### From GitHub Releases
 
 Download the latest tarball from [Releases](https://github.com/simonspoon/qorvex/releases) and extract the pre-built binaries:
