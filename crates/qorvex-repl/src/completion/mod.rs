@@ -71,7 +71,6 @@ pub struct CompletionState {
     pub visible: bool,
 }
 
-
 impl CompletionState {
     /// Move selection up.
     pub fn select_prev(&mut self) {

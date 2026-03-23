@@ -305,7 +305,9 @@ impl App {
                     }
                     _ => {}
                 }
-                if let Ok(IpcResponse::CompletionData { elements, devices }) = c.send(&IpcRequest::GetCompletionData).await {
+                if let Ok(IpcResponse::CompletionData { elements, devices }) =
+                    c.send(&IpcRequest::GetCompletionData).await
+                {
                     app.cached_elements = elements;
                     app.cached_devices = devices;
                 }
@@ -369,7 +371,9 @@ impl App {
                     }
 
                     // Fetch initial completion data
-                    if let Ok(IpcResponse::CompletionData { elements, devices }) = c.send(&IpcRequest::GetCompletionData).await {
+                    if let Ok(IpcResponse::CompletionData { elements, devices }) =
+                        c.send(&IpcRequest::GetCompletionData).await
+                    {
                         cached_elements = elements;
                         cached_devices = devices;
                     }
@@ -449,11 +453,7 @@ impl App {
 
         if needs_elements {
             // Extract command name
-            let cmd_name = input
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let cmd_name = input.split_whitespace().next().unwrap_or("").to_string();
             if self.active_fetch_command.as_deref() != Some(&cmd_name) {
                 // New command context — clear cache and trigger fetch
                 self.cached_elements.clear();
