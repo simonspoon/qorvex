@@ -118,7 +118,7 @@ impl LogConverter {
                 Some(cmd)
             }
             ActionType::LongPress { x, y, duration } => Some(format!(
-                "# TODO: long-press {} {} {} (not yet supported)",
+                "qorvex long-press {} {} --duration {}",
                 x, y, duration
             )),
             ActionType::SetTarget { bundle_id } => {
@@ -335,7 +335,7 @@ mod tests {
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
-            Some("# TODO: long-press 100 200 1.5 (not yet supported)".to_string())
+            Some("qorvex long-press 100 200 --duration 1.5".to_string())
         );
     }
 

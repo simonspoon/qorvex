@@ -63,6 +63,13 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 |--------|-------------|
 | `tap-location <x> <y>` | Tap at screen coordinates (REPL and CLI) |
 
+### Long Press
+
+| Syntax | Description |
+|--------|-------------|
+| `qorvex long-press <x> <y>` | Long press at coordinates (1.0s default) |
+| `qorvex long-press <x> <y> --duration <s>` | Long press with custom duration in seconds |
+
 ### Swipe
 
 | Syntax | Description |

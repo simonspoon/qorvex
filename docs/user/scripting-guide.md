@@ -85,6 +85,7 @@ done
 | `qorvex tap <selector> --label` | Tap by label |
 | `qorvex tap <selector> -T Button` | Tap with type filter |
 | `qorvex tap-location <x> <y>` | Tap at coordinates |
+| `qorvex long-press <x> <y> [--duration <s>]` | Long press at coordinates (default 1.0s) |
 | `qorvex swipe <direction>` | Swipe up/down/left/right |
 | `qorvex send-keys 'text'` | Type text |
 | `qorvex screenshot` | Capture screenshot (base64) |

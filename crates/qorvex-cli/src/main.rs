@@ -123,6 +123,20 @@ enum Command {
         tag: Option<String>,
     },
 
+    /// Long press at screen coordinates
+    LongPress {
+        /// X coordinate
+        x: i32,
+        /// Y coordinate
+        y: i32,
+        /// Duration in seconds (default: 1.0)
+        #[arg(long, short, default_value = "1.0")]
+        duration: f64,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
     /// Send keyboard input
     SendKeys {
         /// Text to type
@@ -503,6 +517,20 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             execute_action(
                 &mut client,
                 ActionType::TapLocation { x, y },
+                tag.clone(),
+                &cli,
+            )
+            .await
+        }
+        Command::LongPress {
+            x,
+            y,
+            duration,
+            ref tag,
+        } => {
+            execute_action(
+                &mut client,
+                ActionType::LongPress { x, y, duration },
                 tag.clone(),
                 &cli,
             )
