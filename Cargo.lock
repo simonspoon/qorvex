@@ -2381,7 +2381,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-live"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "clap",
@@ -2437,7 +2437,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-repl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "base64",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "qorvex-core",
