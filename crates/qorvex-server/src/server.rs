@@ -174,7 +174,7 @@ impl ServerState {
         if needs_agent {
             if let Some(ref udid) = self.simulator_udid.clone() {
                 let config = QorvexConfig::load();
-                if let Some(agent_source_dir) = config.agent_source_dir {
+                if let Some(agent_source_dir) = config.effective_agent_source_dir() {
                     info!("Auto-starting agent");
                     let mut lc_config = AgentLifecycleConfig::new(agent_source_dir);
                     lc_config.agent_port = self.agent_port;
@@ -497,7 +497,7 @@ impl ServerState {
         } else {
             // No path argument: try config, then fall back to external agent
             let config = QorvexConfig::load();
-            if let Some(project_dir) = config.agent_source_dir {
+            if let Some(project_dir) = config.effective_agent_source_dir() {
                 let mut lc_config = AgentLifecycleConfig::new(project_dir);
                 lc_config.agent_port = self.agent_port;
                 if self.is_physical_device {

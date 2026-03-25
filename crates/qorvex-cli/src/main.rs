@@ -1055,9 +1055,10 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     // handle interactive prompts.
     if device.is_some() {
         let config = QorvexConfig::load();
-        if let (Some(ref agent_dir), Some(ref team)) =
-            (&config.agent_source_dir, &config.development_team)
-        {
+        if let (Some(ref agent_dir), Some(ref team)) = (
+            &config.effective_agent_source_dir(),
+            &config.development_team,
+        ) {
             let xcodeproj = agent_dir.join("QorvexAgent.xcodeproj");
             if xcodeproj.exists() {
                 let derived = agent_dir.join(".build");
