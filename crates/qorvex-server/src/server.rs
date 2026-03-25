@@ -171,65 +171,93 @@ impl ServerState {
             None => true,
         };
 
-        if needs_agent {
-            if let Some(ref udid) = self.simulator_udid.clone() {
-                let config = QorvexConfig::load();
-                if let Some(agent_source_dir) = config.effective_agent_source_dir() {
-                    info!("Auto-starting agent");
-                    let mut lc_config = AgentLifecycleConfig::new(agent_source_dir);
-                    lc_config.agent_port = self.agent_port;
-                    if self.is_physical_device {
-                        lc_config.is_physical = true;
-                        lc_config.startup_timeout = std::time::Duration::from_secs(120);
-                        lc_config.tunnel_address = self.tunnel_address.clone();
-                        lc_config.direct_host = self.direct_host.clone();
-                        lc_config.development_team = config.development_team.clone();
-                        lc_config.agent_bundle_id = config.agent_bundle_id.clone();
-                    }
-                    let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
+        if !needs_agent {
+            return IpcResponse::CommandResult {
+                success: true,
+                message: "Session started".to_string(),
+            };
+        }
 
-                    match lifecycle.ensure_agent_ready().await {
-                        Ok(()) => {
-                            let mut driver = if self.is_physical_device {
-                                if let Some(ref addr) = self.tunnel_address {
-                                    AgentDriver::tunneld(addr.clone(), self.agent_port)
-                                        .with_lifecycle(lifecycle.clone())
-                                } else if let Some(ref host) = self.direct_host {
-                                    AgentDriver::direct(host.clone(), self.agent_port)
-                                        .with_lifecycle(lifecycle.clone())
-                                } else if self.use_core_device {
-                                    AgentDriver::core_device(udid.clone(), self.agent_port)
-                                        .with_lifecycle(lifecycle.clone())
-                                } else {
-                                    AgentDriver::usb_device(udid.clone(), self.agent_port)
-                                        .with_lifecycle(lifecycle.clone())
-                                }
-                            } else {
-                                AgentDriver::direct("127.0.0.1", self.agent_port)
-                                    .with_lifecycle(lifecycle.clone())
-                            };
-                            self.agent_lifecycle = Some(lifecycle);
-                            match driver.connect().await {
-                                Ok(()) => {
-                                    self.set_executor_with_driver(Arc::new(driver)).await;
-                                    info!("Agent started and connected");
-                                }
-                                Err(e) => {
-                                    info!(error = %e, "Agent started but connection failed");
-                                }
-                            }
+        let udid = match self.simulator_udid.clone() {
+            Some(udid) => udid,
+            None => {
+                return IpcResponse::CommandResult {
+                    success: true,
+                    message: "Session started (no device selected)".to_string(),
+                };
+            }
+        };
+
+        let config = QorvexConfig::load();
+        let agent_source_dir = match config.effective_agent_source_dir() {
+            Some(dir) => dir,
+            None => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: "No agent source found. Install via Homebrew or set agent_source_dir in ~/.qorvex/config.json".to_string(),
+                };
+            }
+        };
+
+        info!("Auto-starting agent");
+        let mut lc_config = AgentLifecycleConfig::new(agent_source_dir);
+        lc_config.agent_port = self.agent_port;
+        if self.is_physical_device {
+            lc_config.is_physical = true;
+            lc_config.startup_timeout = std::time::Duration::from_secs(120);
+            lc_config.tunnel_address = self.tunnel_address.clone();
+            lc_config.direct_host = self.direct_host.clone();
+            lc_config.development_team = config.development_team.clone();
+            lc_config.agent_bundle_id = config.agent_bundle_id.clone();
+        }
+        let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
+
+        match lifecycle.ensure_agent_ready().await {
+            Ok(()) => {
+                let mut driver = if self.is_physical_device {
+                    if let Some(ref addr) = self.tunnel_address {
+                        AgentDriver::tunneld(addr.clone(), self.agent_port)
+                            .with_lifecycle(lifecycle.clone())
+                    } else if let Some(ref host) = self.direct_host {
+                        AgentDriver::direct(host.clone(), self.agent_port)
+                            .with_lifecycle(lifecycle.clone())
+                    } else if self.use_core_device {
+                        AgentDriver::core_device(udid.clone(), self.agent_port)
+                            .with_lifecycle(lifecycle.clone())
+                    } else {
+                        AgentDriver::usb_device(udid.clone(), self.agent_port)
+                            .with_lifecycle(lifecycle.clone())
+                    }
+                } else {
+                    AgentDriver::direct("127.0.0.1", self.agent_port)
+                        .with_lifecycle(lifecycle.clone())
+                };
+                self.agent_lifecycle = Some(lifecycle);
+                match driver.connect().await {
+                    Ok(()) => {
+                        self.set_executor_with_driver(Arc::new(driver)).await;
+                        info!("Agent started and connected");
+                        IpcResponse::CommandResult {
+                            success: true,
+                            message: "Session started".to_string(),
                         }
-                        Err(e) => {
-                            info!(error = %e, "Auto-start agent failed");
+                    }
+                    Err(e) => {
+                        info!(error = %e, "Agent started but connection failed");
+                        IpcResponse::CommandResult {
+                            success: false,
+                            message: format!("Agent started but connection failed: {}", e),
                         }
                     }
                 }
             }
-        }
-
-        IpcResponse::CommandResult {
-            success: true,
-            message: "Session started".to_string(),
+            Err(e) => {
+                info!(error = %e, "Auto-start agent failed");
+                IpcResponse::CommandResult {
+                    success: false,
+                    message: format!("Failed to start agent: {}", e),
+                }
+            }
         }
     }
 

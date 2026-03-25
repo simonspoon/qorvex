@@ -121,6 +121,10 @@ pub enum AgentLifecycleError {
     #[error("Failed to launch agent: {0}")]
     LaunchFailed(String),
 
+    /// `xcodebuild test-without-building` exited early with an error.
+    #[error("Agent process exited: {0}")]
+    SpawnFailed(String),
+
     /// The agent did not respond to heartbeat within the startup timeout.
     #[error("Agent failed to become ready within timeout")]
     StartupTimeout,
@@ -259,7 +263,8 @@ impl AgentLifecycle {
     /// Spawn the agent via `xcodebuild test-without-building`.
     ///
     /// Launches xcodebuild as a child process and stores the handle for later
-    /// cleanup. Stdout and stderr are suppressed to avoid TUI interference.
+    /// cleanup. Stdout is suppressed to avoid TUI interference; stderr is
+    /// captured so that failures can be diagnosed.
     ///
     /// # Errors
     ///
@@ -291,7 +296,7 @@ impl AgentLifecycle {
                 self.config.agent_port.to_string(),
             )
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| AgentLifecycleError::LaunchFailed(e.to_string()))?;
 
@@ -396,6 +401,44 @@ impl AgentLifecycle {
                 }
             }
 
+            // Check if xcodebuild exited early (e.g. build products missing,
+            // simulator not booted, signing error). Without this check we
+            // silently poll until timeout while the process is already dead.
+            {
+                let mut guard = self.child.lock().unwrap();
+                if let Some(ref mut child) = *guard {
+                    if let Some(status) = child.try_wait().ok().flatten() {
+                        // Collect stderr for diagnostics.
+                        let stderr = child
+                            .stderr
+                            .take()
+                            .and_then(|mut s| {
+                                let mut buf = String::new();
+                                use std::io::Read;
+                                s.read_to_string(&mut buf).ok()?;
+                                Some(buf)
+                            })
+                            .unwrap_or_default();
+                        let detail = if stderr.is_empty() {
+                            format!("exit code {}", status)
+                        } else {
+                            // Truncate to last meaningful lines.
+                            let tail: String = stderr
+                                .lines()
+                                .rev()
+                                .take(20)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            format!("exit code {} — {}", status, tail.trim())
+                        };
+                        return Err(AgentLifecycleError::SpawnFailed(detail));
+                    }
+                }
+            }
+
             if tokio::time::Instant::now() >= deadline {
                 return Err(AgentLifecycleError::StartupTimeout);
             }
@@ -468,7 +511,9 @@ impl AgentLifecycle {
                     info!("agent running after attempt {}", attempt);
                     return Ok(());
                 }
-                Err(AgentLifecycleError::StartupTimeout) if attempt < self.config.max_retries => {
+                Err(AgentLifecycleError::StartupTimeout | AgentLifecycleError::SpawnFailed(_))
+                    if attempt < self.config.max_retries =>
+                {
                     // Terminate and respawn for the next attempt.
                     let _ = self.terminate_agent();
                     self.spawn_agent()?;
