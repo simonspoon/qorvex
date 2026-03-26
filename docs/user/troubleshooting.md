@@ -2,20 +2,29 @@
 
 ## Agent Won't Start
 
-**Symptoms:** `start-agent` hangs or fails, "Agent failed to become ready within timeout"
+**Symptoms:** `start-agent` hangs or fails, "Agent failed to become ready within timeout", "Agent process exited: exit code ..."
 
 **Check:**
 
 1. Is a simulator booted? Run `xcrun simctl list devices | grep Booted`
 2. Is xcodegen installed? `which xcodegen` -- install via `brew install xcodegen`
-3. Is the agent source configured? Check `~/.qorvex/config.json` for `agent_source_dir`
+3. Is the agent source configured? Check `~/.qorvex/config.json` for `agent_source_dir`. If not set, the server also checks for a Homebrew-installed agent at `HOMEBREW_PREFIX/share/qorvex/agent` (e.g., `/opt/homebrew/share/qorvex/agent`)
 4. Is the agent port available? Default is 8080 (`lsof -i :8080`). Configurable via `"agent_port"` in `~/.qorvex/config.json`
 5. Check Xcode build errors: run `make -C qorvex-agent build` manually to see full output
 
+**"No agent source found" error:** This means neither `agent_source_dir` in config nor the Homebrew agent path exists. Install via `brew install simonspoon/tap/qorvex` or run `./install.sh` from the source directory.
+
+**"Agent process exited" error:** The `xcodebuild test-without-building` process exited early before the agent became ready. The error message includes the last lines of stderr from xcodebuild. Common causes: missing build products (re-run `install.sh` or `make -C qorvex-agent build`), simulator not booted, or code signing errors.
+
 **Common fixes:**
 
+- Install via Homebrew: `brew install simonspoon/tap/qorvex`
 - Re-run `./install.sh` to set up the agent source directory
 - `start-agent /full/path/to/qorvex/qorvex-agent` -- provide path explicitly
+
+**"Failed to start agent" from `start-session`:** The server now reports agent startup failures explicitly. Previously, `start-session` would silently succeed even when the agent failed to start. If you see this error, check the causes listed above.
+
+**"Agent started but connection failed":** The agent process launched successfully but the server could not establish a TCP connection. Check that nothing else is using port 8080 and that the simulator is booted.
 
 ## Agent Won't Connect
 
@@ -45,7 +54,7 @@ Auto-recovery does **not** apply to `connect` (direct connect via `connect <host
 - Write timeout: 10 seconds — if the agent stops reading (e.g., blocked on a long operation), the write is aborted and the connection is dropped so the next command gets `NotConnected` immediately rather than blocking indefinitely
 - Read timeout: 30 seconds (default) — if the agent doesn't respond within 30 seconds, the connection is closed to prevent response mismatches on subsequent commands. When `QORVEX_TIMEOUT` or `--timeout` is set, the read deadline is extended to `timeout + 15s` so long agent-side retries can complete (the 15s buffer accommodates XCTest queries that can stall for 5–10s during screen transitions)
 - `dump_tree` / `get-screen-info` / `list-elements`: uses a 120s read deadline regardless of the default — apps with large accessibility trees can take well over 30s to snapshot
-- Agent startup timeout: 30 seconds (3 retries)
+- Agent startup timeout: 30 seconds (3 retries); both timeout and early-exit failures trigger retries
 
 If a read timeout occurs, the next command will report "Not connected". For managed agents, auto-recovery will first attempt a TCP reconnect (cheap; doesn't kill the agent), then fall back to a full respawn if the reconnect fails. For unmanaged agents, use `connect` in the REPL or restart the agent manually.
 

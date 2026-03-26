@@ -9,7 +9,15 @@
 
 ## Installation
 
-### From Source (Recommended)
+### Homebrew (Recommended)
+
+```bash
+brew install simonspoon/tap/qorvex
+```
+
+The Swift agent is automatically built during installation (requires Xcode). The agent source is installed to `HOMEBREW_PREFIX/share/qorvex/agent` and discovered automatically at runtime -- no manual configuration needed.
+
+### From Source
 
 ```bash
 git clone <repo>
@@ -132,7 +140,7 @@ After your first session, `~/.qorvex/` will contain:
 
 ```
 ~/.qorvex/
-├── config.json                  # Agent source dir config
+├── config.json                  # Agent source dir and other settings
 ├── qorvex_default.sock          # IPC socket (while session is active)
 └── logs/
     └── default_20250101_120000.jsonl  # Action log

@@ -47,14 +47,18 @@ Download the latest tarball from [Releases](https://github.com/simonspoon/qorvex
 
 ```bash
 tar xzf qorvex-macos-arm64.tar.gz
-mv qorvex-server qorvex-repl qorvex-live qorvex-cli qorvex-streamer ~/.cargo/bin/
+mv qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer ~/.cargo/bin/
 ```
 
-The Swift agent must still be built from source (requires Xcode and iOS SDK):
+The tarball includes the agent source in `agent/`. To build it manually:
 
 ```bash
-git clone https://github.com/simonspoon/qorvex.git
-cd qorvex && ./install.sh
+cd agent
+xcodebuild build-for-testing \
+  -project QorvexAgent.xcodeproj \
+  -scheme QorvexAgentUITests \
+  -destination "generic/platform=iOS Simulator" \
+  -derivedDataPath .build
 ```
 
 ### From source
@@ -343,7 +347,7 @@ Qorvex stores runtime files in `~/.qorvex/`:
     └── my-session_20250101_130000.jsonl
 ```
 
-- **Config** (`~/.qorvex/config.json`) — Persistent settings. Currently stores `agent_source_dir` so that `start-session` and `start-agent` can auto-build the Swift agent. Written by `install.sh`.
+- **Config** (`~/.qorvex/config.json`) — Persistent settings. Stores `agent_source_dir` so that `start-session` and `start-agent` can auto-build the Swift agent. Written by `install.sh`. When `agent_source_dir` is not set, the server automatically checks for a Homebrew-installed agent at `HOMEBREW_PREFIX/share/qorvex/agent`.
 - **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Live TUI use these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.
 

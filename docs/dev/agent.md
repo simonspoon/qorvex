@@ -96,12 +96,16 @@ xcodebuild test-without-building \
   -only-testing QorvexAgentUITests/QorvexAgentTests/testRunAgent
 ```
 
+Stdout is suppressed to avoid TUI interference. Stderr is piped (not suppressed) so that early failures can be diagnosed -- the health check reads it when `xcodebuild` exits early.
+
 ### Health Check
 
 Polls every 500ms until success or `startup_timeout` is exceeded. The port is passed to the Swift agent via the `TEST_RUNNER_QORVEX_PORT` environment variable (the test runner strips the `TEST_RUNNER_` prefix, so the agent reads `QORVEX_PORT`).
 
 - **Simulator** (`is_physical = false`): TCP connect + heartbeat to `127.0.0.1:<agent_port>`.
 - **Physical device** (`is_physical = true`): probes reachability via `usb_tunnel::connect(&udid, agent_port)` instead of a direct TCP connection.
+
+**Early exit detection:** Before each poll iteration, the health check calls `child.try_wait()` to see if the `xcodebuild` process has already exited. If it has, stderr is captured (up to the last 20 lines) and an `AgentLifecycleError::SpawnFailed` error is returned immediately instead of polling until timeout. This catches common failures like missing build products, simulator not booted, or signing errors. Stderr is piped (not suppressed) specifically for this diagnostic path.
 
 ### Terminate
 
@@ -150,11 +154,11 @@ Without bidirectional keepalive, the OS can silently drop idle connections and o
 |---|---|---|
 | Builds agent | Only if no platform-matching `Build/Products/*.xctestrun` exists (pre-built by `install.sh` skips build; checks `iphoneos` vs `iphonesimulator` in filename) | No -- checks TCP reachability first; delegates to `ensure_running` if unreachable |
 | Use case | Fresh start or known stale agent | Idempotent startup, skip build/spawn if already running |
-| Retry behavior | Up to `max_retries + 1` attempts (spawn + health check) | Attempts health check first; delegates to `ensure_running` only if unreachable |
+| Retry behavior | Up to `max_retries + 1` attempts (spawn + health check); both `StartupTimeout` and `SpawnFailed` trigger a retry | Attempts health check first; delegates to `ensure_running` only if unreachable |
 
 `ensure_running` calls `is_agent_built()` to detect whether a platform-matching `.xctestrun` file exists in `.build/Build/Products/`. The check looks for `iphonesimulator` in the filename when targeting a simulator and `iphoneos` when targeting a physical device — so a simulator pre-build does **not** satisfy a physical device session (and vice versa). If pre-built products are present (normal case after `install.sh`), the build step is skipped and startup reduces to spawn + health check.
 
-> **Pitfall:** Before this check was platform-aware, `install.sh` only pre-built for simulator. On a fresh install, selecting a physical device would silently use the simulator `.xctestrun`, causing `xcodebuild test-without-building` to fail (stderr suppressed) and `wait_for_ready` to time out. `install.sh` now builds for both platforms.
+> **Pitfall:** Before this check was platform-aware, `install.sh` only pre-built for simulator. On a fresh install, selecting a physical device would silently use the simulator `.xctestrun`, causing `xcodebuild test-without-building` to fail and `wait_for_ready` to time out. `install.sh` now builds for both platforms, and stderr is captured so that early failures surface a diagnostic `SpawnFailed` error instead of a generic timeout.
 
 ## Crash Recovery (via `AgentDriver::with_lifecycle`)
 

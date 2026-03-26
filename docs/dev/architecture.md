@@ -94,7 +94,7 @@ Swift agent process lifecycle management: build (`xcodebuild build-for-testing`)
 Configured via `AgentLifecycleConfig` (port, timeout, retries).
 
 Two orchestration methods:
-- `ensure_running()` -- build (skipped if `.xctestrun` products already exist), spawn, wait with retries
+- `ensure_running()` -- build (skipped if `.xctestrun` products already exist), spawn, wait with retries. Both `StartupTimeout` and `SpawnFailed` errors trigger a retry (up to `max_retries` attempts).
 - `ensure_agent_ready()` -- skips rebuild and respawn if agent is already reachable
 
 ## Connection Modes
@@ -137,7 +137,7 @@ The `core_device_tunnel` module provides:
     └── <session>_<timestamp>.jsonl
 ```
 
-- `config.json` stores `QorvexConfig` with the `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent.
+- `config.json` stores `QorvexConfig` with the `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent. When `agent_source_dir` is not set, `QorvexConfig::effective_agent_source_dir()` falls back to probing `HOMEBREW_PREFIX/share/qorvex/agent` (checks `/opt/homebrew` and `/usr/local`).
 - IPC socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
 - Streamer socket path convention: `~/.qorvex/streamer_{session_name}.sock` — created by `qorvex-live` on startup, deleted on quit.
 - JSONL log files follow the naming pattern `{session_name}_{%Y%m%d_%H%M%S}.jsonl`
