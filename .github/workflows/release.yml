@@ -10,7 +10,15 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v5
@@ -53,16 +61,40 @@ jobs:
       - name: Create tarball
         run: |
           cd dist
-          tar czf qorvex-macos-arm64.tar.gz \
+          tar czf qorvex-macos-${{ matrix.arch }}.tar.gz \
             qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent
-          shasum -a 256 qorvex-macos-arm64.tar.gz > checksums.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qorvex-macos-${{ matrix.arch }}
+          path: dist/qorvex-macos-${{ matrix.arch }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cp artifacts/qorvex-macos-arm64/qorvex-macos-arm64.tar.gz release/
+          cp artifacts/qorvex-macos-x86_64/qorvex-macos-x86_64.tar.gz release/
+          cd release
+          shasum -a 256 *.tar.gz > checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/qorvex-macos-arm64.tar.gz
-            dist/checksums.txt
+            release/qorvex-macos-arm64.tar.gz
+            release/qorvex-macos-x86_64.tar.gz
+            release/checksums.txt
           generate_release_notes: true
           body: |
             ## Install
@@ -75,10 +107,17 @@ jobs:
 
             The Swift agent is automatically built during installation (requires Xcode).
 
-            **Manual:**
+            **Manual (Apple Silicon):**
 
             ```bash
             tar xzf qorvex-macos-arm64.tar.gz
+            mv qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer ~/.cargo/bin/
+            ```
+
+            **Manual (Intel):**
+
+            ```bash
+            tar xzf qorvex-macos-x86_64.tar.gz
             mv qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer ~/.cargo/bin/
             ```
 
@@ -96,7 +135,7 @@ jobs:
             See README for full setup instructions.
 
   update-tap:
-    needs: build
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - name: Update Homebrew formula
