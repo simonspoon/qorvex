@@ -10,15 +10,7 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          - runner: macos-latest
-            arch: arm64
-          - runner: macos-13
-            arch: x86_64
-
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v5
@@ -28,73 +20,71 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
         run: cargo test --workspace --all-targets
 
-      - name: Build Rust binaries
+      - name: Build arm64 Rust binaries
         run: |
-          mkdir -p dist
+          mkdir -p dist-arm64
           cargo build --release --workspace
           for bin in qorvex-server qorvex-repl qorvex-live qorvex; do
-            cp "target/release/$bin" "dist/$bin"
+            cp "target/release/$bin" "dist-arm64/$bin"
           done
 
-      - name: Build qorvex-streamer
+      - name: Build x86_64 Rust binaries
         run: |
-          make -C qorvex-streamer build
-          cp qorvex-streamer/.build/release/qorvex-streamer dist/qorvex-streamer
+          mkdir -p dist-x86_64
+          cargo build --release --workspace --target x86_64-apple-darwin
+          for bin in qorvex-server qorvex-repl qorvex-live qorvex; do
+            cp "target/x86_64-apple-darwin/release/$bin" "dist-x86_64/$bin"
+          done
+
+      - name: Build arm64 qorvex-streamer
+        run: |
+          swift build -c release --package-path qorvex-streamer
+          cp qorvex-streamer/.build/release/qorvex-streamer dist-arm64/qorvex-streamer
+
+      - name: Build x86_64 qorvex-streamer
+        run: |
+          swift build -c release --package-path qorvex-streamer --arch x86_64
+          cp qorvex-streamer/.build/release/qorvex-streamer dist-x86_64/qorvex-streamer
 
       - name: Bundle agent source
         run: |
           brew install xcodegen
           cd qorvex-agent && xcodegen generate && cd ..
-          mkdir -p dist/agent
-          cp -R qorvex-agent/QorvexAgent.xcodeproj dist/agent/
-          cp -R qorvex-agent/Sources dist/agent/
-          cp -R qorvex-agent/App dist/agent/
-          cp qorvex-agent/project.yml dist/agent/
-          cp qorvex-agent/Makefile dist/agent/
+          mkdir -p agent
+          cp -R qorvex-agent/QorvexAgent.xcodeproj agent/
+          cp -R qorvex-agent/Sources agent/
+          cp -R qorvex-agent/App agent/
+          cp qorvex-agent/project.yml agent/
+          cp qorvex-agent/Makefile agent/
 
-      - name: Create tarball
+      - name: Create tarballs
         run: |
-          cd dist
-          tar czf qorvex-macos-${{ matrix.arch }}.tar.gz \
+          cp -R agent dist-arm64/agent
+          cp -R agent dist-x86_64/agent
+          cd dist-arm64
+          tar czf ../qorvex-macos-arm64.tar.gz \
             qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qorvex-macos-${{ matrix.arch }}
-          path: dist/qorvex-macos-${{ matrix.arch }}.tar.gz
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p release
-          cp artifacts/qorvex-macos-arm64/qorvex-macos-arm64.tar.gz release/
-          cp artifacts/qorvex-macos-x86_64/qorvex-macos-x86_64.tar.gz release/
-          cd release
-          shasum -a 256 *.tar.gz > checksums.txt
+          cd ../dist-x86_64
+          tar czf ../qorvex-macos-x86_64.tar.gz \
+            qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent
+          cd ..
+          shasum -a 256 qorvex-macos-*.tar.gz > checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/qorvex-macos-arm64.tar.gz
-            release/qorvex-macos-x86_64.tar.gz
-            release/checksums.txt
+            qorvex-macos-arm64.tar.gz
+            qorvex-macos-x86_64.tar.gz
+            checksums.txt
           generate_release_notes: true
           body: |
             ## Install
@@ -135,7 +125,7 @@ jobs:
             See README for full setup instructions.
 
   update-tap:
-    needs: release
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Update Homebrew formula
