@@ -18,6 +18,11 @@ jobs:
       - name: Install system dependencies
         run: brew install chafa
 
+      - name: Install x86_64 chafa for cross-compile
+        run: |
+          arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
+          arch -x86_64 /usr/local/bin/brew install chafa
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,6 +42,9 @@ jobs:
           done
 
       - name: Build x86_64 Rust binaries
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
         run: |
           mkdir -p dist-x86_64
           cargo build --release --workspace --target x86_64-apple-darwin
