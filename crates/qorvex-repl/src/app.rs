@@ -10,7 +10,7 @@ use tui_input::Input;
 
 use qorvex_core::action::ActionType;
 use qorvex_core::element::UIElement;
-use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse};
+use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
 use qorvex_core::simctl::{InstalledApp, Simctl, SimulatorDevice};
 
 use crate::completion::commands::ArgCompletion;
@@ -569,16 +569,20 @@ impl App {
         let request = match cmd.as_str() {
             "start-session" => IpcRequest::StartSession,
             "end-session" => IpcRequest::EndSession,
-            "list-devices" => IpcRequest::ListDevices,
+            "list-devices" => IpcRequest::ListDevices {
+                platform: platform_from_args(&args),
+            },
             "list-physical-devices" => IpcRequest::ListPhysicalDevices,
             "use-device" => IpcRequest::UseDevice {
                 udid: args.positional.first().cloned().unwrap_or_default(),
             },
             "boot-device" => IpcRequest::BootDevice {
                 udid: args.positional.first().cloned().unwrap_or_default(),
+                platform: platform_from_args(&args),
             },
             "start-agent" => IpcRequest::StartAgent {
                 project_dir: args.positional.first().cloned(),
+                platform: platform_from_args(&args),
             },
             "stop-agent" => IpcRequest::StopAgent,
             "set-target" => IpcRequest::SetTarget {
@@ -1026,16 +1030,20 @@ impl App {
         let request = match cmd.as_str() {
             "start-session" => IpcRequest::StartSession,
             "end-session" => IpcRequest::EndSession,
-            "list-devices" => IpcRequest::ListDevices,
+            "list-devices" => IpcRequest::ListDevices {
+                platform: platform_from_args(&args),
+            },
             "list-physical-devices" => IpcRequest::ListPhysicalDevices,
             "use-device" => IpcRequest::UseDevice {
                 udid: args.positional.first().cloned().unwrap_or_default(),
             },
             "boot-device" => IpcRequest::BootDevice {
                 udid: args.positional.first().cloned().unwrap_or_default(),
+                platform: platform_from_args(&args),
             },
             "start-agent" => IpcRequest::StartAgent {
                 project_dir: args.positional.first().cloned(),
+                platform: platform_from_args(&args),
             },
             "stop-agent" => IpcRequest::StopAgent,
             "set-target" => IpcRequest::SetTarget {
@@ -1406,6 +1414,23 @@ impl App {
                 self.cached_elements = elements;
                 self.cached_devices = devices;
             }
+            IpcResponse::AndroidDeviceList { devices } => {
+                if devices.is_empty() {
+                    self.add_output(Line::from("No Android devices connected.".to_string()));
+                } else {
+                    for d in &devices {
+                        let model = d.model.as_deref().unwrap_or("unknown");
+                        self.add_output(Line::from(format!(
+                            "  {} ({}) — {} [{:?}]",
+                            d.serial, d.state, model, d.kind
+                        )));
+                    }
+                }
+                self.add_output(format_result(
+                    true,
+                    &format!("{} Android devices", devices.len()),
+                ));
+            }
             IpcResponse::Error { message } => {
                 self.add_output(format_result(false, &message));
             }
@@ -1422,11 +1447,11 @@ impl App {
             "  get-session-info         Get current session information",
             "",
             "Device:",
-            "  list-devices             List available simulators",
+            "  list-devices [--platform ios|android]    List available devices",
             "  list-physical-devices    List connected physical devices",
             "  use-device <udid>        Select a device by UDID (simulator or physical)",
-            "  boot-device <udid>       Boot a simulator",
-            "  start-agent [path]       Connect to / build+launch agent",
+            "  boot-device <udid> [--platform ios|android]  Boot a device",
+            "  start-agent [path] [--platform ios|android]  Connect to / build+launch agent",
             "  stop-agent               Stop managed agent process",
             "  set-target <bundle_id>   Set target app for automation",
             "  get-target-info          Get target app metadata",
@@ -1470,6 +1495,9 @@ pub(crate) struct ParsedArgs {
     pub no_wait: bool,
     pub timeout: Option<u64>,
     pub element_type: Option<String>,
+    /// `--platform ios|android` selector for device/agent commands.
+    /// `None` (omitted) means the iOS default (additive).
+    pub platform: Option<String>,
 }
 
 /// Tokenize input using shell-style rules: split on whitespace, respect double quotes.
@@ -1511,6 +1539,15 @@ pub(crate) fn shell_tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+/// Resolve the `--platform` selector from parsed args, defaulting to iOS when
+/// omitted or unrecognized (additive — the iOS path is the default).
+pub(crate) fn platform_from_args(args: &ParsedArgs) -> Platform {
+    args.platform
+        .as_deref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default()
+}
+
 /// Parse a command string into command name and parsed arguments.
 pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
     let tokens = shell_tokenize(input);
@@ -1522,6 +1559,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         no_wait: false,
         timeout: None,
         element_type: None,
+        platform: None,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -1536,6 +1574,9 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             }
             "--type" => {
                 args.element_type = iter.next();
+            }
+            "--platform" => {
+                args.platform = iter.next();
             }
             _ => args.positional.push(tok),
         }

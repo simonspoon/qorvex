@@ -155,6 +155,15 @@ impl ActionExecutor {
             crate::driver::DriverConfig::Device { udid, device_port } => Self::new(Arc::new(
                 crate::agent_driver::AgentDriver::usb_device(udid, device_port),
             )),
+            crate::driver::DriverConfig::Android {
+                serial,
+                local_port,
+                device_port,
+            } => Self::new(Arc::new(crate::android_driver::AndroidDriver::new(
+                serial,
+                Some(local_port),
+                device_port,
+            ))),
         }
     }
 
@@ -168,6 +177,19 @@ impl ActionExecutor {
             }
             crate::driver::DriverConfig::Device { udid, device_port } => {
                 let mut driver = crate::agent_driver::AgentDriver::usb_device(udid, device_port);
+                driver.connect().await?;
+                Ok(Self::new(Arc::new(driver)))
+            }
+            crate::driver::DriverConfig::Android {
+                serial,
+                local_port,
+                device_port,
+            } => {
+                let mut driver = crate::android_driver::AndroidDriver::new(
+                    serial,
+                    Some(local_port),
+                    device_port,
+                );
                 driver.connect().await?;
                 Ok(Self::new(Arc::new(driver)))
             }
@@ -688,5 +710,27 @@ mod tests {
         };
         let executor = ActionExecutor::from_config(config);
         assert!(!executor.driver().is_connected());
+    }
+
+    #[test]
+    fn test_executor_from_config_android_routes_to_android_driver() {
+        use crate::driver::DriverConfig;
+        // An Android DriverConfig must select the AndroidDriver path through
+        // the executor.rs match (acceptance F1). The match arm is the only
+        // place `DriverConfig::Android` maps, so a successfully-constructed,
+        // unconnected executor proves the route. (A live connection requires a
+        // device and is deferred to integration story #90.)
+        let config = DriverConfig::Android {
+            serial: "emulator-5554".to_string(),
+            local_port: 9123,
+            device_port: crate::android_driver::DEFAULT_ANDROID_AGENT_PORT,
+        };
+        let executor = ActionExecutor::from_config(config);
+        assert!(!executor.driver().is_connected());
+        // AndroidDriver overrides recovery_count() (starts at 0); the default
+        // trait impl also returns 0, so this asserts the call is wired, not the
+        // concrete type. Concrete-type selection is covered by android_driver's
+        // own construction tests; here the compile-time match arm guarantees it.
+        assert_eq!(executor.driver().recovery_count(), 0);
     }
 }

@@ -76,6 +76,56 @@ pub struct PhysicalDeviceInfo {
     pub connection: String,
 }
 
+/// The target platform for a device/agent command.
+///
+/// Used by the platform-aware frontend commands (`list-devices`, `boot-device`,
+/// `start-agent`) to dispatch between the iOS (`simctl`/`agent_lifecycle`) and
+/// Android (`adb`/`android_lifecycle`) backends (spec F2). This is a frontend /
+/// command-layer selector only — the core backend is still selected through
+/// [`DriverConfig`](crate::driver::DriverConfig), per ADR-4 (no platform enum is
+/// threaded into the core driver path).
+///
+/// Defaults to [`Platform::Ios`] so existing clients and serialized requests that
+/// omit the field still deserialize to the unchanged iOS path (additive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    /// iOS Simulator / physical Apple device (the original, unchanged path).
+    #[default]
+    Ios,
+    /// Android emulator / physical device via adb.
+    Android,
+}
+
+impl Platform {
+    /// Returns true if this is the Android platform.
+    pub fn is_android(self) -> bool {
+        matches!(self, Platform::Android)
+    }
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Platform::Ios => write!(f, "ios"),
+            Platform::Android => write!(f, "android"),
+        }
+    }
+}
+
+impl std::str::FromStr for Platform {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ios" | "" => Ok(Platform::Ios),
+            "android" => Ok(Platform::Android),
+            other => Err(format!(
+                "unknown platform '{other}' (expected 'ios' or 'android')"
+            )),
+        }
+    }
+}
+
 /// A request sent from client to server over the IPC connection.
 ///
 /// Requests are serialized as JSON with a `type` tag discriminator.
@@ -110,18 +160,39 @@ pub enum IpcRequest {
     EndSession,
 
     // --- Device Management ---
-    /// List available simulator devices.
-    ListDevices,
+    /// List available devices for the given platform.
+    ///
+    /// `platform` defaults to [`Platform::Ios`] when omitted (additive — old
+    /// clients keep the iOS behavior). For iOS this lists simulators; for
+    /// Android it lists adb devices/emulators.
+    ListDevices {
+        #[serde(default)]
+        platform: Platform,
+    },
     /// List physical devices connected via USB or network.
     ListPhysicalDevices,
     /// Select a simulator device by UDID.
     UseDevice { udid: String },
-    /// Boot a simulator device.
-    BootDevice { udid: String },
+    /// Boot a device by identifier (simulator UDID for iOS, AVD name / serial
+    /// for Android).
+    ///
+    /// `platform` defaults to [`Platform::Ios`] when omitted (additive).
+    BootDevice {
+        udid: String,
+        #[serde(default)]
+        platform: Platform,
+    },
 
     // --- Agent Management ---
     /// Start or connect to the automation agent.
-    StartAgent { project_dir: Option<String> },
+    ///
+    /// `platform` defaults to [`Platform::Ios`] when omitted (additive). The
+    /// Android path builds/installs/launches the Kotlin agent via Gradle + adb.
+    StartAgent {
+        project_dir: Option<String>,
+        #[serde(default)]
+        platform: Platform,
+    },
     /// Stop the managed agent process.
     StopAgent,
     /// Connect to agent at a specific host/port.
@@ -223,6 +294,12 @@ pub enum IpcResponse {
     PhysicalDeviceList {
         /// Connected physical devices.
         devices: Vec<PhysicalDeviceInfo>,
+    },
+
+    /// List of Android devices/emulators reported by adb.
+    AndroidDeviceList {
+        /// Visible adb devices (emulators, USB, and network devices).
+        devices: Vec<crate::adb_device::AndroidDevice>,
     },
 
     /// Current session information.
@@ -666,5 +743,96 @@ impl IpcClient {
 impl Drop for IpcServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn platform_defaults_to_ios() {
+        assert_eq!(Platform::default(), Platform::Ios);
+        assert!(!Platform::default().is_android());
+    }
+
+    #[test]
+    fn platform_from_str() {
+        assert_eq!("ios".parse::<Platform>().unwrap(), Platform::Ios);
+        assert_eq!("Android".parse::<Platform>().unwrap(), Platform::Android);
+        assert_eq!("".parse::<Platform>().unwrap(), Platform::Ios);
+        assert!("windows".parse::<Platform>().is_err());
+    }
+
+    #[test]
+    fn platform_serde_roundtrip_lowercase() {
+        let json = serde_json::to_string(&Platform::Android).unwrap();
+        assert_eq!(json, "\"android\"");
+        let back: Platform = serde_json::from_str("\"ios\"").unwrap();
+        assert_eq!(back, Platform::Ios);
+    }
+
+    #[test]
+    fn legacy_list_devices_request_without_platform_defaults_to_ios() {
+        // An old client serialized `ListDevices` with no `platform` field.
+        // It must still deserialize, defaulting to the unchanged iOS path.
+        let legacy = r#"{"type":"ListDevices"}"#;
+        let req: IpcRequest = serde_json::from_str(legacy).unwrap();
+        match req {
+            IpcRequest::ListDevices { platform } => assert_eq!(platform, Platform::Ios),
+            other => panic!("expected ListDevices, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_boot_device_request_without_platform_defaults_to_ios() {
+        let legacy = r#"{"type":"BootDevice","udid":"ABC-123"}"#;
+        let req: IpcRequest = serde_json::from_str(legacy).unwrap();
+        match req {
+            IpcRequest::BootDevice { udid, platform } => {
+                assert_eq!(udid, "ABC-123");
+                assert_eq!(platform, Platform::Ios);
+            }
+            other => panic!("expected BootDevice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_start_agent_request_without_platform_defaults_to_ios() {
+        let legacy = r#"{"type":"StartAgent","project_dir":null}"#;
+        let req: IpcRequest = serde_json::from_str(legacy).unwrap();
+        match req {
+            IpcRequest::StartAgent {
+                project_dir,
+                platform,
+            } => {
+                assert!(project_dir.is_none());
+                assert_eq!(platform, Platform::Ios);
+            }
+            other => panic!("expected StartAgent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn android_platform_requests_deserialize() {
+        let req: IpcRequest =
+            serde_json::from_str(r#"{"type":"ListDevices","platform":"android"}"#).unwrap();
+        assert!(matches!(
+            req,
+            IpcRequest::ListDevices {
+                platform: Platform::Android
+            }
+        ));
+        let req: IpcRequest = serde_json::from_str(
+            r#"{"type":"StartAgent","project_dir":"/p","platform":"android"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            req,
+            IpcRequest::StartAgent {
+                platform: Platform::Android,
+                ..
+            }
+        ));
     }
 }

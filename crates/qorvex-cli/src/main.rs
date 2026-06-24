@@ -55,7 +55,8 @@ mod converter;
 use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
 use qorvex_core::element::{ElementFrame, UIElement};
-use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse};
+use qorvex_core::adb_device::Adb;
+use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse, Platform};
 use qorvex_core::simctl::Simctl;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -87,6 +88,24 @@ struct Cli {
 enum OutputFormat {
     Text,
     Json,
+}
+
+/// Target platform for device/agent commands (CLI-facing; maps to
+/// [`qorvex_core::ipc::Platform`]).
+#[derive(Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+enum PlatformArg {
+    #[default]
+    Ios,
+    Android,
+}
+
+impl From<PlatformArg> for Platform {
+    fn from(p: PlatformArg) -> Self {
+        match p {
+            PlatformArg::Ios => Platform::Ios,
+            PlatformArg::Android => Platform::Android,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -259,14 +278,21 @@ enum Command {
     /// Get metadata about the target application
     TargetInfo,
 
-    /// Boot a simulator device
+    /// Boot a device (simulator UDID for iOS, AVD name / adb serial for Android)
     BootDevice {
-        /// Device UDID
+        /// Device UDID (iOS) or AVD name / adb serial (Android)
         udid: String,
+        /// Target platform
+        #[arg(long, value_enum, default_value_t = PlatformArg::Ios)]
+        platform: PlatformArg,
     },
 
-    /// List available simulator devices
-    ListDevices,
+    /// List available devices (simulators for iOS, adb devices for Android)
+    ListDevices {
+        /// Target platform
+        #[arg(long, value_enum, default_value_t = PlatformArg::Ios)]
+        platform: PlatformArg,
+    },
 
     /// List connected physical iOS devices
     #[command(name = "list-physical-devices")]
@@ -309,6 +335,9 @@ enum Command {
         /// Path to the agent project directory
         #[arg(short, long)]
         project_dir: Option<String>,
+        /// Target platform
+        #[arg(long, value_enum, default_value_t = PlatformArg::Ios)]
+        platform: PlatformArg,
     },
 
     /// Stop the server for this session
@@ -402,17 +431,17 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
             return Ok(());
         }
-        Command::ListDevices => {
-            match Simctl::list_devices() {
-                Ok(devices) => {
-                    if cli.format == OutputFormat::Json {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&devices)
-                                .map_err(|e| CliError::Protocol(e.to_string()))?
-                        );
-                    } else {
-                        if devices.is_empty() {
+        Command::ListDevices { platform } => {
+            match Platform::from(platform) {
+                Platform::Ios => match Simctl::list_devices() {
+                    Ok(devices) => {
+                        if cli.format == OutputFormat::Json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&devices)
+                                    .map_err(|e| CliError::Protocol(e.to_string()))?
+                            );
+                        } else if devices.is_empty() {
                             eprintln!("No simulator devices found");
                         } else {
                             for device in &devices {
@@ -425,30 +454,75 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                             }
                         }
                     }
-                }
-                Err(e) => {
-                    return Err(CliError::ActionFailed(format!(
-                        "Failed to list devices: {}",
-                        e
-                    )))
-                }
+                    Err(e) => {
+                        return Err(CliError::ActionFailed(format!(
+                            "Failed to list devices: {}",
+                            e
+                        )))
+                    }
+                },
+                Platform::Android => match Adb::list_devices() {
+                    Ok(devices) => {
+                        if cli.format == OutputFormat::Json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&devices)
+                                    .map_err(|e| CliError::Protocol(e.to_string()))?
+                            );
+                        } else if devices.is_empty() {
+                            eprintln!("No Android devices found");
+                        } else {
+                            for device in &devices {
+                                let model = device.model.as_deref().unwrap_or("");
+                                println!("{} -- {} [{}]", device.serial, model, device.state);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(CliError::ActionFailed(format!(
+                            "Failed to list Android devices: {}",
+                            e
+                        )))
+                    }
+                },
             }
             return Ok(());
         }
-        Command::BootDevice { ref udid } => {
-            match Simctl::boot(udid) {
-                Ok(()) => {
-                    if cli.format == OutputFormat::Json {
-                        println!("{}", serde_json::json!({ "success": true, "udid": udid }));
-                    } else {
-                        eprintln!("Booted device {}", udid);
+        Command::BootDevice { ref udid, platform } => {
+            match Platform::from(platform) {
+                Platform::Ios => match Simctl::boot(udid) {
+                    Ok(()) => {
+                        if cli.format == OutputFormat::Json {
+                            println!("{}", serde_json::json!({ "success": true, "udid": udid }));
+                        } else {
+                            eprintln!("Booted device {}", udid);
+                        }
                     }
-                }
-                Err(e) => {
-                    return Err(CliError::ActionFailed(format!(
-                        "Failed to boot device: {}",
-                        e
-                    )))
+                    Err(e) => {
+                        return Err(CliError::ActionFailed(format!(
+                            "Failed to boot device: {}",
+                            e
+                        )))
+                    }
+                },
+                Platform::Android => {
+                    // Android boot routes through the server so the selected
+                    // serial / lifecycle is tracked in session state.
+                    let mut client = IpcClient::connect(&cli.session).await.map_err(|e| {
+                        CliError::Connection(format!(
+                            "Failed to connect to session '{}': {}",
+                            cli.session, e
+                        ))
+                    })?;
+                    return send_command(
+                        &mut client,
+                        IpcRequest::BootDevice {
+                            udid: udid.clone(),
+                            platform: Platform::Android,
+                        },
+                        &cli,
+                    )
+                    .await;
                 }
             }
             return Ok(());
@@ -662,11 +736,15 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::StopTarget => send_command(&mut client, IpcRequest::StopTarget, &cli).await,
         Command::TargetInfo => execute_target_info(&mut client, &cli).await,
         Command::StartSession => send_command(&mut client, IpcRequest::StartSession, &cli).await,
-        Command::StartAgent { ref project_dir } => {
+        Command::StartAgent {
+            ref project_dir,
+            platform,
+        } => {
             send_command(
                 &mut client,
                 IpcRequest::StartAgent {
                     project_dir: project_dir.clone(),
+                    platform: Platform::from(platform),
                 },
                 &cli,
             )
@@ -686,7 +764,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::ListPhysicalDevices => list_physical_devices(&mut client, &cli).await,
         // These commands are handled before IPC connection above
         Command::ListSessions
-        | Command::ListDevices
+        | Command::ListDevices { .. }
         | Command::BootDevice { .. }
         | Command::Convert { .. }
         | Command::Start { .. }
