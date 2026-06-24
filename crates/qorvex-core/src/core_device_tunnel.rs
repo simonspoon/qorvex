@@ -158,6 +158,7 @@ pub async fn connect_coredevice(
     // -----------------------------------------------------------------------
     let provider = TcpProvider {
         addr: ip,
+        scope_id: None,
         pairing_file,
         label: "qorvex".to_string(),
     };
