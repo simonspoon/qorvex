@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Minimal host application. The Qorvex agent lives in the instrumentation
+      (androidTest) APK, mirroring the Swift agent's UITest target. This host
+      APK is the target package the instrumentation is wired to.
+    -->
+    <application
+        android:label="Qorvex Agent"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".AgentHostActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

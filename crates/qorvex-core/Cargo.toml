@@ -23,6 +23,18 @@ idevice = { version = "0.1", default-features = false, features = ["usbmuxd", "t
 tracing = { workspace = true }
 socket2 = "0.5"
 
+[features]
+# Exposes `#[doc(hidden)]` constructors that inject a pre-connected
+# `AgentClient`/forward into drivers, so out-of-crate parity tests can drive the
+# real trait surface over a loopback mock without a device (adb / usbmuxd). Not
+# enabled in normal builds, and NOT auto-enabled for this crate's own tests:
+# plain `cargo test` leaves it off, which compiles out the
+# `tests/android_parity.rs` harness (it is `#![cfg(feature = "test-support")]`).
+# CI/release therefore pass `--features test-support` explicitly so the parity
+# suite actually runs. Run locally with:
+#   cargo test -p qorvex-core --features test-support
+test-support = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "io-util", "macros", "net", "test-util", "time"] }
 uuid = { version = "1", features = ["v4"] }

@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Declared view ids so that AccessibilityNodeInfo.viewIdResourceName reports a
+  stable bare entry name (e.g. "controls_tap_button"), which the Kotlin agent's
+  NodeMapper.bareResourceId returns as UIElement.identifier (ADR-1). These are
+  the 1:1 underscore transliteration of the iOS hyphenated accessibility ids.
+
+  Kept in sync with com.qorvex.testapp.Ids — IdsCompletenessTest asserts every
+  Ids.* constant has a matching @id here.
+-->
+<resources>
+    <item name="main_tab_view" type="id" />
+
+    <item name="tab_controls" type="id" />
+    <item name="tab_text_input" type="id" />
+    <item name="tab_navigation" type="id" />
+    <item name="tab_gestures" type="id" />
+    <item name="tab_dynamic" type="id" />
+
+    <!-- Controls -->
+    <item name="controls_tap_button" type="id" />
+    <item name="controls_tap_count" type="id" />
+    <item name="controls_toggle_wifi" type="id" />
+    <item name="controls_wifi_status" type="id" />
+    <item name="controls_slider_volume" type="id" />
+    <item name="controls_slider_value" type="id" />
+    <item name="controls_stepper_minus" type="id" />
+    <item name="controls_stepper_plus" type="id" />
+    <item name="controls_stepper_value" type="id" />
+    <item name="controls_picker_size" type="id" />
+    <item name="controls_picker_value" type="id" />
+    <item name="controls_delete_button" type="id" />
+    <item name="controls_delete_status" type="id" />
+
+    <!-- Text Input -->
+    <item name="text_username_field" type="id" />
+    <item name="text_email_field" type="id" />
+    <item name="text_password_field" type="id" />
+    <item name="text_search_field" type="id" />
+    <item name="text_notes_editor" type="id" />
+    <item name="text_submit_button" type="id" />
+    <item name="text_clear_button" type="id" />
+    <item name="text_submit_result" type="id" />
+    <item name="text_username_value" type="id" />
+    <item name="text_email_value" type="id" />
+
+    <!-- Navigation -->
+    <item name="nav_push_button" type="id" />
+    <item name="nav_sheet_button" type="id" />
+    <item name="nav_alert_button" type="id" />
+    <item name="nav_confirm_button" type="id" />
+    <item name="nav_status_label" type="id" />
+    <item name="nav_detail_label" type="id" />
+    <item name="nav_sheet_content" type="id" />
+    <item name="nav_sheet_dismiss" type="id" />
+    <item name="nav_alert_ok" type="id" />
+    <item name="nav_confirm_delete" type="id" />
+
+    <!-- Gestures -->
+    <item name="scroll_list" type="id" />
+    <item name="scroll_item_1" type="id" />
+    <item name="scroll_item_2" type="id" />
+    <item name="scroll_item_3" type="id" />
+    <item name="scroll_item_4" type="id" />
+    <item name="scroll_item_5" type="id" />
+    <item name="scroll_item_6" type="id" />
+    <item name="scroll_item_7" type="id" />
+    <item name="scroll_item_8" type="id" />
+    <item name="scroll_item_9" type="id" />
+    <item name="scroll_item_10" type="id" />
+    <item name="scroll_item_11" type="id" />
+    <item name="scroll_item_12" type="id" />
+    <item name="scroll_item_13" type="id" />
+    <item name="scroll_item_14" type="id" />
+    <item name="scroll_item_15" type="id" />
+    <item name="scroll_item_16" type="id" />
+    <item name="scroll_item_17" type="id" />
+    <item name="scroll_item_18" type="id" />
+    <item name="scroll_item_19" type="id" />
+    <item name="scroll_item_20" type="id" />
+    <item name="scroll_item_21" type="id" />
+    <item name="scroll_item_22" type="id" />
+    <item name="scroll_item_23" type="id" />
+    <item name="scroll_item_24" type="id" />
+    <item name="scroll_item_25" type="id" />
+    <item name="scroll_item_26" type="id" />
+    <item name="scroll_item_27" type="id" />
+    <item name="scroll_item_28" type="id" />
+    <item name="scroll_item_29" type="id" />
+    <item name="scroll_item_30" type="id" />
+    <item name="scroll_item_31" type="id" />
+    <item name="scroll_item_32" type="id" />
+    <item name="scroll_item_33" type="id" />
+    <item name="scroll_item_34" type="id" />
+    <item name="scroll_item_35" type="id" />
+    <item name="scroll_item_36" type="id" />
+    <item name="scroll_item_37" type="id" />
+    <item name="scroll_item_38" type="id" />
+    <item name="scroll_item_39" type="id" />
+    <item name="scroll_item_40" type="id" />
+    <item name="scroll_item_41" type="id" />
+    <item name="scroll_item_42" type="id" />
+    <item name="scroll_item_43" type="id" />
+    <item name="scroll_item_44" type="id" />
+    <item name="scroll_item_45" type="id" />
+    <item name="scroll_item_46" type="id" />
+    <item name="scroll_item_47" type="id" />
+    <item name="scroll_item_48" type="id" />
+    <item name="scroll_item_49" type="id" />
+    <item name="scroll_item_50" type="id" />
+    <item name="gesture_longpress_target" type="id" />
+    <item name="gesture_longpress_status" type="id" />
+    <item name="gesture_swipe_area" type="id" />
+    <item name="gesture_swipe_status" type="id" />
+    <item name="gesture_tap_area" type="id" />
+    <item name="gesture_tap_location" type="id" />
+
+    <!-- Dynamic -->
+    <item name="dynamic_show_delayed" type="id" />
+    <item name="dynamic_delayed_label" type="id" />
+    <item name="dynamic_show_brief" type="id" />
+    <item name="dynamic_brief_label" type="id" />
+    <item name="dynamic_start_loading" type="id" />
+    <item name="dynamic_loading_spinner" type="id" />
+    <item name="dynamic_loading_done" type="id" />
+    <item name="dynamic_toggle_visibility" type="id" />
+    <item name="dynamic_togglable" type="id" />
+    <item name="dynamic_start_counter" type="id" />
+    <item name="dynamic_counter_value" type="id" />
+    <item name="dynamic_stop_counter" type="id" />
+    <item name="dynamic_reset" type="id" />
+</resources>

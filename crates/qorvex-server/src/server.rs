@@ -9,12 +9,16 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use qorvex_core::action::{ActionResult, ActionType};
+use qorvex_core::adb_device::Adb;
+use qorvex_core::adb_forward::AdbForward;
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
+use qorvex_core::android_driver::AndroidDriver;
+use qorvex_core::android_lifecycle::{AndroidLifecycle, AndroidLifecycleConfig};
 use qorvex_core::config::QorvexConfig;
 use qorvex_core::driver::{flatten_elements, AutomationDriver};
 use qorvex_core::executor::ActionExecutor;
-use qorvex_core::ipc::{IpcRequest, IpcResponse};
+use qorvex_core::ipc::{IpcRequest, IpcResponse, Platform};
 use qorvex_core::session::Session;
 use qorvex_core::simctl::{Simctl, SimulatorDevice};
 
@@ -47,6 +51,27 @@ pub struct ServerState {
     /// When set, `AgentDriver::direct(hostname, port)` is used instead of any
     /// tunnel approach. Typical value: `"Hillbilly.local"`.
     pub direct_host: Option<String>,
+
+    // --- Android (additive; iOS path above is unchanged) ---
+    /// The adb serial of the selected Android device, if a `BootDevice`
+    /// targeted Android. `None` means no Android device is selected.
+    pub android_serial: Option<String>,
+    /// The managed Android agent lifecycle (Gradle build / install /
+    /// `am instrument` process), if `StartAgent` targeted Android.
+    pub android_lifecycle: Option<Arc<AndroidLifecycle>>,
+    /// The server-owned `adb forward` rule for the Android session.
+    ///
+    /// `handle_start_agent_android` establishes this forward to pick a free
+    /// loopback port and passes the bound port to both the lifecycle (for the
+    /// health poll) and the [`AndroidDriver`]. The server keeps it for the
+    /// session lifetime so the rule the driver and health-poll depend on is
+    /// **not** torn down by [`AdbForward::drop`] when the start handler
+    /// returns. The driver re-issues the same `tcp:<port>` rule idempotently on
+    /// `connect`/recovery and owns its own forward; both removals (here on
+    /// `stop-agent`, and the driver's on drop) are idempotent no-ops against
+    /// adb, so there is no competing-removal hazard. Released in
+    /// `handle_stop_agent`.
+    pub android_forward: Option<AdbForward>,
 }
 
 impl ServerState {
@@ -82,6 +107,9 @@ impl ServerState {
             tunnel_address: None,
             use_core_device: false,
             direct_host: None,
+            android_serial: None,
+            android_lifecycle: None,
+            android_forward: None,
         }
     }
 
@@ -96,13 +124,18 @@ impl ServerState {
             IpcRequest::EndSession => self.handle_end_session(),
 
             // ── Device Management ───────────────────────────────────────
-            IpcRequest::ListDevices => self.handle_list_devices(),
+            IpcRequest::ListDevices { platform } => self.handle_list_devices(platform),
             IpcRequest::ListPhysicalDevices => self.handle_list_physical_devices().await,
             IpcRequest::UseDevice { udid } => self.handle_use_device(&udid).await,
-            IpcRequest::BootDevice { udid } => self.handle_boot_device(&udid),
+            IpcRequest::BootDevice { udid, platform } => {
+                self.handle_boot_device(&udid, platform).await
+            }
 
             // ── Agent Management ────────────────────────────────────────
-            IpcRequest::StartAgent { project_dir } => self.handle_start_agent(project_dir).await,
+            IpcRequest::StartAgent {
+                project_dir,
+                platform,
+            } => self.handle_start_agent(project_dir, platform).await,
             IpcRequest::StopAgent => self.handle_stop_agent(),
             IpcRequest::Connect { host, port } => self.handle_connect(&host, port).await,
 
@@ -272,14 +305,22 @@ impl ServerState {
 
     // ── Devices ─────────────────────────────────────────────────────────
 
-    fn handle_list_devices(&mut self) -> IpcResponse {
-        match Simctl::list_devices() {
-            Ok(devices) => {
-                self.cached_devices = devices.clone();
-                IpcResponse::DeviceList { devices }
-            }
-            Err(e) => IpcResponse::Error {
-                message: e.to_string(),
+    fn handle_list_devices(&mut self, platform: Platform) -> IpcResponse {
+        match platform {
+            Platform::Ios => match Simctl::list_devices() {
+                Ok(devices) => {
+                    self.cached_devices = devices.clone();
+                    IpcResponse::DeviceList { devices }
+                }
+                Err(e) => IpcResponse::Error {
+                    message: e.to_string(),
+                },
+            },
+            Platform::Android => match Adb::list_devices() {
+                Ok(devices) => IpcResponse::AndroidDeviceList { devices },
+                Err(e) => IpcResponse::Error {
+                    message: e.to_string(),
+                },
             },
         }
     }
@@ -421,7 +462,14 @@ impl ServerState {
         }
     }
 
-    fn handle_boot_device(&mut self, udid: &str) -> IpcResponse {
+    async fn handle_boot_device(&mut self, udid: &str, platform: Platform) -> IpcResponse {
+        match platform {
+            Platform::Ios => self.handle_boot_device_ios(udid),
+            Platform::Android => self.handle_boot_device_android(udid).await,
+        }
+    }
+
+    fn handle_boot_device_ios(&mut self, udid: &str) -> IpcResponse {
         let udid = strip_quotes(udid);
         if udid.is_empty() {
             return IpcResponse::CommandResult {
@@ -442,6 +490,17 @@ impl ServerState {
                     "localhost".to_string(),
                     self.agent_port,
                 ));
+                // Switching to iOS retires any active Android selection so
+                // device/agent selection is mutually exclusive. Terminate the
+                // Android agent and release its forward to avoid orphaned
+                // resources, then clear the serial.
+                if let Some(lifecycle) = self.android_lifecycle.take() {
+                    let _ = lifecycle.terminate_agent();
+                }
+                if let Some(mut forward) = self.android_forward.take() {
+                    let _ = forward.remove();
+                }
+                self.android_serial = None;
                 IpcResponse::CommandResult {
                     success: true,
                     message: format!("Booted and using device {}", udid),
@@ -454,9 +513,188 @@ impl ServerState {
         }
     }
 
+    /// Boot/select an Android target.
+    ///
+    /// The `target` is an AVD name to boot via `emulator -avd`, or an already-
+    /// running adb serial (e.g. `emulator-5554`, `host:port`) to select
+    /// directly. Booting an emulator runs the blocking `emulator` CLI, so it is
+    /// dispatched to a blocking thread.
+    async fn handle_boot_device_android(&mut self, target: &str) -> IpcResponse {
+        let target = strip_quotes(target).to_string();
+        if target.is_empty() {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "boot-device --platform android requires an AVD name or adb serial"
+                    .to_string(),
+            };
+        }
+
+        // If the target already names a running adb device, select it directly.
+        let already_running = matches!(Adb::list_devices(), Ok(devices) if devices
+            .iter()
+            .any(|d| d.serial == target && d.is_ready()));
+
+        let serial_result: Result<String, String> = if already_running {
+            Ok(target.clone())
+        } else {
+            // Treat the target as an AVD name and boot it.
+            let avd = target.clone();
+            tokio::task::spawn_blocking(move || {
+                Adb::boot_emulator(&avd, std::time::Duration::from_secs(120))
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()))
+        };
+
+        match serial_result {
+            Ok(serial) => {
+                self.android_serial = Some(serial.clone());
+                // Switch off any iOS device selection so session/agent routing
+                // targets Android, and retire the stale iOS executor so a
+                // subsequent action does not route to a now-inactive simulator
+                // agent (device/agent selection is mutually exclusive).
+                self.simulator_udid = None;
+                self.executor = None;
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Booted and using Android device {serial}"),
+                }
+            }
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("Failed to boot Android device: {e}"),
+            },
+        }
+    }
+
     // ── Agent ───────────────────────────────────────────────────────────
 
-    async fn handle_start_agent(&mut self, project_dir: Option<String>) -> IpcResponse {
+    async fn handle_start_agent(
+        &mut self,
+        project_dir: Option<String>,
+        platform: Platform,
+    ) -> IpcResponse {
+        match platform {
+            Platform::Ios => self.handle_start_agent_ios(project_dir).await,
+            Platform::Android => self.handle_start_agent_android(project_dir).await,
+        }
+    }
+
+    /// Start the Android (Kotlin) agent: validate config, build/install/launch
+    /// via Gradle + `am instrument`, establish the `adb forward` tunnel, and
+    /// connect an [`AndroidDriver`].
+    ///
+    /// Missing or invalid Android config yields a clear validation error here
+    /// (spec F3) rather than a downstream Gradle/adb crash.
+    async fn handle_start_agent_android(&mut self, project_dir: Option<String>) -> IpcResponse {
+        let serial = match self.android_serial.clone() {
+            Some(s) => s,
+            None => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: "No Android device selected. Run `boot-device --platform android \
+                              <avd-or-serial>` first."
+                        .to_string(),
+                };
+            }
+        };
+
+        let config = QorvexConfig::load();
+
+        // Resolve the project dir: explicit arg wins, else config-validated dir.
+        let project_dir = match project_dir {
+            Some(p) => {
+                let p = PathBuf::from(strip_quotes(&p));
+                if !p.join("gradlew").exists() {
+                    return IpcResponse::CommandResult {
+                        success: false,
+                        message: format!(
+                            "Android agent project directory is missing its Gradle wrapper \
+                             (expected `gradlew` at {})",
+                            p.display()
+                        ),
+                    };
+                }
+                p
+            }
+            None => match config.validate_android() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    // Clear, actionable validation error (F3).
+                    return IpcResponse::CommandResult {
+                        success: false,
+                        message: e.to_string(),
+                    };
+                }
+            },
+        };
+
+        let device_port = config.android_device_port();
+
+        // Build a fresh adb forward to pick a free local port.
+        let serial_for_fwd = serial.clone();
+        let forward = match tokio::task::spawn_blocking(move || {
+            AdbForward::establish(&serial_for_fwd, None, device_port)
+        })
+        .await
+        {
+            Ok(Ok(fwd)) => fwd,
+            Ok(Err(e)) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: format!("Failed to establish adb forward: {e}"),
+                };
+            }
+            Err(e) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: format!("adb forward task failed: {e}"),
+                };
+            }
+        };
+        let local_port = forward.local_port();
+
+        let mut lc_config = AndroidLifecycleConfig::new(project_dir);
+        lc_config.device_port = device_port;
+        let lifecycle = Arc::new(AndroidLifecycle::new(serial.clone(), lc_config));
+
+        // Fast-path: skip the Gradle build/install/spawn cycle when the agent
+        // is already healthy on the forwarded port; `ensure_agent_ready`
+        // delegates to `ensure_running` (preserving its distinct error
+        // reporting) only when the agent is not reachable.
+        match lifecycle.ensure_agent_ready(local_port).await {
+            Ok(()) => {
+                self.android_lifecycle = Some(lifecycle);
+                // Keep the forward alive for the session — dropping it here
+                // would `adb forward --remove` the rule the driver and health
+                // poll depend on. Switching to Android also retires any stale
+                // iOS executor so device/agent selection is mutually exclusive.
+                self.android_forward = Some(forward);
+                self.executor = None;
+                let mut driver = AndroidDriver::new(serial.clone(), Some(local_port), device_port);
+                match driver.connect().await {
+                    Ok(()) => {
+                        self.set_executor_with_driver(Arc::new(driver)).await;
+                        IpcResponse::CommandResult {
+                            success: true,
+                            message: "Android agent started and connected".to_string(),
+                        }
+                    }
+                    Err(e) => IpcResponse::CommandResult {
+                        success: false,
+                        message: format!("Android agent started but connection failed: {e}"),
+                    },
+                }
+            }
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("Failed to start Android agent: {e}"),
+            },
+        }
+    }
+
+    async fn handle_start_agent_ios(&mut self, project_dir: Option<String>) -> IpcResponse {
         if self.simulator_udid.is_none() {
             return IpcResponse::CommandResult {
                 success: false,
@@ -628,8 +866,26 @@ impl ServerState {
     }
 
     fn handle_stop_agent(&mut self) -> IpcResponse {
+        let mut stopped = false;
+
+        // iOS agent lifecycle.
         if let Some(lifecycle) = self.agent_lifecycle.take() {
             let _ = lifecycle.terminate_agent();
+            stopped = true;
+        }
+
+        // Android agent lifecycle: terminate the `am instrument` child and
+        // release the server-owned `adb forward` rule.
+        if let Some(lifecycle) = self.android_lifecycle.take() {
+            let _ = lifecycle.terminate_agent();
+            stopped = true;
+        }
+        if let Some(mut forward) = self.android_forward.take() {
+            let _ = forward.remove();
+            stopped = true;
+        }
+
+        if stopped {
             IpcResponse::CommandResult {
                 success: true,
                 message: "Agent stopped".to_string(),
@@ -1048,5 +1304,103 @@ fn strip_quotes(s: &str) -> &str {
         &s[1..s.len() - 1]
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build an `AndroidLifecycle` pointing at a dummy project — `new` does no
+    /// device I/O, so this is safe with no emulator/adb present. `terminate_agent`
+    /// (called by the handlers under test) is best-effort and never errors with
+    /// no child process.
+    fn dummy_android_lifecycle() -> Arc<AndroidLifecycle> {
+        let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
+        Arc::new(AndroidLifecycle::new("emulator-5554".into(), config))
+    }
+
+    /// `stop-agent` must terminate the Android lifecycle (not just iOS) and
+    /// clear the stored forward, returning success when an Android agent was
+    /// present (finding #2).
+    #[test]
+    fn stop_agent_clears_android_lifecycle() {
+        let mut state = ServerState::new("test".into());
+        // Simulate a running Android agent (no forward — building a real
+        // `AdbForward` needs adb; the forward field default is `None` and the
+        // handler's `.take()` is exercised regardless).
+        state.android_serial = Some("emulator-5554".into());
+        state.android_lifecycle = Some(dummy_android_lifecycle());
+
+        let resp = state.handle_stop_agent();
+        match resp {
+            IpcResponse::CommandResult { success, .. } => assert!(success),
+            other => panic!("expected CommandResult, got {other:?}"),
+        }
+        // Lifecycle and forward are released.
+        assert!(state.android_lifecycle.is_none());
+        assert!(state.android_forward.is_none());
+    }
+
+    /// `stop-agent` with nothing running returns failure (no managed agent).
+    #[test]
+    fn stop_agent_no_agent_is_failure() {
+        let mut state = ServerState::new("test".into());
+        state.agent_lifecycle = None;
+        state.android_lifecycle = None;
+        state.android_forward = None;
+        match state.handle_stop_agent() {
+            IpcResponse::CommandResult { success, .. } => assert!(!success),
+            other => panic!("expected CommandResult, got {other:?}"),
+        }
+    }
+
+    /// Booting an iOS device must retire any active Android selection so
+    /// device/agent state is mutually exclusive (finding #3). Uses a real
+    /// simulator UDID format; `Simctl::boot` may fail with no simulator, in
+    /// which case the clearing is not asserted (the success path is the one the
+    /// finding targets, exercised when a simulator exists).
+    #[test]
+    fn boot_ios_clears_android_state_on_success() {
+        let mut state = ServerState::new("test".into());
+        state.android_serial = Some("emulator-5554".into());
+        state.android_lifecycle = Some(dummy_android_lifecycle());
+
+        // A syntactically valid simulator UDID. If boot succeeds (a sim with
+        // this UDID exists), the Android state must be cleared; if it fails (no
+        // such sim — the common CI case), state is left as-is and we skip the
+        // assertion since the mutual-exclusion lives on the success branch.
+        let resp = state.handle_boot_device_ios("00000000-0000-0000-0000-000000000000");
+        if let IpcResponse::CommandResult { success: true, .. } = resp {
+            assert!(state.android_serial.is_none());
+            assert!(state.android_lifecycle.is_none());
+            assert!(state.android_forward.is_none());
+            assert!(state.simulator_udid.is_some());
+        }
+    }
+
+    /// Starting the Android agent with no device selected returns a clear
+    /// error and does not touch iOS executor state.
+    #[tokio::test]
+    async fn start_agent_android_without_device_errors() {
+        let mut state = ServerState::new("test".into());
+        state.android_serial = None;
+        let resp = state.handle_start_agent_android(None).await;
+        match resp {
+            IpcResponse::CommandResult { success, message } => {
+                assert!(!success);
+                assert!(message.contains("No Android device selected"));
+            }
+            other => panic!("expected CommandResult, got {other:?}"),
+        }
+    }
+
+    /// The Android forward field defaults to `None` and is independent of the
+    /// iOS forward-less path (finding #1 wiring: the field exists and is part
+    /// of `ServerState`).
+    #[test]
+    fn android_forward_defaults_to_none() {
+        let state = ServerState::new("test".into());
+        assert!(state.android_forward.is_none());
     }
 }

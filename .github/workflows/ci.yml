@@ -24,7 +24,10 @@ jobs:
         run: cargo check --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace --all-targets
+        # --features test-support enables the qorvex-core parity harness
+        # (crates/qorvex-core/tests/android_parity.rs is #![cfg(feature =
+        # "test-support")]); without it those 20 tests compile out.
+        run: cargo test --workspace --all-targets --features test-support
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -46,3 +49,28 @@ jobs:
 
       - name: Build qorvex-streamer
         run: make -C qorvex-streamer build
+
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Unit tests (Kotlin agent + sample app, no emulator)
+        run: make android-test
+
+      - name: Build Android APKs (agent + sample app)
+        run: make android

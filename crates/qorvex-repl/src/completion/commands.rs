@@ -55,6 +55,13 @@ pub struct OptionSpec {
     pub description: &'static str,
 }
 
+/// Shared `--platform` option for device/agent commands.
+const PLATFORM_OPTION: OptionSpec = OptionSpec {
+    flag: "--platform",
+    takes_value: true,
+    description: "Target platform: ios (default) or android",
+};
+
 /// All available REPL commands.
 pub static COMMANDS: &[CommandDef] = &[
     // Session commands
@@ -79,9 +86,9 @@ pub static COMMANDS: &[CommandDef] = &[
     // Device commands
     CommandDef {
         name: "list-devices",
-        description: "List available simulators",
+        description: "List available devices (--platform ios|android)",
         args: &[],
-        options: &[],
+        options: &[PLATFORM_OPTION],
     },
     CommandDef {
         name: "list-physical-devices",
@@ -100,21 +107,21 @@ pub static COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "boot-device",
-        description: "Boot a simulator",
+        description: "Boot a device (--platform ios|android)",
         args: &[ArgSpec {
             name: "udid",
             completion: ArgCompletion::DeviceUdid,
         }],
-        options: &[],
+        options: &[PLATFORM_OPTION],
     },
     CommandDef {
         name: "start-agent",
-        description: "Build/launch Swift agent",
+        description: "Build/launch agent (--platform ios|android)",
         args: &[ArgSpec {
             name: "project_dir",
             completion: ArgCompletion::None,
         }],
-        options: &[],
+        options: &[PLATFORM_OPTION],
     },
     CommandDef {
         name: "stop-agent",

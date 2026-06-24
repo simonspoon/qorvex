@@ -31,7 +31,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo test --workspace --all-targets
+        # --features test-support enables the qorvex-core parity harness
+        # (crates/qorvex-core/tests/android_parity.rs is #![cfg(feature =
+        # "test-support")]); without it those 20 tests compile out, so the
+        # release would not gate on parity.
+        run: cargo test --workspace --all-targets --features test-support
 
       - name: Build arm64 Rust binaries
         run: |
@@ -131,6 +135,62 @@ jobs:
             ```
 
             See README for full setup instructions.
+
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ubuntu-latest ships an Android SDK; ANDROID_HOME/ANDROID_SDK_ROOT are
+      # preset. This action makes the requested platform + build-tools present
+      # (matching qorvex-agent-android/build.gradle.kts: compileSdk 35).
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build Kotlin agent APKs
+        run: |
+          cd qorvex-agent-android
+          ./gradlew assembleDebug assembleDebugAndroidTest
+
+      - name: Build sample-app APK
+        run: |
+          cd qorvex-testapp-android
+          ./gradlew assembleDebug
+
+      - name: Collect Android artifacts
+        run: |
+          mkdir -p android-dist
+          cp qorvex-agent-android/build/outputs/apk/debug/*.apk \
+            android-dist/qorvex-agent-android-debug.apk
+          cp qorvex-agent-android/build/outputs/apk/androidTest/debug/*.apk \
+            android-dist/qorvex-agent-android-androidTest-debug.apk
+          cp qorvex-testapp-android/build/outputs/apk/debug/*.apk \
+            android-dist/qorvex-testapp-android-debug.apk
+          cd android-dist
+          tar czf ../qorvex-android.tar.gz \
+            qorvex-agent-android-debug.apk \
+            qorvex-agent-android-androidTest-debug.apk \
+            qorvex-testapp-android-debug.apk
+          cd ..
+          shasum -a 256 qorvex-android.tar.gz > android-checksums.txt
+
+      - name: Add Android artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            qorvex-android.tar.gz
+            android-checksums.txt
 
   update-tap:
     needs: build

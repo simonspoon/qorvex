@@ -113,12 +113,12 @@ Controls:
 - Scroll wheel — Scroll output area
 
 Available commands:
-- `list-devices` — List all available simulators
+- `list-devices` — List all available simulators. Add `--platform android` to list adb devices/emulators instead.
 - `list-physical-devices` — List physical iOS devices connected via USB or network
 - `use-device <udid>` — Select a simulator or physical device by UDID
-- `boot-device <udid>` — Boot and select a simulator
-- `start-agent` — Start agent using configured source dir, or connect to external agent
-- `start-agent <path>` — Build and launch Swift agent from project directory
+- `boot-device <udid>` — Boot and select a simulator. With `--platform android <avd-or-serial>`, boots an Android emulator by AVD name (or selects a running adb serial).
+- `start-agent` — Start agent using configured source dir, or connect to external agent. Add `--platform android` to build/launch the Kotlin agent (requires `android_agent_source_dir` in config).
+- `start-agent <path>` — Build and launch the agent from a project directory (Swift for iOS; pass `--platform android` for the Gradle/Kotlin agent project)
 - `stop-agent` — Stop a managed agent process
 - `set-target <bundle_id>` — Set target app bundle ID
 - `start-target` — Launch the target app
@@ -352,6 +352,7 @@ Qorvex stores runtime files in `~/.qorvex/`:
 ```
 
 - **Config** (`~/.qorvex/config.json`) — Persistent settings. Stores `agent_source_dir` so that `start-session` and `start-agent` can auto-build the Swift agent. Written by `install.sh`. When `agent_source_dir` is not set, the server automatically checks for a Homebrew-installed agent at `HOMEBREW_PREFIX/share/qorvex/agent`.
+  - **Android keys** (used by `--platform android` commands): `android_agent_source_dir` (path to the Kotlin agent project containing `gradlew` — **required** to build/launch the Android agent), `android_sdk_root` (optional Android SDK path; only needed when `adb`/`emulator` are not on `PATH`), and `android_device_port` (the agent's device-side TCP port, defaults to `8080`). Missing or invalid Android config produces a clear validation error when `start-agent --platform android` runs, not a downstream Gradle/adb crash.
 - **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Live TUI use these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.
 

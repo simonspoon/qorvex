@@ -26,15 +26,48 @@ use tracing_subscriber::EnvFilter;
 use qorvex_core::action::ActionLog;
 use qorvex_core::ipc::{IpcClient, IpcResponse};
 use qorvex_core::session::SessionEvent;
+use qorvex_core::adb_device::Adb;
+use qorvex_core::ipc::Platform;
 use qorvex_core::simctl::Simctl;
+
+/// Target platform for the monitored session (CLI-facing; maps to
+/// [`qorvex_core::ipc::Platform`]).
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, clap::ValueEnum)]
+enum PlatformArg {
+    #[default]
+    Ios,
+    Android,
+}
+
+impl From<PlatformArg> for Platform {
+    fn from(p: PlatformArg) -> Self {
+        match p {
+            PlatformArg::Ios => Platform::Ios,
+            PlatformArg::Android => Platform::Android,
+        }
+    }
+}
+
+/// The screenshot source for the live view, resolved per platform.
+#[derive(Clone, Debug)]
+enum ScreenshotSource {
+    /// iOS simulator screenshot via `simctl io <udid> screenshot`.
+    Ios(String),
+    /// Android device screenshot via `adb -s <serial> exec-out screencap`.
+    Android(String),
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "qorvex-live")]
-#[command(about = "TUI client for monitoring iOS Simulator automation sessions")]
+#[command(about = "TUI client for monitoring iOS Simulator / Android automation sessions")]
 struct Args {
     /// Session name to connect to
     #[arg(short, long, default_value = "default")]
     session: String,
+
+    /// Target platform: ios (default) or android
+    #[arg(long, value_enum, default_value_t = PlatformArg::Ios)]
+    platform: PlatformArg,
 
     /// Frames per second for the live video feed (default: 15)
     #[arg(long, default_value_t = 15)]
@@ -86,7 +119,14 @@ struct App {
     list_state: ListState,
 
     session_name: String,
+    /// The platform this session is monitoring; used to re-resolve the
+    /// screenshot source on refresh if it was not available at startup.
+    platform: Platform,
+    /// The booted iOS simulator UDID, if monitoring an iOS session. Used by the
+    /// (iOS-only) streamer. `None` on Android.
     simulator_udid: Option<String>,
+    /// The platform-resolved screenshot source (iOS udid or Android serial).
+    screenshot_source: Option<ScreenshotSource>,
     should_quit: bool,
     streamer_active: bool,
     streamer_status: StreamerStatus,
@@ -96,15 +136,27 @@ struct App {
 }
 
 impl App {
-    fn new(session_name: String) -> Self {
+    fn new(session_name: String, platform: Platform) -> Self {
         let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+
+        // Resolve the screenshot source per platform. iOS uses the booted
+        // simulator; Android uses the first ready adb device. The streamer is
+        // iOS-only (no Android streamer — arch decision 3), so `simulator_udid`
+        // is only set for iOS.
+        let screenshot_source = Self::resolve_source(platform);
+        let simulator_udid = match &screenshot_source {
+            Some(ScreenshotSource::Ios(udid)) => Some(udid.clone()),
+            _ => None,
+        };
 
         Self {
             action_log: Vec::new(),
             list_state: ListState::default(),
 
             session_name,
-            simulator_udid: Simctl::get_booted_udid().ok(),
+            platform,
+            simulator_udid,
+            screenshot_source,
             should_quit: false,
             streamer_active: false,
             streamer_status: StreamerStatus::Disconnected,
@@ -112,6 +164,29 @@ impl App {
             image_state: None,
             image_pixel_size: None,
         }
+    }
+
+    /// Resolve the screenshot source for `platform`: the booted iOS simulator
+    /// UDID, or the first ready Android adb device serial. Returns `None` if no
+    /// suitable device is currently available.
+    fn resolve_source(platform: Platform) -> Option<ScreenshotSource> {
+        match platform {
+            Platform::Ios => Simctl::get_booted_udid().ok().map(ScreenshotSource::Ios),
+            Platform::Android => Adb::list_devices()
+                .ok()
+                .and_then(|devices| devices.into_iter().find(|d| d.is_ready()))
+                .map(|d| ScreenshotSource::Android(d.serial)),
+        }
+    }
+
+    /// Return the screenshot source, re-querying the device if none was bound
+    /// yet (e.g. the device was not ready at startup). This lets the live feed
+    /// recover once the device comes up instead of staying blank forever.
+    fn refreshed_source(&mut self) -> Option<ScreenshotSource> {
+        if self.screenshot_source.is_none() {
+            self.screenshot_source = Self::resolve_source(self.platform);
+        }
+        self.screenshot_source.clone()
     }
 
     fn add_action(&mut self, log: ActionLog) {
@@ -183,10 +258,19 @@ fn spawn_decode_base64_task(
     }
 }
 
-/// Spawn a blocking task to capture a screenshot
-fn spawn_screenshot_task(udid: String, tx: mpsc::Sender<AppEvent>) {
+/// Spawn a blocking task to capture a screenshot from the platform-appropriate
+/// source (iOS `simctl` screenshot or Android `adb` screencap).
+fn spawn_screenshot_task(source: ScreenshotSource, tx: mpsc::Sender<AppEvent>) {
     tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || Simctl::screenshot(&udid)).await;
+        let result = tokio::task::spawn_blocking(move || match source {
+            ScreenshotSource::Ios(udid) => {
+                Simctl::screenshot(&udid).map_err(|e| e.to_string())
+            }
+            ScreenshotSource::Android(serial) => {
+                Adb::screencap(&serial).map_err(|e| e.to_string())
+            }
+        })
+        .await;
 
         if let Ok(Ok(bytes)) = result {
             let _ = tx.send(AppEvent::ScreenshotReady(bytes)).await;
@@ -530,14 +614,14 @@ async fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(args.session);
+    let mut app = App::new(args.session, Platform::from(args.platform));
 
     // Channel for all app events (IPC events and screenshot results)
     let (event_tx, mut event_rx) = mpsc::channel::<AppEvent>(100);
 
     // Initial screenshot (non-blocking)
-    if let Some(udid) = app.simulator_udid.clone() {
-        spawn_screenshot_task(udid, event_tx.clone());
+    if let Some(source) = app.screenshot_source.clone() {
+        spawn_screenshot_task(source, event_tx.clone());
     }
 
     // Create cancellation token for graceful shutdown
@@ -612,7 +696,9 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    // Start streamer if available
+    // Start streamer if available. The streamer is iOS-only (no Android
+    // streamer — arch decision 3); on Android `simulator_udid` is `None`, so
+    // Android falls back to polling stills via `adb screencap`.
     if !args.no_streamer {
         if let Some(ref udid) = app.simulator_udid {
             spawn_streamer_task(
@@ -713,9 +799,11 @@ async fn main() -> io::Result<()> {
                                 app.should_quit = true;
                             }
                             KeyCode::Char('r') => {
-                                // Trigger non-blocking screenshot refresh
-                                if let Some(udid) = app.simulator_udid.clone() {
-                                    spawn_screenshot_task(udid, event_tx.clone());
+                                // Trigger non-blocking screenshot refresh. Re-query
+                                // the device source if none was bound at startup
+                                // (e.g. device not ready yet) so the feed recovers.
+                                if let Some(source) = app.refreshed_source() {
+                                    spawn_screenshot_task(source, event_tx.clone());
                                 }
                             }
                             KeyCode::Up => {

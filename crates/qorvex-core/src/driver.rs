@@ -24,6 +24,13 @@
 //!     udid: "00008110-001A0C123456789A".to_string(),
 //!     device_port: 8080,
 //! };
+//!
+//! // Use an Android device (emulator or physical) via adb forward
+//! let config = DriverConfig::Android {
+//!     serial: "emulator-5554".to_string(),
+//!     local_port: 9123,
+//!     device_port: 8080,
+//! };
 //! ```
 
 use async_trait::async_trait;
@@ -87,6 +94,22 @@ pub enum DriverConfig {
         /// The UDID of the physical device.
         udid: String,
         /// The TCP port the agent is listening on (on the device, typically 8080).
+        device_port: u16,
+    },
+    /// Use a Kotlin UiAutomator agent on an Android device (emulator or physical)
+    /// reached over an `adb forward` TCP tunnel.
+    ///
+    /// `serial` addresses the device via adb (e.g. `emulator-5554`, a USB serial,
+    /// or `host:port` for an `adb connect` network device). `adb forward` binds a
+    /// host-side localhost port that maps to the agent's port inside the device,
+    /// so the driver connects to `127.0.0.1:<local_port>` exactly like the
+    /// simulator `Direct` path. See ADR-4 / ADR-3.
+    Android {
+        /// The adb device serial (`emulator-5554` | USB serial | `host:port`).
+        serial: String,
+        /// The host-side localhost TCP port that `adb forward` binds.
+        local_port: u16,
+        /// The agent's TCP port inside the device (typically 8080).
         device_port: u16,
     },
 }
@@ -746,6 +769,27 @@ mod tests {
             }
             _ => panic!("Expected Device variant"),
         }
+
+        let config = DriverConfig::Android {
+            serial: "emulator-5554".to_string(),
+            local_port: 9123,
+            device_port: 8080,
+        };
+        match config {
+            DriverConfig::Android {
+                ref serial,
+                local_port,
+                device_port,
+            } => {
+                assert_eq!(serial, "emulator-5554");
+                assert_eq!(local_port, 9123);
+                assert_eq!(device_port, 8080);
+            }
+            _ => panic!("Expected Android variant"),
+        }
+        // Verify Clone works for the Android variant
+        let cloned = config.clone();
+        assert!(matches!(cloned, DriverConfig::Android { .. }));
     }
 
     #[test]

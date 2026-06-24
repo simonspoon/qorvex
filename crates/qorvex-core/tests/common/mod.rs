@@ -59,6 +59,30 @@ pub async fn connected_executor(responses: Vec<Response>) -> ActionExecutor {
     ActionExecutor::new(Arc::new(driver))
 }
 
+/// Convenience: create an **AndroidDriver** connected to the mock, ready to use
+/// in an ActionExecutor. Mirrors [`connected_executor`] but exercises the
+/// Android backend path (story #90 parity harness).
+///
+/// Uses the `test-support` `with_connected_client` seam to inject a loopback
+/// [`AgentClient`], so the production trait surface runs without `adb forward`.
+/// The heartbeat that `AgentDriver::connect` consumes has no analog here because
+/// the client is injected already-connected; callers therefore supply one fewer
+/// response than the iOS variant (no leading heartbeat).
+///
+/// Gated behind the `test-support` feature, which exposes the
+/// `AndroidDriver::with_connected_client` seam this depends on.
+#[cfg(feature = "test-support")]
+pub async fn connected_android_executor(responses: Vec<Response>) -> ActionExecutor {
+    use qorvex_core::agent_client::AgentClient;
+    use qorvex_core::android_driver::AndroidDriver;
+
+    let addr = mock_agent(responses).await;
+    let mut client = AgentClient::new(addr);
+    client.connect().await.unwrap();
+    let driver = AndroidDriver::with_connected_client("emulator-5554", 8080, client).await;
+    ActionExecutor::new(Arc::new(driver))
+}
+
 // ---------------------------------------------------------------------------
 // Unique session name (extracted from ipc_integration.rs)
 // ---------------------------------------------------------------------------
