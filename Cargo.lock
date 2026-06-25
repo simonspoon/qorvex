@@ -2425,6 +2425,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "glob",
+ "libc",
  "predicates",
  "qorvex-core",
  "serde_json",

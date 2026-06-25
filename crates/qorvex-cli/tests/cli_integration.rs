@@ -106,3 +106,61 @@ fn test_unknown_subcommand() {
         .failure()
         .stderr(predicate::str::contains("error"));
 }
+
+/// Regression test for task 108: piping large stdout into a reader that exits
+/// early (e.g. `qorvex ... | head`) must not panic with "failed printing to
+/// stdout: Broken pipe". With `SIGPIPE` restored to `SIG_DFL` the process is
+/// terminated by the signal and writes nothing alarming to stderr.
+#[cfg(unix)]
+#[test]
+fn test_broken_pipe_does_not_panic() {
+    use std::io::{Read, Write};
+    use std::process::{Command as StdCommand, Stdio};
+
+    // Build an input large enough that `convert`'s output overflows the OS pipe
+    // buffer, so the writer is still flushing when the reader closes the pipe.
+    let dir = std::env::temp_dir().join("qorvex_sigpipe_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("big.jsonl");
+    {
+        let mut f = std::fs::File::create(&input).unwrap();
+        for i in 0..60_000 {
+            writeln!(
+                f,
+                "{{\"id\":\"{i:08}-e5f6-7890-abcd-ef1234567890\",\"timestamp\":\"2026-02-20T10:00:00Z\",\"action\":{{\"type\":\"Tap\",\"selector\":\"button-{i}\",\"by_label\":false,\"element_type\":null}},\"result\":\"Success\",\"screenshot\":null,\"duration_ms\":45}}"
+            )
+            .unwrap();
+        }
+    }
+
+    let bin = assert_cmd::cargo::cargo_bin("qorvex");
+    let mut child = StdCommand::new(bin)
+        .args(["convert", input.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Read a single small chunk, then drop stdout to close the read end early.
+    {
+        let mut stdout = child.stdout.take().unwrap();
+        let mut buf = [0u8; 16];
+        let _ = stdout.read(&mut buf);
+    }
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
+        "broken pipe should be handled silently, got stderr: {stderr}"
+    );
+    // The writer should die from SIGPIPE (signal 13), never a Rust panic (101).
+    assert_ne!(status.code(), Some(101), "process panicked on broken pipe");
+}

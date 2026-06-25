@@ -350,8 +350,29 @@ enum Command {
     },
 }
 
+/// Restore the default `SIGPIPE` disposition.
+///
+/// The Rust runtime sets `SIGPIPE` to `SIG_IGN` at startup, which turns a write
+/// to a closed pipe into an `EPIPE` error that the `print!`/`println!` macros
+/// then unwrap into a panic. That happens whenever output is piped to a reader
+/// that exits early (e.g. `qorvex screen-info | head`). Resetting to `SIG_DFL`
+/// makes us terminate quietly on the signal like a well-behaved Unix tool.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    // SAFETY: `signal` with `SIG_DFL` on `SIGPIPE` is async-signal-safe and is
+    // called once before any threads write to stdout.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    reset_sigpipe();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
