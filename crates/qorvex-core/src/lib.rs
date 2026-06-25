@@ -49,6 +49,7 @@ pub mod adb_forward;
 pub mod agent_client;
 pub mod agent_driver;
 pub mod agent_lifecycle;
+pub mod agent_session;
 pub mod android_driver;
 pub mod android_lifecycle;
 pub mod config;
