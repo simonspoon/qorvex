@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::driver::AutomationDriver;
@@ -45,9 +45,41 @@ pub async fn mock_agent(responses: Vec<Response>) -> SocketAddr {
             stream.write_all(&resp_bytes).await.unwrap();
             stream.flush().await.unwrap();
         }
+
+        // Responses exhausted: do NOT close the socket — not even a write-half
+        // shutdown (FIN). Any server-initiated close races the driver's final
+        // read under load: dropping `stream` with an unread request still in our
+        // receive buffer makes the OS emit a RST that can discard the response
+        // already in flight, and even a clean FIN was observed to reintroduce
+        // the same spurious ConnectionLost flake under `--all-targets` CPU
+        // contention (~2/60 runs). The robust fix is to let the *client* close
+        // first: drain to EOF and never initiate the teardown (task #96;
+        // verified 0 failures over 100+ saturated runs).
+        //
+        // Trade-off: an *over-provisioned* test that reads past its scripted
+        // responses now blocks to its read timeout instead of failing fast with
+        // ConnectionLost. That is acceptable — every current caller provisions
+        // exactly the responses it consumes, and flake-freedom is the goal here.
+        drain_until_client_closes(&mut stream).await;
     });
 
     addr
+}
+
+/// Read and discard bytes until the peer closes the connection (EOF) or errors.
+///
+/// Used by mock agents after their scripted responses are exhausted so they
+/// never initiate the close — the client disconnects first, so the OS sends a
+/// FIN (never a RST) and the driver's last read is never lost. See
+/// [`mock_agent`] for the rationale.
+async fn drain_until_client_closes(stream: &mut TcpStream) {
+    let mut sink = [0u8; 1024];
+    loop {
+        match stream.read(&mut sink).await {
+            Ok(0) | Err(_) => break, // client half-closed (EOF) or the link errored
+            Ok(_) => continue,       // discard any further bytes the client sends
+        }
+    }
 }
 
 /// Convenience: create an AgentDriver connected to the mock, ready to use in

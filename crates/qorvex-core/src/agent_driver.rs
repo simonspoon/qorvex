@@ -4,13 +4,20 @@
 //! trait by communicating with a Swift accessibility agent using the binary
 //! protocol defined in [`crate::protocol`].
 //!
-//! The driver supports three connection modes:
+//! [`AgentDriver`] is a thin alias over the transport-generic
+//! [`AgentSession`](crate::agent_session::AgentSession): all protocol plumbing,
+//! the recovery ladder, and the [`AutomationDriver`] trait surface live in
+//! [`crate::agent_session`]; this module supplies only the iOS/macOS transport
+//! ([`IosTransport`]) and the driver's constructors/accessors.
+//!
+//! The driver supports four connection modes (see [`ConnectionTarget`]):
 //!
 //! - **Direct TCP** (simulators): connects to a host:port via TCP socket
 //! - **USB tunnel** (physical devices): tunnels through usbmuxd to a port on
 //!   the device, using the [`usb_tunnel`](crate::usb_tunnel) module
-//! - **Tunneld** (CoreDevice devices): connects through a pymobiledevice3
-//!   tunnel to the agent on the device
+//! - **Tunneld** (pymobiledevice3): connects through a pymobiledevice3 tunnel
+//!   to the agent on the device
+//! - **CoreDevice** (iOS 17+): connects via the native CoreDevice tunnel
 //!
 //! # Example
 //!
@@ -30,47 +37,15 @@
 //! # }
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tracing::{info, warn};
 
-use tracing::{debug, info, instrument, warn};
-
-use crate::agent_client::{AgentClient, AgentClientError};
+use crate::agent_client::AgentClient;
 use crate::agent_lifecycle::AgentLifecycle;
-use crate::driver::{AutomationDriver, DriverError, TargetInfo};
-use crate::element::UIElement;
-use crate::protocol::{Request, Response};
-
-// ---------------------------------------------------------------------------
-// Error mapping
-// ---------------------------------------------------------------------------
-
-/// Maps an [`AgentClientError`] to a [`DriverError`].
-fn map_client_error(err: AgentClientError) -> DriverError {
-    match err {
-        AgentClientError::NotConnected => DriverError::NotConnected,
-        AgentClientError::ConnectionFailed(msg) => DriverError::ConnectionLost(msg),
-        AgentClientError::Io(e) => DriverError::Io(e),
-        AgentClientError::Protocol(e) => DriverError::CommandFailed(e.to_string()),
-        AgentClientError::AgentError(msg) => DriverError::CommandFailed(msg),
-        AgentClientError::Timeout => DriverError::Timeout,
-    }
-}
-
-/// Checks that the response is [`Response::Ok`] and returns a
-/// [`DriverError::CommandFailed`] if it is not.
-fn expect_ok(response: Response) -> Result<(), DriverError> {
-    match response {
-        Response::Ok => Ok(()),
-        other => Err(DriverError::CommandFailed(format!(
-            "unexpected response: {other:?}"
-        ))),
-    }
-}
+use crate::agent_session::{map_client_error, AgentSession, AgentTransport, Recovered};
+use crate::driver::DriverError;
 
 // ---------------------------------------------------------------------------
 // ConnectionTarget
@@ -110,144 +85,20 @@ pub enum ConnectionTarget {
 }
 
 // ---------------------------------------------------------------------------
-// AgentDriver
+// IosTransport
 // ---------------------------------------------------------------------------
 
-/// An [`AutomationDriver`] backed by a connection to a Swift agent.
-///
-/// The driver holds a [`ConnectionTarget`] and lazily creates an
-/// [`AgentClient`] when [`connect`](AutomationDriver::connect) is called.
-/// For [`ConnectionTarget::Direct`], this opens a TCP socket; for
-/// [`ConnectionTarget::UsbDevice`], it creates a USB tunnel through usbmuxd.
-///
-/// The client is wrapped in a [`tokio::sync::Mutex`] so that the `&self`
-/// trait methods can acquire mutable access for sending requests.
-pub struct AgentDriver {
+/// The iOS/macOS transport half of an [`AgentSession`]: opens a Swift-agent
+/// connection for a [`ConnectionTarget`] and, when a lifecycle is attached,
+/// recovers a dead connection by a cheap TCP reconnect or a full agent respawn.
+#[doc(hidden)]
+pub struct IosTransport {
     target: ConnectionTarget,
-    client: Mutex<Option<AgentClient>>,
     lifecycle: Option<Arc<AgentLifecycle>>,
-    recovery_count: AtomicU64,
-    /// Remembered target bundle ID so it can be re-sent after agent recovery.
-    target_bundle_id: Mutex<Option<String>>,
 }
 
-impl AgentDriver {
-    /// Creates a driver with a direct TCP connection target.
-    ///
-    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
-    pub fn direct(host: impl Into<String>, port: u16) -> Self {
-        Self {
-            target: ConnectionTarget::Direct {
-                host: host.into(),
-                port,
-            },
-            client: Mutex::new(None),
-            lifecycle: None,
-            recovery_count: AtomicU64::new(0),
-            target_bundle_id: Mutex::new(None),
-        }
-    }
-
-    /// Creates a driver that will tunnel to a physical device via USB.
-    ///
-    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
-    pub fn usb_device(udid: impl Into<String>, device_port: u16) -> Self {
-        Self {
-            target: ConnectionTarget::UsbDevice {
-                udid: udid.into(),
-                device_port,
-            },
-            client: Mutex::new(None),
-            lifecycle: None,
-            recovery_count: AtomicU64::new(0),
-            target_bundle_id: Mutex::new(None),
-        }
-    }
-
-    /// Creates a driver that will connect through a pymobiledevice3 tunnel.
-    ///
-    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
-    pub fn tunneld(tunnel_address: impl Into<String>, agent_port: u16) -> Self {
-        Self {
-            target: ConnectionTarget::Tunneld {
-                tunnel_address: tunnel_address.into(),
-                agent_port,
-            },
-            client: Mutex::new(None),
-            lifecycle: None,
-            recovery_count: AtomicU64::new(0),
-            target_bundle_id: Mutex::new(None),
-        }
-    }
-
-    /// Creates a driver that will connect via the native CoreDevice tunnel (iOS 17+).
-    ///
-    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
-    pub fn core_device(udid: impl Into<String>, port: u16) -> Self {
-        Self {
-            target: ConnectionTarget::CoreDevice {
-                udid: udid.into(),
-                port,
-            },
-            client: Mutex::new(None),
-            lifecycle: None,
-            recovery_count: AtomicU64::new(0),
-            target_bundle_id: Mutex::new(None),
-        }
-    }
-
-    /// Creates a driver for the given host and port (direct TCP).
-    ///
-    /// This is a convenience alias for [`direct`](Self::direct) that maintains
-    /// backward compatibility with existing code.
-    pub fn new(host: String, port: u16) -> Self {
-        Self::direct(host, port)
-    }
-
-    /// Attaches a lifecycle manager for automatic crash recovery.
-    ///
-    /// When set, the driver will attempt to restart the agent and reconnect
-    /// if a connection error is detected during [`send`].
-    pub fn with_lifecycle(mut self, lifecycle: Arc<AgentLifecycle>) -> Self {
-        self.lifecycle = Some(lifecycle);
-        self
-    }
-
-    /// Returns the connection target.
-    pub fn target(&self) -> &ConnectionTarget {
-        &self.target
-    }
-
-    /// Returns the configured host, if this is a direct TCP connection.
-    pub fn host(&self) -> &str {
-        match &self.target {
-            ConnectionTarget::Direct { host, .. } => host,
-            ConnectionTarget::UsbDevice { udid, .. } => udid,
-            ConnectionTarget::Tunneld { tunnel_address, .. } => tunnel_address,
-            ConnectionTarget::CoreDevice { udid, .. } => udid,
-        }
-    }
-
-    /// Returns the configured port.
-    pub fn port(&self) -> u16 {
-        match &self.target {
-            ConnectionTarget::Direct { port, .. } => *port,
-            ConnectionTarget::UsbDevice { device_port, .. } => *device_port,
-            ConnectionTarget::Tunneld { agent_port, .. } => *agent_port,
-            ConnectionTarget::CoreDevice { port, .. } => *port,
-        }
-    }
-
-    /// Returns the number of successful recovery events since creation.
-    ///
-    /// The executor can poll this to detect when the agent was restarted
-    /// mid-action and reset its timeout accordingly.
-    pub fn recovery_count(&self) -> u64 {
-        self.recovery_count.load(Ordering::Relaxed)
-    }
-
-    /// Creates a new [`AgentClient`] for the current [`ConnectionTarget`]
-    /// and verifies it with a heartbeat.
+#[async_trait]
+impl AgentTransport for IosTransport {
     async fn create_client(&self) -> Result<AgentClient, DriverError> {
         let mut client = match &self.target {
             ConnectionTarget::Direct { host, port } => {
@@ -287,573 +138,158 @@ impl AgentDriver {
         Ok(client)
     }
 
-    /// Returns `true` if the error indicates a broken connection that may
-    /// be recoverable by restarting the agent.
-    fn is_connection_error(err: &DriverError) -> bool {
-        matches!(
-            err,
-            DriverError::NotConnected
-                | DriverError::ConnectionLost(_)
-                | DriverError::Io(_)
-                | DriverError::Timeout
-        )
+    /// Recovery is only attempted when a lifecycle manager is attached; without
+    /// one, a connection error propagates unchanged (matching the original
+    /// behavior).
+    fn recovery_enabled(&self) -> bool {
+        self.lifecycle.is_some()
     }
 
-    /// Attempt to recover from a dead agent connection.
-    ///
-    /// Terminates the agent, respawns it (skipping rebuild), waits for it to
-    /// become ready, then reconnects and replaces the stored client.
-    async fn attempt_recovery(&self) -> Result<(), DriverError> {
+    async fn recover(&self) -> Result<Recovered, DriverError> {
+        // Cheap path first: a fresh TCP connect. After a read timeout the stream
+        // is dropped, but the agent process may still be alive — just slow — and
+        // still holds the target, so a successful reconnect needs no SetTarget
+        // restore. A fresh connect is far cheaper than a kill-and-respawn cycle.
+        info!("attempting TCP reconnect (agent may still be alive)");
+        match self.create_client().await {
+            Ok(client) => {
+                info!("TCP reconnect succeeded");
+                return Ok(Recovered {
+                    client,
+                    restore_target: false,
+                });
+            }
+            Err(e) => warn!(error = %e, "TCP reconnect failed"),
+        }
+
+        // Full recovery: terminate the dead agent, respawn it (skip rebuild —
+        // the XCTest bundle is still on disk), wait for ready, then reconnect.
+        // The fresh agent has no target, so the caller restores it.
         let lifecycle = self.lifecycle.as_ref().ok_or(DriverError::NotConnected)?;
-
         info!("agent connection lost, attempting recovery");
-
-        // Terminate the old agent process.
         lifecycle
             .terminate_agent()
             .map_err(|e| DriverError::CommandFailed(format!("recovery: terminate failed: {e}")))?;
-
-        // Respawn (skip rebuild — the XCTest bundle is still on disk).
         lifecycle
             .spawn_agent()
             .map_err(|e| DriverError::CommandFailed(format!("recovery: spawn failed: {e}")))?;
-
-        // Wait for the new agent to become ready.
         lifecycle
             .wait_for_ready()
             .await
             .map_err(|e| DriverError::CommandFailed(format!("recovery: agent not ready: {e}")))?;
-
-        // Reconnect.
         let client = self.create_client().await?;
-        *self.client.lock().await = Some(client);
-
-        // Restore target app so the fresh agent knows which app to automate.
-        self.restore_target().await?;
-
-        self.recovery_count.fetch_add(1, Ordering::Relaxed);
-        info!("agent recovery successful");
-        Ok(())
-    }
-
-    /// Re-send the `SetTarget` command if one was previously set.
-    ///
-    /// Called after recovery or reconnect so the fresh agent knows which
-    /// app to target.
-    async fn restore_target(&self) -> Result<(), DriverError> {
-        let bundle_id = self.target_bundle_id.lock().await.clone();
-        if let Some(ref bid) = bundle_id {
-            info!(bundle_id = %bid, "restoring target after recovery");
-            let response = self
-                .send_raw(&Request::SetTarget {
-                    bundle_id: bid.clone(),
-                })
-                .await?;
-            expect_ok(response)?;
-        }
-        Ok(())
-    }
-
-    /// Try to re-establish the TCP connection without killing the agent.
-    ///
-    /// After a read timeout the stream is dropped, but the agent process may
-    /// still be alive — just slow.  A fresh TCP connect is much cheaper than
-    /// a full kill-and-respawn cycle.
-    async fn try_reconnect(&self) -> Result<(), DriverError> {
-        info!("attempting TCP reconnect (agent may still be alive)");
-        match self.create_client().await {
-            Ok(new_client) => {
-                *self.client.lock().await = Some(new_client);
-                info!("TCP reconnect succeeded");
-                Ok(())
-            }
-            Err(e) => {
-                warn!(error = %e, "TCP reconnect failed");
-                Err(e)
-            }
-        }
-    }
-
-    /// Sends a request via the inner [`AgentClient`], mapping errors to
-    /// [`DriverError`].
-    ///
-    /// On connection error, if a lifecycle manager is attached, tries a cheap
-    /// TCP reconnect first; only falls through to full agent recovery if the
-    /// reconnect fails.
-    async fn send(&self, request: &Request) -> Result<Response, DriverError> {
-        let result = self.send_raw(request).await;
-
-        match &result {
-            Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
-                warn!(error = %e, opcode = request.opcode_name(), "connection error, trying reconnect before recovery");
-                if self.try_reconnect().await.is_ok() {
-                    self.recovery_count.fetch_add(1, Ordering::Relaxed);
-                    return self.send_raw(request).await;
-                }
-                self.attempt_recovery().await?;
-                self.send_raw(request).await
-            }
-            _ => result,
-        }
-    }
-
-    /// Sends a request without recovery wrapping.
-    async fn send_raw(&self, request: &Request) -> Result<Response, DriverError> {
-        let lock_start = Instant::now();
-        let mut guard = self.client.lock().await;
-        let lock_elapsed = lock_start.elapsed();
-        if lock_elapsed > Duration::from_millis(500) {
-            warn!(
-                elapsed_ms = lock_elapsed.as_millis() as u64,
-                "slow mutex acquisition on agent client"
-            );
-        }
-        let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
-        client.send(request).await.map_err(map_client_error)
-    }
-
-    /// Sends a request with a custom read timeout.
-    ///
-    /// When `timeout_ms` is `Some`, the read deadline is set to `timeout_ms + 5s`
-    /// so the Rust side waits longer than the agent's internal retry window.
-    /// When `None`, falls back to the default `send()`.
-    ///
-    /// On connection error, if a lifecycle manager is attached, attempts
-    /// automatic recovery and retries once.
-    async fn send_with_read_timeout(
-        &self,
-        request: &Request,
-        timeout_ms: Option<u64>,
-    ) -> Result<Response, DriverError> {
-        let result = self.send_raw_with_read_timeout(request, timeout_ms).await;
-
-        match &result {
-            Err(e) if Self::is_connection_error(e) && self.lifecycle.is_some() => {
-                warn!(error = %e, opcode = request.opcode_name(), "connection error (with timeout), trying reconnect before recovery");
-                if self.try_reconnect().await.is_ok() {
-                    self.recovery_count.fetch_add(1, Ordering::Relaxed);
-                    return self.send_raw_with_read_timeout(request, timeout_ms).await;
-                }
-                self.attempt_recovery().await?;
-                self.send_raw_with_read_timeout(request, timeout_ms).await
-            }
-            _ => result,
-        }
-    }
-
-    /// Sends a request with a custom read timeout, without recovery wrapping.
-    async fn send_raw_with_read_timeout(
-        &self,
-        request: &Request,
-        timeout_ms: Option<u64>,
-    ) -> Result<Response, DriverError> {
-        match timeout_ms {
-            Some(ms) => {
-                let read_timeout = Duration::from_millis(ms + 15_000);
-                let mut guard = self.client.lock().await;
-                let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
-                client
-                    .send_with_timeout(request, read_timeout)
-                    .await
-                    .map_err(map_client_error)
-            }
-            None => self.send_raw(request).await,
-        }
+        Ok(Recovered {
+            client,
+            restore_target: true,
+        })
     }
 }
 
-#[async_trait]
-impl AutomationDriver for AgentDriver {
-    #[instrument(skip(self), level = "debug")]
-    async fn connect(&mut self) -> Result<(), DriverError> {
-        let client = self.create_client().await?;
-        *self.client.lock().await = Some(client);
-        Ok(())
+// ---------------------------------------------------------------------------
+// AgentDriver
+// ---------------------------------------------------------------------------
+
+/// An [`AutomationDriver`] backed by a connection to a Swift agent.
+///
+/// This is a type alias for [`AgentSession`] specialized to the iOS/macOS
+/// transport. The constructors below pick a [`ConnectionTarget`]; the session
+/// lazily opens an [`AgentClient`] when [`connect`](AutomationDriver::connect)
+/// is called.
+pub type AgentDriver = AgentSession<IosTransport>;
+
+impl AgentSession<IosTransport> {
+    /// Creates a driver with a direct TCP connection target.
+    ///
+    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
+    pub fn direct(host: impl Into<String>, port: u16) -> Self {
+        Self::from_transport(IosTransport {
+            target: ConnectionTarget::Direct {
+                host: host.into(),
+                port,
+            },
+            lifecycle: None,
+        })
     }
 
-    fn is_connected(&self) -> bool {
-        self.client.try_lock().map(|g| g.is_some()).unwrap_or(false)
+    /// Creates a driver that will tunnel to a physical device via USB.
+    ///
+    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
+    pub fn usb_device(udid: impl Into<String>, device_port: u16) -> Self {
+        Self::from_transport(IosTransport {
+            target: ConnectionTarget::UsbDevice {
+                udid: udid.into(),
+                device_port,
+            },
+            lifecycle: None,
+        })
     }
 
-    fn recovery_count(&self) -> u64 {
-        self.recovery_count.load(Ordering::Relaxed)
+    /// Creates a driver that will connect through a pymobiledevice3 tunnel.
+    ///
+    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
+    pub fn tunneld(tunnel_address: impl Into<String>, agent_port: u16) -> Self {
+        Self::from_transport(IosTransport {
+            target: ConnectionTarget::Tunneld {
+                tunnel_address: tunnel_address.into(),
+                agent_port,
+            },
+            lifecycle: None,
+        })
     }
 
-    async fn tap_location(&self, x: i32, y: i32) -> Result<(), DriverError> {
-        let response = self.send(&Request::TapCoord { x, y }).await?;
-        expect_ok(response)
+    /// Creates a driver that will connect via the native CoreDevice tunnel (iOS 17+).
+    ///
+    /// No connection is established until [`connect`](AutomationDriver::connect) is called.
+    pub fn core_device(udid: impl Into<String>, port: u16) -> Self {
+        Self::from_transport(IosTransport {
+            target: ConnectionTarget::CoreDevice {
+                udid: udid.into(),
+                port,
+            },
+            lifecycle: None,
+        })
     }
 
-    #[instrument(skip(self), level = "debug")]
-    async fn tap_element(&self, identifier: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TapElement {
-                selector: identifier.to_string(),
-                timeout_ms: None,
-            })
-            .await?;
-        expect_ok(response)
+    /// Creates a driver for the given host and port (direct TCP).
+    ///
+    /// This is a convenience alias for [`direct`](Self::direct) that maintains
+    /// backward compatibility with existing code.
+    pub fn new(host: String, port: u16) -> Self {
+        Self::direct(host, port)
     }
 
-    #[instrument(skip(self), level = "debug")]
-    async fn tap_by_label(&self, label: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TapByLabel {
-                label: label.to_string(),
-                timeout_ms: None,
-            })
-            .await?;
-        expect_ok(response)
+    /// Attaches a lifecycle manager for automatic crash recovery.
+    ///
+    /// When set, the driver will attempt to restart the agent and reconnect
+    /// if a connection error is detected during a send. Called during
+    /// construction, before `connect`.
+    pub fn with_lifecycle(mut self, lifecycle: Arc<AgentLifecycle>) -> Self {
+        self.transport.lifecycle = Some(lifecycle);
+        self
     }
 
-    #[instrument(skip(self), level = "debug")]
-    async fn tap_with_type(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: &str,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TapWithType {
-                selector: selector.to_string(),
-                by_label,
-                element_type: element_type.to_string(),
-                timeout_ms: None,
-            })
-            .await?;
-        expect_ok(response)
+    /// Returns the connection target.
+    pub fn target(&self) -> &ConnectionTarget {
+        &self.transport.target
     }
 
-    #[instrument(skip(self), level = "debug")]
-    async fn swipe(
-        &self,
-        start_x: i32,
-        start_y: i32,
-        end_x: i32,
-        end_y: i32,
-        duration: Option<f64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::Swipe {
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                duration,
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn long_press(&self, x: i32, y: i32, duration: f64) -> Result<(), DriverError> {
-        let response = self.send(&Request::LongPress { x, y, duration }).await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn type_text(&self, text: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TypeText {
-                text: text.to_string(),
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn dump_tree(&self) -> Result<Vec<UIElement>, DriverError> {
-        // Large pages can take well over 30s to snapshot; use a generous timeout
-        // to avoid dropping the connection while the agent is still working.
-        const DUMP_TREE_TIMEOUT_MS: u64 = 120_000;
-        let response = self
-            .send_with_read_timeout(&Request::DumpTree, Some(DUMP_TREE_TIMEOUT_MS))
-            .await?;
-        match response {
-            Response::Tree { json } => {
-                let elements: Vec<UIElement> = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                debug!(element_count = elements.len(), "tree dumped");
-                Ok(elements)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
+    /// Returns the configured host (or device identifier for tunneled targets).
+    pub fn host(&self) -> &str {
+        match &self.transport.target {
+            ConnectionTarget::Direct { host, .. } => host,
+            ConnectionTarget::UsbDevice { udid, .. } => udid,
+            ConnectionTarget::Tunneld { tunnel_address, .. } => tunnel_address,
+            ConnectionTarget::CoreDevice { udid, .. } => udid,
         }
     }
 
-    async fn get_element_value(&self, identifier: &str) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send(&Request::GetValue {
-                selector: identifier.to_string(),
-                by_label: false,
-                element_type: None,
-                timeout_ms: None,
-            })
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn get_element_value_by_label(&self, label: &str) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send(&Request::GetValue {
-                selector: label.to_string(),
-                by_label: true,
-                element_type: None,
-                timeout_ms: None,
-            })
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn get_value_with_type(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: &str,
-    ) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send(&Request::GetValue {
-                selector: selector.to_string(),
-                by_label,
-                element_type: Some(element_type.to_string()),
-                timeout_ms: None,
-            })
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn screenshot(&self) -> Result<Vec<u8>, DriverError> {
-        let response = self.send(&Request::Screenshot).await?;
-        match response {
-            Response::Screenshot { data } => {
-                debug!(bytes = data.len(), "screenshot captured");
-                Ok(data)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn tap_element_with_timeout(
-        &self,
-        identifier: &str,
-        timeout_ms: Option<u64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::TapElement {
-                    selector: identifier.to_string(),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn tap_by_label_with_timeout(
-        &self,
-        label: &str,
-        timeout_ms: Option<u64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::TapByLabel {
-                    label: label.to_string(),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn tap_with_type_with_timeout(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: &str,
-        timeout_ms: Option<u64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::TapWithType {
-                    selector: selector.to_string(),
-                    by_label,
-                    element_type: element_type.to_string(),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn get_value_with_timeout(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: Option<&str>,
-        timeout_ms: Option<u64>,
-    ) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::GetValue {
-                    selector: selector.to_string(),
-                    by_label,
-                    element_type: element_type.map(|s| s.to_string()),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element(&self, identifier: &str) -> Result<Option<UIElement>, DriverError> {
-        self.find_element_with_type(identifier, false, None).await
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element_by_label(&self, label: &str) -> Result<Option<UIElement>, DriverError> {
-        self.find_element_with_type(label, true, None).await
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element_with_type(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: Option<&str>,
-    ) -> Result<Option<UIElement>, DriverError> {
-        let response = self
-            .send(&Request::FindElement {
-                selector: selector.to_string(),
-                by_label,
-                element_type: element_type.map(|s| s.to_string()),
-            })
-            .await?;
-        match response {
-            Response::Element { json } => {
-                let element: Option<UIElement> = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                Ok(element)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element_with_read_timeout(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: Option<&str>,
-        read_timeout_ms: Option<u64>,
-    ) -> Result<Option<UIElement>, DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::FindElement {
-                    selector: selector.to_string(),
-                    by_label,
-                    element_type: element_type.map(|s| s.to_string()),
-                },
-                read_timeout_ms,
-            )
-            .await?;
-        match response {
-            Response::Element { json } => {
-                let element: Option<UIElement> = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                Ok(element)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::SetTarget {
-                bundle_id: bundle_id.to_string(),
-            })
-            .await?;
-        expect_ok(response)?;
-        // Remember for restore after recovery.
-        *self.target_bundle_id.lock().await = Some(bundle_id.to_string());
-        Ok(())
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn get_target_info(&self) -> Result<TargetInfo, DriverError> {
-        let bundle_id = self
-            .target_bundle_id
-            .lock()
-            .await
-            .clone()
-            .unwrap_or_default();
-        let response = self.send(&Request::GetTargetInfo).await?;
-        match response {
-            Response::TargetInfo { json } => {
-                // Deserialize the agent's JSON response into the full
-                // TargetInfo struct; bundle_id falls back to what we tracked.
-                #[derive(serde::Deserialize, Default)]
-                struct AgentTargetInfo {
-                    #[serde(default)]
-                    state: String,
-                    #[serde(default)]
-                    display_name: String,
-                    #[serde(default)]
-                    version: String,
-                    #[serde(default)]
-                    build: String,
-                    #[serde(default)]
-                    bundle_id: String,
-                }
-                let partial: AgentTargetInfo = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                Ok(TargetInfo {
-                    bundle_id: if partial.bundle_id.is_empty() {
-                        bundle_id
-                    } else {
-                        partial.bundle_id
-                    },
-                    display_name: partial.display_name,
-                    version: partial.version,
-                    build: partial.build,
-                    state: partial.state,
-                })
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
+    /// Returns the configured port.
+    pub fn port(&self) -> u16 {
+        match &self.transport.target {
+            ConnectionTarget::Direct { port, .. } => *port,
+            ConnectionTarget::UsbDevice { device_port, .. } => *device_port,
+            ConnectionTarget::Tunneld { agent_port, .. } => *agent_port,
+            ConnectionTarget::CoreDevice { port, .. } => *port,
         }
     }
 }
@@ -865,7 +301,10 @@ impl AutomationDriver for AgentDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode_response;
+    use crate::agent_client::AgentClientError;
+    use crate::agent_session::{expect_ok, map_client_error};
+    use crate::driver::AutomationDriver;
+    use crate::protocol::{encode_response, Response};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -1515,7 +954,7 @@ mod tests {
 
         let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
         // No lifecycle attached — recovery should NOT be attempted
-        assert!(driver.lifecycle.is_none());
+        assert!(driver.transport.lifecycle.is_none());
         driver.connect().await.unwrap();
 
         // This should fail with a connection error and propagate directly

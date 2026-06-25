@@ -1,26 +1,29 @@
 //! [`AutomationDriver`] implementation backed by the Android Kotlin agent.
 //!
 //! This module provides [`AndroidDriver`], the Android counterpart of
-//! [`AgentDriver`](crate::agent_driver::AgentDriver). It implements the
-//! [`AutomationDriver`] trait by communicating with the on-device Kotlin
-//! UiAutomator agent (story #84) using the **same** binary protocol defined in
-//! [`crate::protocol`] — no protocol changes, no iOS assumptions.
+//! [`AgentDriver`](crate::agent_driver::AgentDriver). Both are thin aliases over
+//! the transport-generic [`AgentSession`](crate::agent_session::AgentSession):
+//! the protocol framing, the send/recovery ladder, and the [`AutomationDriver`]
+//! trait surface live once in [`crate::agent_session`]. This module supplies
+//! only the Android transport ([`AndroidTransport`]) — an [`AdbForward`] tunnel
+//! to the on-device Kotlin UiAutomator agent (story #84) — and the driver's
+//! constructors/accessors.
 //!
 //! # Connection path
 //!
 //! `adb` unifies emulator, USB, and `adb connect` network devices behind a
-//! single `serial` (ADR-3). The driver establishes one
+//! single `serial` (ADR-3). The transport establishes one
 //! [`AdbForward`](crate::adb_forward::AdbForward) tunnel
 //! (`adb -s <serial> forward tcp:<local_port> tcp:<device_port>`) and then
 //! connects to `127.0.0.1:<local_port>` — **identical** to the simulator
-//! `Direct` path in [`AgentDriver`]. This lets the driver reuse
+//! `Direct` path in [`AgentDriver`]. This lets the transport reuse
 //! [`AgentClient::new`](crate::agent_client::AgentClient::new) verbatim, with no
 //! `from_stream` plumbing (ADR-3 §1).
 //!
 //! ```text
-//!   AndroidDriver ──Request/Response──▶ AgentClient
+//!   AgentSession ──Request/Response──▶ AgentClient
 //!        │                                   │ TCP 127.0.0.1:<local_port>
-//!        │ owns AdbForward ──────────────────┤
+//!   AndroidTransport owns AdbForward ────────┤
 //!        ▼                                   ▼
 //!   adb forward rule ───────────▶ adb ───▶ Kotlin agent (device_port on device)
 //! ```
@@ -31,13 +34,16 @@
 //! process and of any one TCP connection, so a dropped *TCP* connection (agent
 //! stall, transient drop) is recovered by simply re-opening the socket. On a
 //! *forward-level* failure (device re-plug, emulator reboot, adb server bounce)
-//! the driver re-issues the forward via [`AdbForward::ensure`] before
-//! reconnecting. Both primitives exist today, so the driver's
-//! socket-reconnect-then-re-issue-forward ladder is fully wired here.
+//! the transport re-issues the forward via [`AdbForward::ensure`] before
+//! reconnecting. Both primitives are wired into
+//! [`AndroidTransport::create_client`], which the session's recovery ladder
+//! calls — so the socket-reconnect-then-re-issue-forward ladder is realized by
+//! the default [`AgentTransport::recover`].
 //!
 //! The heavier terminate+respawn rung of the ladder (ADR-2 §4) depends on
-//! `AndroidLifecycle`, which lands in story #88. See the
-//! [`AndroidDriver::attempt_recovery`] note for the exact seam left for #88.
+//! `AndroidLifecycle`; when it is wired in, `AndroidTransport` overrides
+//! [`recover`](AgentTransport::recover) to add the respawn step (the iOS
+//! [`IosTransport`](crate::agent_driver) already shows the shape).
 //!
 //! # Example
 //!
@@ -53,55 +59,109 @@
 //! # }
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-
 use async_trait::async_trait;
 use tokio::sync::Mutex;
-use tracing::{debug, info, instrument, warn};
 
 use crate::adb_forward::{AdbForward, AdbForwardError};
-use crate::agent_client::{AgentClient, AgentClientError};
-use crate::driver::{AutomationDriver, DriverError, TargetInfo};
-use crate::element::UIElement;
-use crate::protocol::{Request, Response};
+use crate::agent_client::AgentClient;
+use crate::agent_session::{map_client_error, AgentSession, AgentTransport};
+use crate::driver::DriverError;
 
 /// The default device-side TCP port the Kotlin agent listens on (matches the
 /// agent's `qorvex_port` default in story #84 / ADR-2).
 pub const DEFAULT_ANDROID_AGENT_PORT: u16 = 8080;
 
-// ---------------------------------------------------------------------------
-// Error mapping (mirrors agent_driver.rs)
-// ---------------------------------------------------------------------------
-
-/// Maps an [`AgentClientError`] to a [`DriverError`].
-fn map_client_error(err: AgentClientError) -> DriverError {
-    match err {
-        AgentClientError::NotConnected => DriverError::NotConnected,
-        AgentClientError::ConnectionFailed(msg) => DriverError::ConnectionLost(msg),
-        AgentClientError::Io(e) => DriverError::Io(e),
-        AgentClientError::Protocol(e) => DriverError::CommandFailed(e.to_string()),
-        AgentClientError::AgentError(msg) => DriverError::CommandFailed(msg),
-        AgentClientError::Timeout => DriverError::Timeout,
-    }
-}
-
 /// Maps an [`AdbForwardError`] to a [`DriverError`].
 ///
 /// All forward failures surface as connection-class errors so the executor and
-/// the driver's own reconnect classifier treat them like a lost link.
+/// the session's reconnect classifier treat them like a lost link.
 fn map_forward_error(err: AdbForwardError) -> DriverError {
     DriverError::ConnectionLost(err.to_string())
 }
 
-/// Checks that the response is [`Response::Ok`], else returns
-/// [`DriverError::CommandFailed`].
-fn expect_ok(response: Response) -> Result<(), DriverError> {
-    match response {
-        Response::Ok => Ok(()),
-        other => Err(DriverError::CommandFailed(format!(
-            "unexpected response: {other:?}"
-        ))),
+// ---------------------------------------------------------------------------
+// AndroidTransport
+// ---------------------------------------------------------------------------
+
+/// The Android transport half of an [`AgentSession`]: owns an [`AdbForward`]
+/// tunnel and opens an [`AgentClient`] against its loopback port.
+///
+/// The forward lives behind a `Mutex` so the recovery path can re-issue the
+/// rule via [`AdbForward::ensure`] without taking `&mut self`.
+#[doc(hidden)]
+pub struct AndroidTransport {
+    /// adb serial of the target device (emulator-5554 | host:port | USB serial).
+    serial: String,
+    /// Requested host loopback port; `None` lets adb auto-pick on first connect.
+    local_port: Option<u16>,
+    /// Agent's TCP port inside the device.
+    device_port: u16,
+    /// The established forward, set on first `create_client`.
+    forward: Mutex<Option<AdbForward>>,
+}
+
+impl AndroidTransport {
+    /// Ensure a forward rule exists and return the loopback `SocketAddr` to
+    /// connect to.
+    ///
+    /// First call establishes the rule (adb auto-picks a port when
+    /// `local_port` is `None`). Later calls re-issue the existing rule via
+    /// [`AdbForward::ensure`] (idempotent; preserves the bound port), covering
+    /// the forward-level reconnect of ADR-3 §4.
+    ///
+    /// `adb` is a blocking CLI, so the call runs inside `spawn_blocking` to
+    /// avoid stalling the async runtime.
+    async fn ensure_forward(&self) -> Result<std::net::SocketAddr, DriverError> {
+        let mut guard = self.forward.lock().await;
+        match guard.take() {
+            Some(mut forward) => {
+                // `AdbForward::ensure` shells out to the blocking `adb` CLI, so
+                // run it off the async runtime (parity with the `None` branch).
+                // Move the forward into the blocking task and hand it back so
+                // the re-issued rule's ownership stays in this transport.
+                let forward = tokio::task::spawn_blocking(move || forward.ensure().map(|()| forward))
+                    .await
+                    .map_err(|e| DriverError::CommandFailed(format!("adb forward task failed: {e}")))?
+                    .map_err(map_forward_error)?;
+                *guard = Some(forward);
+            }
+            None => {
+                let serial = self.serial.clone();
+                let local_port = self.local_port;
+                let device_port = self.device_port;
+                let forward = tokio::task::spawn_blocking(move || {
+                    AdbForward::establish(&serial, local_port, device_port)
+                })
+                .await
+                .map_err(|e| DriverError::CommandFailed(format!("adb forward task failed: {e}")))?
+                .map_err(map_forward_error)?;
+                *guard = Some(forward);
+            }
+        }
+        let addr_str = guard.as_ref().expect("forward set above").local_addr();
+        addr_str
+            .parse()
+            .map_err(|e| DriverError::ConnectionLost(format!("bad forward address {addr_str}: {e}")))
+    }
+}
+
+#[async_trait]
+impl AgentTransport for AndroidTransport {
+    /// Establish (or re-establish) the `adb forward` and open an
+    /// [`AgentClient`] against `127.0.0.1:<local_port>`, verified by heartbeat.
+    ///
+    /// On the first call the forward is created with the requested
+    /// `local_port`; the bound port is then pinned so subsequent reconnects
+    /// reach the same loopback address. Because this re-issues the forward, the
+    /// default [`recover`](AgentTransport::recover) ladder (a plain
+    /// `create_client`) already covers both the socket- and forward-level
+    /// reconnects of ADR-3 §4.
+    async fn create_client(&self) -> Result<AgentClient, DriverError> {
+        let addr = self.ensure_forward().await?;
+        let mut client = AgentClient::new(addr);
+        client.connect().await.map_err(map_client_error)?;
+        client.heartbeat().await.map_err(map_client_error)?;
+        Ok(client)
     }
 }
 
@@ -112,29 +172,11 @@ fn expect_ok(response: Response) -> Result<(), DriverError> {
 /// An [`AutomationDriver`] backed by the on-device Kotlin agent, reached over an
 /// [`AdbForward`] tunnel.
 ///
-/// The driver owns the forward and lazily creates an [`AgentClient`] when
-/// [`connect`](AutomationDriver::connect) is called. The client is wrapped in a
-/// [`tokio::sync::Mutex`] so the `&self` trait methods can acquire mutable
-/// access for sending requests; the forward is likewise behind a `Mutex` so the
-/// reconnect path can re-issue the rule via [`AdbForward::ensure`].
-pub struct AndroidDriver {
-    /// adb serial of the target device (emulator-5554 | host:port | USB serial).
-    serial: String,
-    /// Requested host loopback port; `None` lets adb auto-pick on first connect.
-    local_port: Option<u16>,
-    /// Agent's TCP port inside the device.
-    device_port: u16,
-    /// The established forward, set on [`connect`](AutomationDriver::connect).
-    forward: Mutex<Option<AdbForward>>,
-    /// The protocol client over the forwarded socket.
-    client: Mutex<Option<AgentClient>>,
-    /// Number of successful reconnect/recovery events since creation.
-    recovery_count: AtomicU64,
-    /// Remembered target package so it can be re-sent after recovery.
-    target_bundle_id: Mutex<Option<String>>,
-}
+/// This is a type alias for [`AgentSession`] specialized to the Android
+/// transport; see the [module docs](self) for the connection path.
+pub type AndroidDriver = AgentSession<AndroidTransport>;
 
-impl AndroidDriver {
+impl AgentSession<AndroidTransport> {
     /// Create a driver for the given adb `serial`.
     ///
     /// * `serial` - adb device serial (`emulator-5554`, `host:port` for
@@ -147,15 +189,22 @@ impl AndroidDriver {
     /// No connection is established until [`connect`](AutomationDriver::connect)
     /// is called.
     pub fn new(serial: impl Into<String>, local_port: Option<u16>, device_port: u16) -> Self {
-        Self {
+        Self::from_transport(AndroidTransport {
             serial: serial.into(),
             local_port,
             device_port,
             forward: Mutex::new(None),
-            client: Mutex::new(None),
-            recovery_count: AtomicU64::new(0),
-            target_bundle_id: Mutex::new(None),
-        }
+        })
+    }
+
+    /// The adb serial this driver targets.
+    pub fn serial(&self) -> &str {
+        &self.transport.serial
+    }
+
+    /// The agent's device-side TCP port.
+    pub fn device_port(&self) -> u16 {
+        self.transport.device_port
     }
 
     /// **Test-support only.** Build a driver with a pre-connected
@@ -179,597 +228,7 @@ impl AndroidDriver {
         *driver.client.lock().await = Some(client);
         driver
     }
-
-    /// The adb serial this driver targets.
-    pub fn serial(&self) -> &str {
-        &self.serial
-    }
-
-    /// The agent's device-side TCP port.
-    pub fn device_port(&self) -> u16 {
-        self.device_port
-    }
-
-    /// Returns the number of successful recovery events since creation.
-    ///
-    /// The executor polls this to detect a mid-action reconnect and reset its
-    /// wait timer accordingly (parity with [`AgentDriver`]).
-    pub fn recovery_count(&self) -> u64 {
-        self.recovery_count.load(Ordering::Relaxed)
-    }
-
-    /// Establish (or re-establish) the `adb forward` and open an
-    /// [`AgentClient`] against `127.0.0.1:<local_port>`, verified by heartbeat.
-    ///
-    /// On the first call the forward is created with the requested
-    /// `local_port`; the bound port is then pinned so subsequent reconnects
-    /// reach the same loopback address.
-    async fn create_client(&self) -> Result<AgentClient, DriverError> {
-        let addr = self.ensure_forward().await?;
-        let mut client = AgentClient::new(addr);
-        client.connect().await.map_err(map_client_error)?;
-        client.heartbeat().await.map_err(map_client_error)?;
-        Ok(client)
-    }
-
-    /// Ensure a forward rule exists and return the loopback `SocketAddr` to
-    /// connect to.
-    ///
-    /// First call establishes the rule (adb auto-picks a port when
-    /// `local_port` is `None`). Later calls re-issue the existing rule via
-    /// [`AdbForward::ensure`] (idempotent; preserves the bound port), covering
-    /// the forward-level reconnect of ADR-3 §4.
-    ///
-    /// `adb` is a blocking CLI, so the call runs inside `spawn_blocking` to
-    /// avoid stalling the async runtime.
-    async fn ensure_forward(&self) -> Result<std::net::SocketAddr, DriverError> {
-        let mut guard = self.forward.lock().await;
-        match guard.take() {
-            Some(mut forward) => {
-                // `AdbForward::ensure` shells out to the blocking `adb` CLI, so
-                // run it off the async runtime (parity with the `None` branch).
-                // Move the forward into the blocking task and hand it back so
-                // the re-issued rule's ownership stays in this driver.
-                let forward = tokio::task::spawn_blocking(move || {
-                    forward.ensure().map(|()| forward)
-                })
-                .await
-                .map_err(|e| DriverError::CommandFailed(format!("adb forward task failed: {e}")))?
-                .map_err(map_forward_error)?;
-                *guard = Some(forward);
-            }
-            None => {
-                let serial = self.serial.clone();
-                let local_port = self.local_port;
-                let device_port = self.device_port;
-                let forward = tokio::task::spawn_blocking(move || {
-                    AdbForward::establish(&serial, local_port, device_port)
-                })
-                .await
-                .map_err(|e| DriverError::CommandFailed(format!("adb forward task failed: {e}")))?
-                .map_err(map_forward_error)?;
-                *guard = Some(forward);
-            }
-        }
-        let addr_str = guard
-            .as_ref()
-            .expect("forward set above")
-            .local_addr();
-        addr_str
-            .parse()
-            .map_err(|e| DriverError::ConnectionLost(format!("bad forward address {addr_str}: {e}")))
-    }
-
-    /// Returns `true` if the error indicates a broken connection that a
-    /// reconnect may recover.
-    fn is_connection_error(err: &DriverError) -> bool {
-        matches!(
-            err,
-            DriverError::NotConnected
-                | DriverError::ConnectionLost(_)
-                | DriverError::Io(_)
-                | DriverError::Timeout
-        )
-    }
-
-    /// Attempt to recover a dead connection.
-    ///
-    /// The realized ladder (ADR-3 §4): re-issue the `adb forward` rule (covered
-    /// inside [`create_client`] → [`ensure_forward`]) and re-open the TCP
-    /// socket, then restore the target package. On success the recovery counter
-    /// is bumped.
-    ///
-    /// **Seam for story #88:** the heavier `terminate_agent` + `spawn_agent` +
-    /// `wait_for_ready` rung (ADR-2 §4) requires `AndroidLifecycle`, which is
-    /// introduced in #88. When that lands, #88 attaches an
-    /// `Option<Arc<AndroidLifecycle>>` (mirroring
-    /// [`AgentDriver::with_lifecycle`](crate::agent_driver::AgentDriver)) and
-    /// inserts the respawn step here, after this socket-level reconnect fails.
-    /// No protocol or trait change is needed for that addition.
-    async fn attempt_recovery(&self) -> Result<(), DriverError> {
-        info!(serial = %self.serial, "android agent connection lost, re-establishing forward + socket");
-        let client = self.create_client().await?;
-        *self.client.lock().await = Some(client);
-        self.restore_target().await?;
-        self.recovery_count.fetch_add(1, Ordering::Relaxed);
-        info!("android reconnect successful");
-        Ok(())
-    }
-
-    /// Re-send `SetTarget` if a target package was previously set, so the
-    /// reconnected agent automates the right package.
-    async fn restore_target(&self) -> Result<(), DriverError> {
-        let bundle_id = self.target_bundle_id.lock().await.clone();
-        if let Some(bid) = bundle_id {
-            info!(bundle_id = %bid, "restoring target after android reconnect");
-            let response = self
-                .send_raw(&Request::SetTarget { bundle_id: bid })
-                .await?;
-            expect_ok(response)?;
-        }
-        Ok(())
-    }
-
-    /// Send a request, retrying once via [`attempt_recovery`] on a connection
-    /// error.
-    async fn send(&self, request: &Request) -> Result<Response, DriverError> {
-        let result = self.send_raw(request).await;
-        match &result {
-            Err(e) if Self::is_connection_error(e) => {
-                warn!(error = %e, opcode = request.opcode_name(), "android connection error, attempting recovery");
-                self.attempt_recovery().await?;
-                self.send_raw(request).await
-            }
-            _ => result,
-        }
-    }
-
-    /// Send a request without recovery wrapping.
-    async fn send_raw(&self, request: &Request) -> Result<Response, DriverError> {
-        let mut guard = self.client.lock().await;
-        let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
-        client.send(request).await.map_err(map_client_error)
-    }
-
-    /// Send a request with a custom read timeout, retrying once on a connection
-    /// error. When `timeout_ms` is `None`, falls back to [`send`](Self::send).
-    async fn send_with_read_timeout(
-        &self,
-        request: &Request,
-        timeout_ms: Option<u64>,
-    ) -> Result<Response, DriverError> {
-        let result = self.send_raw_with_read_timeout(request, timeout_ms).await;
-        match &result {
-            Err(e) if Self::is_connection_error(e) => {
-                warn!(error = %e, opcode = request.opcode_name(), "android connection error (with timeout), attempting recovery");
-                self.attempt_recovery().await?;
-                self.send_raw_with_read_timeout(request, timeout_ms).await
-            }
-            _ => result,
-        }
-    }
-
-    /// Send a request with a custom read timeout, without recovery wrapping.
-    async fn send_raw_with_read_timeout(
-        &self,
-        request: &Request,
-        timeout_ms: Option<u64>,
-    ) -> Result<Response, DriverError> {
-        match timeout_ms {
-            Some(ms) => {
-                // Wait longer than the agent's internal retry window so the Rust
-                // side does not drop the socket before the agent replies
-                // (parity with AgentDriver).
-                let read_timeout = Duration::from_millis(ms + 15_000);
-                let mut guard = self.client.lock().await;
-                let client = guard.as_mut().ok_or(DriverError::NotConnected)?;
-                client
-                    .send_with_timeout(request, read_timeout)
-                    .await
-                    .map_err(map_client_error)
-            }
-            None => self.send_raw(request).await,
-        }
-    }
 }
-
-#[async_trait]
-impl AutomationDriver for AndroidDriver {
-    #[instrument(skip(self), level = "debug")]
-    async fn connect(&mut self) -> Result<(), DriverError> {
-        let client = self.create_client().await?;
-        *self.client.lock().await = Some(client);
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        self.client.try_lock().map(|g| g.is_some()).unwrap_or(false)
-    }
-
-    fn recovery_count(&self) -> u64 {
-        self.recovery_count.load(Ordering::Relaxed)
-    }
-
-    async fn tap_location(&self, x: i32, y: i32) -> Result<(), DriverError> {
-        let response = self.send(&Request::TapCoord { x, y }).await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn tap_element(&self, identifier: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TapElement {
-                selector: identifier.to_string(),
-                timeout_ms: None,
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn tap_by_label(&self, label: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TapByLabel {
-                label: label.to_string(),
-                timeout_ms: None,
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn tap_with_type(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: &str,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TapWithType {
-                selector: selector.to_string(),
-                by_label,
-                element_type: element_type.to_string(),
-                timeout_ms: None,
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn swipe(
-        &self,
-        start_x: i32,
-        start_y: i32,
-        end_x: i32,
-        end_y: i32,
-        duration: Option<f64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::Swipe {
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                duration,
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn long_press(&self, x: i32, y: i32, duration: f64) -> Result<(), DriverError> {
-        let response = self.send(&Request::LongPress { x, y, duration }).await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn type_text(&self, text: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::TypeText {
-                text: text.to_string(),
-            })
-            .await?;
-        expect_ok(response)
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn dump_tree(&self) -> Result<Vec<UIElement>, DriverError> {
-        // Large hierarchies can take well over 30s to snapshot; use a generous
-        // timeout to avoid dropping the connection mid-snapshot (parity with
-        // AgentDriver).
-        const DUMP_TREE_TIMEOUT_MS: u64 = 120_000;
-        let response = self
-            .send_with_read_timeout(&Request::DumpTree, Some(DUMP_TREE_TIMEOUT_MS))
-            .await?;
-        match response {
-            Response::Tree { json } => {
-                let elements: Vec<UIElement> = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                debug!(element_count = elements.len(), "android tree dumped");
-                Ok(elements)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn get_element_value(&self, identifier: &str) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send(&Request::GetValue {
-                selector: identifier.to_string(),
-                by_label: false,
-                element_type: None,
-                timeout_ms: None,
-            })
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn get_element_value_by_label(&self, label: &str) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send(&Request::GetValue {
-                selector: label.to_string(),
-                by_label: true,
-                element_type: None,
-                timeout_ms: None,
-            })
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn get_value_with_type(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: &str,
-    ) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send(&Request::GetValue {
-                selector: selector.to_string(),
-                by_label,
-                element_type: Some(element_type.to_string()),
-                timeout_ms: None,
-            })
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn screenshot(&self) -> Result<Vec<u8>, DriverError> {
-        let response = self.send(&Request::Screenshot).await?;
-        match response {
-            Response::Screenshot { data } => {
-                debug!(bytes = data.len(), "android screenshot captured");
-                Ok(data)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    async fn tap_element_with_timeout(
-        &self,
-        identifier: &str,
-        timeout_ms: Option<u64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::TapElement {
-                    selector: identifier.to_string(),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn tap_by_label_with_timeout(
-        &self,
-        label: &str,
-        timeout_ms: Option<u64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::TapByLabel {
-                    label: label.to_string(),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn tap_with_type_with_timeout(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: &str,
-        timeout_ms: Option<u64>,
-    ) -> Result<(), DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::TapWithType {
-                    selector: selector.to_string(),
-                    by_label,
-                    element_type: element_type.to_string(),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        expect_ok(response)
-    }
-
-    async fn get_value_with_timeout(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: Option<&str>,
-        timeout_ms: Option<u64>,
-    ) -> Result<Option<String>, DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::GetValue {
-                    selector: selector.to_string(),
-                    by_label,
-                    element_type: element_type.map(|s| s.to_string()),
-                    timeout_ms,
-                },
-                timeout_ms,
-            )
-            .await?;
-        match response {
-            Response::Value { value } => Ok(value),
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element(&self, identifier: &str) -> Result<Option<UIElement>, DriverError> {
-        self.find_element_with_type(identifier, false, None).await
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element_by_label(&self, label: &str) -> Result<Option<UIElement>, DriverError> {
-        self.find_element_with_type(label, true, None).await
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element_with_type(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: Option<&str>,
-    ) -> Result<Option<UIElement>, DriverError> {
-        let response = self
-            .send(&Request::FindElement {
-                selector: selector.to_string(),
-                by_label,
-                element_type: element_type.map(|s| s.to_string()),
-            })
-            .await?;
-        match response {
-            Response::Element { json } => {
-                let element: Option<UIElement> = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                Ok(element)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn find_element_with_read_timeout(
-        &self,
-        selector: &str,
-        by_label: bool,
-        element_type: Option<&str>,
-        read_timeout_ms: Option<u64>,
-    ) -> Result<Option<UIElement>, DriverError> {
-        let response = self
-            .send_with_read_timeout(
-                &Request::FindElement {
-                    selector: selector.to_string(),
-                    by_label,
-                    element_type: element_type.map(|s| s.to_string()),
-                },
-                read_timeout_ms,
-            )
-            .await?;
-        match response {
-            Response::Element { json } => {
-                let element: Option<UIElement> = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                Ok(element)
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn set_target(&self, bundle_id: &str) -> Result<(), DriverError> {
-        let response = self
-            .send(&Request::SetTarget {
-                bundle_id: bundle_id.to_string(),
-            })
-            .await?;
-        expect_ok(response)?;
-        // Remember for restore after reconnect.
-        *self.target_bundle_id.lock().await = Some(bundle_id.to_string());
-        Ok(())
-    }
-
-    #[instrument(skip(self), level = "debug")]
-    async fn get_target_info(&self) -> Result<TargetInfo, DriverError> {
-        let bundle_id = self
-            .target_bundle_id
-            .lock()
-            .await
-            .clone()
-            .unwrap_or_default();
-        let response = self.send(&Request::GetTargetInfo).await?;
-        match response {
-            Response::TargetInfo { json } => {
-                // Deserialize the agent's JSON; bundle_id falls back to what we
-                // tracked locally if the agent omits it.
-                #[derive(serde::Deserialize, Default)]
-                struct AgentTargetInfo {
-                    #[serde(default)]
-                    state: String,
-                    #[serde(default)]
-                    display_name: String,
-                    #[serde(default)]
-                    version: String,
-                    #[serde(default)]
-                    build: String,
-                    #[serde(default)]
-                    bundle_id: String,
-                }
-                let partial: AgentTargetInfo = serde_json::from_str(&json)
-                    .map_err(|e| DriverError::JsonParse(e.to_string()))?;
-                Ok(TargetInfo {
-                    bundle_id: if partial.bundle_id.is_empty() {
-                        bundle_id
-                    } else {
-                        partial.bundle_id
-                    },
-                    display_name: partial.display_name,
-                    version: partial.version,
-                    build: partial.build,
-                    state: partial.state,
-                })
-            }
-            other => Err(DriverError::CommandFailed(format!(
-                "unexpected response: {other:?}"
-            ))),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -786,7 +245,10 @@ impl AutomationDriver for AndroidDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::encode_response;
+    use crate::agent_client::AgentClientError;
+    use crate::agent_session::expect_ok;
+    use crate::driver::AutomationDriver;
+    use crate::protocol::{encode_response, Response};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
