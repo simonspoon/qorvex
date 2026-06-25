@@ -7,6 +7,7 @@
 
 package com.qorvex.agent
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.UiAutomation
 import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
@@ -19,6 +20,26 @@ class CommandHandler {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val uiDevice: UiDevice = UiDevice.getInstance(instrumentation)
     private val uiAutomation: UiAutomation = instrumentation.uiAutomation
+
+    init {
+        // The agent serves commands on the instrumentation test thread (no
+        // running Looper of its own). A bare `instrumentation.uiAutomation`
+        // never enables window-content retrieval, so `rootInActiveWindow`
+        // returns null on a real device even when an app is foregrounded
+        // (device-side `uiautomator dump` works, proving the a11y pipeline is
+        // healthy — this is purely the UiAutomation connection not being
+        // configured). Setting the service info forces the accessibility
+        // connection to (re)establish and start tracking the active window.
+        // Guard the *assignment*, not just the mutation: serviceInfo is @NonNull,
+        // so writing back null (if the getter ever returns null) would throw in
+        // this init block and the agent would never start serving.
+        uiAutomation.serviceInfo?.let { info ->
+            info.flags = info.flags or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            uiAutomation.serviceInfo = info
+        }
+    }
 
     /** Currently targeted Android package name (set via SetTarget). */
     @Volatile

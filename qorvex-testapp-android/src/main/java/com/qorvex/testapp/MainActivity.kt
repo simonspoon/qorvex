@@ -98,6 +98,11 @@ class MainActivity : Activity() {
     private fun tabButton(id: String, label: String): Button =
         Button(this).apply {
             setId(resId(id))
+            // Android Buttons default to all-caps display, which surfaces as an
+            // uppercased accessibility label ("CONTROLS"); the iOS sample shows
+            // the authored casing. Disable it so labels match cross-platform and
+            // tap-by-label parity holds.
+            isAllCaps = false
             text = label
             setOnClickListener { showSection(label) }
         }
@@ -121,6 +126,7 @@ class MainActivity : Activity() {
     private fun LinearLayout.button(id: String, label: String, onClick: () -> Unit): Button {
         val b = Button(context).apply {
             setId(resId(id))
+            isAllCaps = false // keep authored casing for cross-platform label parity
             text = label
             setOnClickListener { onClick() }
         }

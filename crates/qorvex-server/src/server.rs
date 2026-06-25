@@ -374,6 +374,11 @@ impl ServerState {
                 message: format!("Invalid UDID format: {}", udid),
             };
         }
+        // Selecting an iOS device retires any Android selection so device/agent
+        // routing stays mutually exclusive (symmetric with the Android boot path
+        // clearing `simulator_udid`); otherwise a stale `android_serial` would
+        // misroute start/stop-target to adb on an iOS session.
+        self.android_serial = None;
         // Check if the UDID belongs to a known simulator.
         if self.cached_devices.iter().any(|d| d.udid == udid) {
             self.is_physical_device = false;
@@ -978,13 +983,21 @@ impl ServerState {
                 message: "No target set. Use set-target first.".to_string(),
             };
         };
-        let Some(ref udid) = self.simulator_udid else {
+        // Launch is platform-specific and agent-independent (mirrors iOS
+        // Simctl): route to adb when an Android device is selected, else
+        // Simctl. Android target selection clears `simulator_udid`, so the
+        // serial check distinguishes the two.
+        let launch_result = if let Some(ref serial) = self.android_serial {
+            Adb::launch_app(serial, bundle_id).map_err(|e| e.to_string())
+        } else if let Some(ref udid) = self.simulator_udid {
+            Simctl::launch_app(udid, bundle_id).map_err(|e| e.to_string())
+        } else {
             return IpcResponse::CommandResult {
                 success: false,
-                message: "No simulator selected.".to_string(),
+                message: "No device selected.".to_string(),
             };
         };
-        let (response, action_result) = match Simctl::launch_app(udid, bundle_id) {
+        let (response, action_result) = match launch_result {
             Ok(()) => (
                 IpcResponse::CommandResult {
                     success: true,
@@ -1015,13 +1028,17 @@ impl ServerState {
                 message: "No target set. Use set-target first.".to_string(),
             };
         };
-        let Some(ref udid) = self.simulator_udid else {
+        let terminate_result = if let Some(ref serial) = self.android_serial {
+            Adb::force_stop(serial, bundle_id).map_err(|e| e.to_string())
+        } else if let Some(ref udid) = self.simulator_udid {
+            Simctl::terminate_app(udid, bundle_id).map_err(|e| e.to_string())
+        } else {
             return IpcResponse::CommandResult {
                 success: false,
-                message: "No simulator selected.".to_string(),
+                message: "No device selected.".to_string(),
             };
         };
-        let (response, action_result) = match Simctl::terminate_app(udid, bundle_id) {
+        let (response, action_result) = match terminate_result {
             Ok(()) => (
                 IpcResponse::CommandResult {
                     success: true,

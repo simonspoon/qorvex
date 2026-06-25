@@ -66,6 +66,20 @@ fi
 echo "device: $SERIAL"
 
 # --- bring up server + Android agent + target ---
+# The CLI is a thin client: it connects to a per-session qorvex-server over a
+# unix socket and never auto-spawns it (only the iOS-specific `start` does, and
+# that path runs xcodebuild). So for Android we must (1) spawn the server for
+# this session, then (2) select the adb serial via `boot-device` so the session
+# is Android-routed and `start-agent` knows which device to instrument.
+qorvex-server -s "$SESSION" >/dev/null 2>&1 &
+SERVER_PID=$!
+# Wait (up to ~20s) for the session socket to appear; the server pre-fetches
+# device state on startup so the first bind can take a few seconds under load.
+SOCK="$HOME/.qorvex/qorvex_${SESSION}.sock"
+for _ in $(seq 1 200); do [[ -S "$SOCK" ]] && break; sleep 0.1; done
+[[ -S "$SOCK" ]] || { echo "qorvex-server did not create $SOCK in time" >&2; exit 1; }
+
+q boot-device --platform android "$SERIAL"
 q start-agent --platform android
 q set-target "$PKG"
 q start-target
@@ -103,7 +117,10 @@ check "get-value editable"            bash -c '[[ "$('"${QORVEX[*]}"' -s '"$SESS
 
 # swipe (gesture area reports direction)
 q tap tab_gestures --label || q tap tab_gestures
-q tap gesture_swipe_area   # focus the section if needed
+# The swipe area is a passive gesture surface (not clickable), so a tap on it is
+# non-hittable by design — best-effort only; the directional swipe below does
+# not need a focused element.
+q tap gesture_swipe_area 2>/dev/null || true
 check "swipe up"                      q swipe up
 
 # long-press (status flips to "Long pressed!")

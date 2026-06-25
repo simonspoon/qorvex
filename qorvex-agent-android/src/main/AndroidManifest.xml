@@ -2,6 +2,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
+      The agent binds a localhost TCP ServerSocket (story #85, AgentServer) to
+      speak the Qorvex wire protocol over the `adb forward` tunnel. Android
+      gates socket creation on the INTERNET permission — without it the process
+      is not in the `inet` group and ServerSocket() fails with EPERM. The
+      instrumentation runs in the target app's process, so the permission must
+      live on this (main) host manifest.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      The agent launches and inspects arbitrary target packages (set-target ->
+      getLaunchIntentForPackage, get-target-info). Apps targeting API 30+ are
+      subject to package-visibility filtering and cannot see other packages
+      without a <queries> entry or this permission. As a device-side automation
+      agent (never shipped to Play), it needs to see every installed target.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <!--
       Minimal host application. The Qorvex agent lives in the instrumentation
       (androidTest) APK, mirroring the Swift agent's UITest target. This host
       APK is the target package the instrumentation is wired to.

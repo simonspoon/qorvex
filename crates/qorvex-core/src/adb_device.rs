@@ -375,6 +375,67 @@ impl Adb {
         Ok(())
     }
 
+    /// Launches an installed package's launcher activity, independent of the
+    /// agent. Runs `adb -s <serial> shell monkey -p <package> -c
+    /// android.intent.category.LAUNCHER 1`, which resolves and starts the
+    /// package's MAIN/LAUNCHER activity without the caller needing to know the
+    /// component name. This is the Android analogue of
+    /// [`crate::simctl::Simctl::launch_app`] and backs `start-target`.
+    ///
+    /// `monkey` exits non-zero and prints `No activities found` when the
+    /// package has no launchable activity (or is not installed), which surfaces
+    /// as [`AdbError::CommandFailed`].
+    pub fn launch_app(serial: &str, package: &str) -> Result<(), AdbError> {
+        let output = Command::new("adb")
+            .args([
+                "-s",
+                serial,
+                "shell",
+                "monkey",
+                "-p",
+                package,
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "1",
+            ])
+            .output()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // `monkey` aborts (non-zero) when a package has no launchable activity,
+        // but also prints this marker — keep it as belt-and-suspenders. We do
+        // NOT scan for generic substrings like "Error": monkey echoes the
+        // resolved component at default verbosity, so an activity/package name
+        // containing that word would false-fail an otherwise successful launch.
+        if !output.status.success()
+            || stdout.contains("No activities found")
+            || stderr.contains("No activities found")
+        {
+            return Err(AdbError::CommandFailed(format!(
+                "{}{}",
+                stdout.trim(),
+                stderr.trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Force-stops an installed package, independent of the agent. Runs `adb -s
+    /// <serial> shell am force-stop <package>`. This is the Android analogue of
+    /// [`crate::simctl::Simctl::terminate_app`] and backs `stop-target`.
+    pub fn force_stop(serial: &str, package: &str) -> Result<(), AdbError> {
+        let output = Command::new("adb")
+            .args(["-s", serial, "shell", "am", "force-stop", package])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(AdbError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Captures a screenshot of the device screen, independent of the agent.
     ///
     /// Runs `adb -s <serial> exec-out screencap -p` and returns the PNG bytes
