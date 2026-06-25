@@ -11,8 +11,16 @@
 //   element_type (type)     = short className (last `.`-segment of FQCN)
 //   frame                   = boundsInScreen { x=left, y=top, width, height }
 //   role                    = full className (FQCN, advisory)
-//   hittable                = isClickable && isEnabled && isVisibleToUser
+//   hittable                = isEnabled && isVisibleToUser
 //   children                = recursive getChild(i)
+//
+// ADR-1 amendment (task 107): hittable dropped the `isClickable` term. iOS
+// `isHittable` means "visible & hit-testable" (true for plain labels), not
+// "interactive". The original `isClickable` conflated interactivity with
+// hit-testability, so `wait-for` on a non-clickable label (a status TextView)
+// passed on iOS but timed out on Android. The field's only consumers
+// (executor wait-for / wait-for-not, CLI display) want "is it really present &
+// tappable-at-location"; taps go by coordinate regardless of clickability.
 
 package com.qorvex.agent
 
@@ -116,9 +124,14 @@ object NodeMapper {
         return if (cls.isNullOrEmpty()) null else cls
     }
 
-    /** ADR-1 hittable: isClickable && isEnabled && isVisibleToUser. */
+    /**
+     * ADR-1 hittable (amended, task 107): isEnabled && isVisibleToUser.
+     * Matches iOS `isHittable` ("visible & hit-testable"); `isClickable` was
+     * dropped because it conflated interactivity with hit-testability and broke
+     * `wait-for` parity on non-clickable labels.
+     */
     fun hittable(node: AccessibilityNodeInfo): Boolean =
-        node.isClickable && node.isEnabled && node.isVisibleToUser
+        node.isEnabled && node.isVisibleToUser
 
     fun frame(node: AccessibilityNodeInfo): FrameJSON {
         val r = Rect()

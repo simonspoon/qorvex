@@ -63,7 +63,7 @@ parity and the frozen JSON keys without an emulator.
 | `element_type` (`type`) | short `className` (last `.`-segment) |
 | `frame` | `getBoundsInScreen` → `{x=left, y=top, width, height}` |
 | `role` | full `className` (FQCN, advisory) |
-| `hittable` | `isClickable && isEnabled && isVisibleToUser` |
+| `hittable` | `isEnabled && isVisibleToUser` (ADR-1 amended, task 107: `isClickable` dropped to match iOS `isHittable`) |
 | `children` | recursive `getChild(i)` |
 
 ## Build & test
