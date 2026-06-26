@@ -34,6 +34,10 @@ pub struct ServerState {
     pub executor: Option<ActionExecutor>,
     pub agent_lifecycle: Option<Arc<AgentLifecycle>>,
     pub cached_devices: Vec<SimulatorDevice>,
+    /// Cached Android devices (adb serials) for completion and `use-device`
+    /// resolution. Seeded at startup and refreshed on `list-devices
+    /// --platform android`, mirroring `cached_devices` for iOS.
+    pub cached_android_devices: Vec<qorvex_core::adb_device::AndroidDevice>,
     pub target_bundle_id: Option<String>,
     pub default_timeout_ms: u64,
     pub agent_port: u16,
@@ -80,6 +84,7 @@ impl ServerState {
         let config = QorvexConfig::load();
         let agent_port = config.agent_port();
         let cached_devices = Simctl::list_devices().unwrap_or_default();
+        let cached_android_devices = Adb::list_devices().unwrap_or_default();
         let simulator_udid = Simctl::get_booted_udid().ok();
         let executor = simulator_udid
             .as_ref()
@@ -100,6 +105,7 @@ impl ServerState {
             executor,
             agent_lifecycle: None,
             cached_devices,
+            cached_android_devices,
             target_bundle_id: None,
             default_timeout_ms: 5000,
             agent_port,
@@ -167,6 +173,7 @@ impl ServerState {
             IpcRequest::GetCompletionData => IpcResponse::CompletionData {
                 elements: Vec::new(),
                 devices: self.cached_devices.clone(),
+                android_devices: self.cached_android_devices.clone(),
             },
 
             // ── Execute ─────────────────────────────────────────────────
@@ -317,7 +324,10 @@ impl ServerState {
                 },
             },
             Platform::Android => match Adb::list_devices() {
-                Ok(devices) => IpcResponse::AndroidDeviceList { devices },
+                Ok(devices) => {
+                    self.cached_android_devices = devices.clone();
+                    IpcResponse::AndroidDeviceList { devices }
+                }
                 Err(e) => IpcResponse::Error {
                     message: e.to_string(),
                 },
@@ -360,6 +370,26 @@ impl ServerState {
         IpcResponse::PhysicalDeviceList { devices }
     }
 
+    /// Switch the session to an Android device addressed by `serial`.
+    ///
+    /// Device/agent routing is mutually exclusive between platforms, so this
+    /// retires all iOS selection state (symmetric with the Android boot path,
+    /// which clears `simulator_udid`): a stale `simulator_udid`/executor would
+    /// misroute actions to a now-inactive simulator agent, and stale physical
+    /// iOS fields would mislead the connection paths.
+    fn select_android_device(&mut self, serial: &str) -> IpcResponse {
+        self.android_serial = Some(serial.to_string());
+        self.simulator_udid = None;
+        self.executor = None;
+        self.is_physical_device = false;
+        self.use_core_device = false;
+        self.direct_host = None;
+        IpcResponse::CommandResult {
+            success: true,
+            message: format!("Using Android device {}", serial),
+        }
+    }
+
     async fn handle_use_device(&mut self, udid: &str) -> IpcResponse {
         let udid = strip_quotes(udid);
         if udid.is_empty() {
@@ -368,7 +398,27 @@ impl ServerState {
                 message: "use_device requires a UDID".to_string(),
             };
         }
+        // An adb serial (e.g. `emulator-5554`, `192.168.1.10:5555`, or a
+        // hardware serial) selects an Android device. The Android cache — seeded
+        // at startup, refreshed on `list-devices --platform android`, and the
+        // source of the completion dropdown — is the fast path and spawns no
+        // process. Selecting from the dropdown (or any iOS UDID) hits here.
+        if self
+            .cached_android_devices
+            .iter()
+            .any(|d| d.serial == udid && d.is_ready())
+        {
+            return self.select_android_device(udid);
+        }
+        // adb serials do not match the iOS UDID format, so a non-UDID miss may
+        // be an Android device connected since the last cache refresh; confirm
+        // it against live adb. iOS UDIDs skip this and never spawn `adb`.
         if !is_valid_udid(udid) {
+            if matches!(Adb::list_devices(), Ok(devices)
+                if devices.iter().any(|d| d.serial == udid && d.is_ready()))
+            {
+                return self.select_android_device(udid);
+            }
             return IpcResponse::CommandResult {
                 success: false,
                 message: format!("Invalid UDID format: {}", udid),
@@ -1110,6 +1160,7 @@ impl ServerState {
             return IpcResponse::CompletionData {
                 elements: Vec::new(),
                 devices: Vec::new(),
+                android_devices: Vec::new(),
             };
         };
 
@@ -1119,11 +1170,13 @@ impl ServerState {
                 IpcResponse::CompletionData {
                     elements,
                     devices: Vec::new(),
+                    android_devices: Vec::new(),
                 }
             }
             Err(_) => IpcResponse::CompletionData {
                 elements: Vec::new(),
                 devices: Vec::new(),
+                android_devices: Vec::new(),
             },
         }
     }

@@ -320,6 +320,8 @@ pub enum IpcResponse {
         elements: Vec<crate::element::UIElement>,
         /// Cached simulator devices.
         devices: Vec<crate::simctl::SimulatorDevice>,
+        /// Cached Android devices/emulators (adb serials) for completion.
+        android_devices: Vec<crate::adb_device::AndroidDevice>,
     },
 
     /// Current timeout value.

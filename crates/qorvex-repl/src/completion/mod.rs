@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod fuzzy;
 
+use qorvex_core::adb_device::AndroidDevice;
 use qorvex_core::element::UIElement;
 use qorvex_core::simctl::{InstalledApp, SimulatorDevice};
 
@@ -104,6 +105,7 @@ impl CompletionState {
         input: &str,
         cached_elements: &[UIElement],
         cached_devices: &[SimulatorDevice],
+        cached_android_devices: &[AndroidDevice],
         cached_apps: &[InstalledApp],
         is_loading: bool,
     ) {
@@ -121,7 +123,9 @@ impl CompletionState {
                         ArgCompletion::ElementSelector => {
                             element_selector_candidates(&prefix, cached_elements, command.name)
                         }
-                        ArgCompletion::DeviceUdid => device_candidates(&prefix, cached_devices),
+                        ArgCompletion::DeviceUdid => {
+                            device_candidates(&prefix, cached_devices, cached_android_devices)
+                        }
                         ArgCompletion::BundleId => bundle_id_candidates(&prefix, cached_apps),
                         ArgCompletion::None => Vec::new(),
                     }
@@ -312,45 +316,74 @@ fn element_label_candidates(prefix: &str, elements: &[UIElement]) -> Vec<Candida
     candidates
 }
 
-/// Generate device UDID completion candidates with fuzzy matching.
-fn device_candidates(prefix: &str, devices: &[SimulatorDevice]) -> Vec<Candidate> {
+/// Pick the better of two fuzzy matches against the same candidate.
+///
+/// `primary` scores the field that will be *displayed* (the UDID/serial);
+/// `secondary` scores an alternate field (name/model) the user might type. The
+/// match indices are kept only when the primary field wins, since the
+/// secondary field's indices don't map onto the displayed text.
+fn best_match(
+    primary: Option<(i64, Vec<usize>)>,
+    secondary: Option<(i64, Vec<usize>)>,
+) -> Option<(i64, Vec<usize>)> {
+    match (primary, secondary) {
+        (Some((p_score, p_indices)), Some((s_score, _))) => {
+            if p_score >= s_score {
+                Some((p_score, p_indices))
+            } else {
+                Some((s_score, Vec::new()))
+            }
+        }
+        (Some(m), None) => Some(m),
+        (None, Some((score, _))) => Some((score, Vec::new())),
+        (None, None) => None,
+    }
+}
+
+/// Generate device completion candidates with fuzzy matching.
+///
+/// Covers both iOS simulator UDIDs and Android adb serials so the `use-device`
+/// / `boot-device` dropdown lists every selectable device regardless of
+/// platform.
+fn device_candidates(
+    prefix: &str,
+    devices: &[SimulatorDevice],
+    android_devices: &[AndroidDevice],
+) -> Vec<Candidate> {
     let filter = FuzzyFilter::new();
 
     let mut candidates: Vec<Candidate> = devices
         .iter()
         .filter_map(|dev| {
-            // Try matching against UDID
-            let udid_match = filter.score(prefix, &dev.udid);
-            // Try matching against name
-            let name_match = filter.score(prefix, &dev.name);
-
-            // Use the best match
-            let (score, indices) = match (udid_match, name_match) {
-                (Some((udid_score, udid_indices)), Some((name_score, _))) => {
-                    if udid_score >= name_score {
-                        (udid_score, udid_indices)
-                    } else {
-                        // Use empty indices when name matched better,
-                        // since we display the UDID
-                        (name_score, Vec::new())
-                    }
-                }
-                (Some(m), None) => m,
-                (None, Some((score, _))) => (score, Vec::new()),
-                (None, None) => return None,
-            };
-
-            let description = format!("{} ({})", dev.name, dev.state);
+            // Match the displayed UDID, falling back to the device name.
+            let (score, indices) =
+                best_match(filter.score(prefix, &dev.udid), filter.score(prefix, &dev.name))?;
 
             Some(Candidate {
                 text: dev.udid.clone(),
-                description,
+                description: format!("{} ({})", dev.name, dev.state),
                 kind: CandidateKind::DeviceUdid,
                 score,
                 match_indices: indices,
             })
         })
         .collect();
+
+    // Android adb serials are matched on the serial (the addressable id) and,
+    // when present, the device model for a friendlier fuzzy target.
+    candidates.extend(android_devices.iter().filter_map(|dev| {
+        let model_match = dev.model.as_deref().and_then(|m| filter.score(prefix, m));
+        let (score, indices) = best_match(filter.score(prefix, &dev.serial), model_match)?;
+
+        let model = dev.model.as_deref().unwrap_or("android");
+        Some(Candidate {
+            text: dev.serial.clone(),
+            description: format!("{} ({})", model, dev.state),
+            kind: CandidateKind::DeviceUdid,
+            score,
+            match_indices: indices,
+        })
+    }));
 
     // Sort by score descending
     candidates.sort_by(|a, b| b.score.cmp(&a.score));
@@ -576,4 +609,53 @@ fn option_candidates(prefix: &str, command: &'static CommandDef, input: &str) ->
 
     candidates.sort_by(|a, b| b.score.cmp(&a.score));
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qorvex_core::adb_device::DeviceKind;
+
+    fn android(serial: &str, model: Option<&str>) -> AndroidDevice {
+        AndroidDevice {
+            serial: serial.to_string(),
+            state: "device".to_string(),
+            kind: DeviceKind::Emulator,
+            model: model.map(|m| m.to_string()),
+            product: None,
+            device: None,
+            transport_id: None,
+        }
+    }
+
+    fn sim(udid: &str, name: &str) -> SimulatorDevice {
+        SimulatorDevice {
+            udid: udid.to_string(),
+            name: name.to_string(),
+            state: "Booted".to_string(),
+            device_type: None,
+        }
+    }
+
+    #[test]
+    fn device_candidates_include_android_serials() {
+        let sims = vec![sim("A1B2C3D4-0000-0000-0000-000000000000", "iPhone 15")];
+        let droids = vec![android("emulator-5554", Some("Pixel_7"))];
+
+        // Empty prefix lists everything across both platforms.
+        let all = device_candidates("", &sims, &droids);
+        assert!(all.iter().any(|c| c.text == "emulator-5554"));
+        assert!(all.iter().any(|c| c.text.starts_with("A1B2C3D4")));
+
+        // The adb serial is itself completable.
+        let by_serial = device_candidates("emu", &sims, &droids);
+        assert_eq!(
+            by_serial.iter().filter(|c| c.text == "emulator-5554").count(),
+            1
+        );
+
+        // And so is the Android model name (resolves to the serial).
+        let by_model = device_candidates("pixel", &sims, &droids);
+        assert!(by_model.iter().any(|c| c.text == "emulator-5554"));
+    }
 }

@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tui_input::Input;
 
 use qorvex_core::action::ActionType;
+use qorvex_core::adb_device::AndroidDevice;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
 use qorvex_core::simctl::{InstalledApp, Simctl, SimulatorDevice};
@@ -100,6 +101,7 @@ struct StartupResult {
     messages: Vec<Line<'static>>,
     cached_elements: Vec<UIElement>,
     cached_devices: Vec<SimulatorDevice>,
+    cached_android_devices: Vec<AndroidDevice>,
 }
 
 /// Application state.
@@ -131,6 +133,8 @@ pub struct App {
     pub cached_elements: Vec<UIElement>,
     /// Cached simulator devices.
     pub cached_devices: Vec<SimulatorDevice>,
+    /// Cached Android devices (adb serials) for completion.
+    pub cached_android_devices: Vec<AndroidDevice>,
     /// Cached installed apps for bundle ID completion.
     pub cached_apps: Vec<InstalledApp>,
 
@@ -257,6 +261,7 @@ impl App {
             client: None,
             cached_elements: Vec::new(),
             cached_devices: Vec::new(),
+            cached_android_devices: Vec::new(),
             cached_apps: Vec::new(),
             app_update_rx: Some(app_rx),
             app_fetch_trigger_tx: Some(app_fetch_trigger_tx),
@@ -305,11 +310,15 @@ impl App {
                     }
                     _ => {}
                 }
-                if let Ok(IpcResponse::CompletionData { elements, devices }) =
-                    c.send(&IpcRequest::GetCompletionData).await
+                if let Ok(IpcResponse::CompletionData {
+                    elements,
+                    devices,
+                    android_devices,
+                }) = c.send(&IpcRequest::GetCompletionData).await
                 {
                     app.cached_elements = elements;
                     app.cached_devices = devices;
+                    app.cached_android_devices = android_devices;
                 }
                 app.client = Some(c);
             }
@@ -342,6 +351,7 @@ impl App {
             let mut messages: Vec<Line<'static>> = Vec::new();
             let mut cached_elements = Vec::new();
             let mut cached_devices = Vec::new();
+            let mut cached_android_devices = Vec::new();
 
             // Ensure server is running (may block briefly)
             ensure_server_running(&session_name);
@@ -371,11 +381,15 @@ impl App {
                     }
 
                     // Fetch initial completion data
-                    if let Ok(IpcResponse::CompletionData { elements, devices }) =
-                        c.send(&IpcRequest::GetCompletionData).await
+                    if let Ok(IpcResponse::CompletionData {
+                        elements,
+                        devices,
+                        android_devices,
+                    }) = c.send(&IpcRequest::GetCompletionData).await
                     {
                         cached_elements = elements;
                         cached_devices = devices;
+                        cached_android_devices = android_devices;
                     }
 
                     Some(c)
@@ -398,6 +412,7 @@ impl App {
                     messages,
                     cached_elements,
                     cached_devices,
+                    cached_android_devices,
                 })
                 .await;
         });
@@ -413,6 +428,7 @@ impl App {
                 }
                 self.cached_elements = result.cached_elements;
                 self.cached_devices = result.cached_devices;
+                self.cached_android_devices = result.cached_android_devices;
 
                 self.is_processing = false;
                 self.processing_label.clear();
@@ -495,6 +511,7 @@ impl App {
             &input,
             &self.cached_elements,
             &self.cached_devices,
+            &self.cached_android_devices,
             &self.cached_apps,
             show_loading,
         );
@@ -1410,9 +1427,14 @@ impl App {
                     &format!("Current default timeout: {}ms", timeout_ms),
                 ));
             }
-            IpcResponse::CompletionData { elements, devices } => {
+            IpcResponse::CompletionData {
+                elements,
+                devices,
+                android_devices,
+            } => {
                 self.cached_elements = elements;
                 self.cached_devices = devices;
+                self.cached_android_devices = android_devices;
             }
             IpcResponse::AndroidDeviceList { devices } => {
                 if devices.is_empty() {
@@ -1430,6 +1452,8 @@ impl App {
                     true,
                     &format!("{} Android devices", devices.len()),
                 ));
+                // Refresh the completion cache from the freshly listed devices.
+                self.cached_android_devices = devices;
             }
             IpcResponse::Error { message } => {
                 self.add_output(format_result(false, &message));
@@ -1751,6 +1775,7 @@ mod tests {
             client: Some(client),
             cached_elements: Vec::new(),
             cached_devices: Vec::new(),
+            cached_android_devices: Vec::new(),
             cached_apps: Vec::new(),
             app_update_rx: None,
             app_fetch_trigger_tx: None,
@@ -1796,6 +1821,7 @@ mod tests {
             client: None,
             cached_elements: Vec::new(),
             cached_devices: Vec::new(),
+            cached_android_devices: Vec::new(),
             cached_apps: Vec::new(),
             app_update_rx: None,
             app_fetch_trigger_tx: None,
