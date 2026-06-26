@@ -71,7 +71,7 @@
 //! ```
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -278,19 +278,33 @@ impl AndroidLifecycle {
             return Err(AndroidLifecycleError::ProjectNotFound(gradlew));
         }
 
-        let output = Command::new(&gradlew)
-            .current_dir(&self.config.project_dir)
+        let mut cmd = Command::new(&gradlew);
+        cmd.current_dir(&self.config.project_dir)
             .args(["assembleDebug", "assembleDebugAndroidTest"])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output()?;
+            .stderr(std::process::Stdio::piped());
+
+        // Pin a Gradle-compatible JDK (17) for the daemon when we can find one,
+        // so the build does not depend on the host's ambient JAVA_HOME pointing
+        // at a supported Java version (Gradle 8.10.2 rejects Java > 23).
+        let pinned_jdk = resolve_build_java_home();
+        if let Some(ref jh) = pinned_jdk {
+            debug!(java_home = %jh.display(), "pinning JDK for Gradle build");
+            cmd.env("JAVA_HOME", jh);
+        }
+
+        let output = cmd.output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AndroidLifecycleError::BuildFailed(tail_diagnostic(
-                &stderr,
-                output.status.to_string(),
-            )));
+            let mut diag = tail_diagnostic(&stderr, output.status.to_string());
+            if pinned_jdk.is_none() {
+                diag.push_str(
+                    "\n(hint: no JDK 17 found — Gradle 8.10.2 needs Java 17–23. \
+                     Install a JDK 17, or set QORVEX_ANDROID_JAVA_HOME to one.)",
+                );
+            }
+            return Err(AndroidLifecycleError::BuildFailed(diag));
         }
 
         info!("android agent build complete");
@@ -581,6 +595,88 @@ impl AndroidLifecycle {
     }
 }
 
+/// Lowest Java major version Gradle 8.10.2 + AGP 8.5.2 will run on.
+const MIN_BUILD_JAVA: u32 = 17;
+/// Highest Java major version Gradle 8.10.2 supports running on.
+const MAX_BUILD_JAVA: u32 = 23;
+
+/// Locate a JDK the Android Gradle build can actually run under.
+///
+/// The build uses Gradle 8.10.2 (wrapper) + AGP 8.5.2, which only run on
+/// Java 17–23. The host's ambient `JAVA_HOME`/PATH may point at a too-new JDK
+/// (e.g. 26) that Gradle refuses to launch on, producing the cryptic
+/// `What went wrong: 26.0.1` build failure seen on fresh machines. Pinning a
+/// supported JDK for the Gradle daemon (via `JAVA_HOME` on the spawned process)
+/// makes the build deterministic regardless of what else is installed.
+///
+/// Each candidate is validated by running its `bin/java -version` and checking
+/// the major version is in `[MIN_BUILD_JAVA, MAX_BUILD_JAVA]` — `java_home -v 17`
+/// is NOT trusted blindly, since it falls back to the newest installed JDK
+/// (even an older one like 11) when no exact match exists.
+///
+/// Resolution order (first that validates wins):
+/// 1. `QORVEX_ANDROID_JAVA_HOME` — explicit override.
+/// 2. The ambient `JAVA_HOME` — what the build already relied on.
+/// 3. macOS `/usr/libexec/java_home -v 17` — the canonical JDK-17 locator.
+///
+/// Returns `None` if no compatible JDK can be pinned, in which case the build
+/// falls back to the ambient `JAVA_HOME` (and `build_agent` adds a hint on
+/// failure).
+fn resolve_build_java_home() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(explicit) = std::env::var_os("QORVEX_ANDROID_JAVA_HOME") {
+        candidates.push(PathBuf::from(explicit));
+    }
+    if let Some(ambient) = std::env::var_os("JAVA_HOME") {
+        candidates.push(PathBuf::from(ambient));
+    }
+    // macOS: ask the system for a JDK 17 home. Non-macOS hosts (no
+    // `/usr/libexec/java_home`) just skip this candidate.
+    if let Ok(output) = Command::new("/usr/libexec/java_home")
+        .args(["-v", "17"])
+        .output()
+    {
+        if output.status.success() {
+            let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !home.is_empty() {
+                candidates.push(PathBuf::from(home));
+            }
+        }
+    }
+
+    candidates.into_iter().find(|home| {
+        java_major_version(home)
+            .is_some_and(|major| (MIN_BUILD_JAVA..=MAX_BUILD_JAVA).contains(&major))
+    })
+}
+
+/// Run `<java_home>/bin/java -version` and parse the major version (e.g. 17, 23,
+/// or 8 from a legacy `1.8.0` string). Returns `None` if the binary is missing
+/// or its output can't be parsed.
+fn java_major_version(java_home: &Path) -> Option<u32> {
+    let java_bin = java_home.join("bin").join("java");
+    if !java_bin.exists() {
+        return None;
+    }
+    // `java -version` writes to stderr: `openjdk version "17.0.19" ...`.
+    let output = Command::new(&java_bin).arg("-version").output().ok()?;
+    parse_java_major(&String::from_utf8_lossy(&output.stderr))
+}
+
+/// Parse the major version out of `java -version` output. Handles the modern
+/// scheme (`openjdk version "17.0.19"` → 17) and the legacy one
+/// (`java version "1.8.0_302"` → 8).
+fn parse_java_major(version_output: &str) -> Option<u32> {
+    let version = version_output.split('"').nth(1)?; // the quoted version string
+    let mut parts = version.split('.');
+    let first: u32 = parts.next()?.parse().ok()?;
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
+}
+
 /// Reduce a captured stderr blob to an actionable one-line(-ish) diagnostic:
 /// exit status plus the last few non-empty lines.
 fn tail_diagnostic(stderr: &str, status: String) -> String {
@@ -809,6 +905,34 @@ mod tests {
         let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
         assert!(lifecycle.poll_child_exit().is_none());
+    }
+
+    // --- java version parsing (build JDK resolution) ---
+
+    #[test]
+    fn parse_java_major_modern_scheme() {
+        let out = "openjdk version \"17.0.19\" 2026-04-21\nOpenJDK Runtime Environment";
+        assert_eq!(parse_java_major(out), Some(17));
+    }
+
+    #[test]
+    fn parse_java_major_unsupported_new_jdk() {
+        // The exact failure mode from the bug report: a JDK 26 host.
+        assert_eq!(
+            parse_java_major("openjdk version \"26.0.1\" 2026-09-16"),
+            Some(26)
+        );
+    }
+
+    #[test]
+    fn parse_java_major_legacy_scheme() {
+        assert_eq!(parse_java_major("java version \"1.8.0_302\""), Some(8));
+    }
+
+    #[test]
+    fn parse_java_major_garbage_is_none() {
+        assert_eq!(parse_java_major("no version here"), None);
+        assert_eq!(parse_java_major(""), None);
     }
 
     // --- tail_diagnostic reducer ---
