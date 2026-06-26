@@ -12,7 +12,7 @@ use qorvex_core::action::ActionType;
 use qorvex_core::adb_device::AndroidDevice;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
-use qorvex_core::simctl::{InstalledApp, Simctl, SimulatorDevice};
+use qorvex_core::simctl::{InstalledApp, SimulatorDevice};
 
 use crate::completion::commands::ArgCompletion;
 use crate::completion::{
@@ -233,14 +233,20 @@ impl App {
             }
         });
 
-        // On-demand app list fetch task
+        // On-demand app list fetch task — routes through the server so the
+        // active platform's driver decides the source (simctl for iOS, adb for
+        // Android), instead of hardwiring to a booted iOS simulator.
         let (app_tx, app_rx) = mpsc::channel::<Vec<InstalledApp>>(4);
         let (app_fetch_trigger_tx, mut app_fetch_trigger_rx) = mpsc::channel::<()>(1);
+        let app_fetch_session = session_name.clone();
         tokio::spawn(async move {
             while app_fetch_trigger_rx.recv().await.is_some() {
                 while app_fetch_trigger_rx.try_recv().is_ok() {}
-                let apps = match Simctl::get_booted_udid() {
-                    Ok(udid) => Simctl::list_apps(&udid).unwrap_or_default(),
+                let apps = match IpcClient::connect(&app_fetch_session).await {
+                    Ok(mut client) => match client.send(&IpcRequest::FetchApps).await {
+                        Ok(IpcResponse::AppList { apps }) => apps,
+                        _ => Vec::new(),
+                    },
                     Err(_) => Vec::new(),
                 };
                 if app_tx.send(apps).await.is_err() {

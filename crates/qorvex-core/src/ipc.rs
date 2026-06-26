@@ -218,6 +218,10 @@ pub enum IpcRequest {
     // --- On-Demand Fetching ---
     /// Fetch live UI elements from the automation agent.
     FetchElements,
+    /// Fetch installed apps/packages on the active device for `set-target`
+    /// bundle-id completion. The server picks the source by active platform
+    /// (`simctl` for iOS, `adb` for Android).
+    FetchApps,
 
     // --- Info ---
     /// Get current session information.
@@ -322,6 +326,13 @@ pub enum IpcResponse {
         devices: Vec<crate::simctl::SimulatorDevice>,
         /// Cached Android devices/emulators (adb serials) for completion.
         android_devices: Vec<crate::adb_device::AndroidDevice>,
+    },
+
+    /// Installed apps/packages on the active device for `set-target`
+    /// completion.
+    AppList {
+        /// Installed apps (iOS bundle IDs or Android package names).
+        apps: Vec<crate::simctl::InstalledApp>,
     },
 
     /// Current timeout value.

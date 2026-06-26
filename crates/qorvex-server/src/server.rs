@@ -167,6 +167,7 @@ impl ServerState {
 
             // ── On-Demand Fetching ──────────────────────────────────────
             IpcRequest::FetchElements => self.handle_fetch_elements().await,
+            IpcRequest::FetchApps => self.handle_fetch_apps().await,
 
             // ── Info ────────────────────────────────────────────────────
             IpcRequest::GetSessionInfo => self.handle_get_session_info().await,
@@ -1194,6 +1195,31 @@ impl ServerState {
                 android_devices: Vec::new(),
             },
         }
+    }
+
+    /// Fetch installed apps for `set-target` completion, picking the source by
+    /// active platform. Android selection clears `simulator_udid`, so an active
+    /// `android_serial` means the device is Android and we enumerate packages
+    /// via `adb`; otherwise fall back to the booted simulator via `simctl`.
+    /// A failed enumeration yields an empty list — completion stays silent
+    /// rather than erroring.
+    async fn handle_fetch_apps(&self) -> IpcResponse {
+        let apps = if let Some(serial) = self.android_serial.clone() {
+            tokio::task::spawn_blocking(move || Adb::list_packages(&serial))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default()
+        } else if let Some(udid) = self.simulator_udid.clone() {
+            tokio::task::spawn_blocking(move || Simctl::list_apps(&udid))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        IpcResponse::AppList { apps }
     }
 
     // ── Info ─────────────────────────────────────────────────────────────

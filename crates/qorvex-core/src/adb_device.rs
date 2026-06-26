@@ -30,6 +30,7 @@
 //! }
 //! ```
 
+use crate::simctl::InstalledApp;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -420,6 +421,54 @@ impl Adb {
         Ok(())
     }
 
+    /// Lists third-party (user-installed) packages on the device via `adb -s
+    /// <serial> shell pm list packages -3`, returned as [`InstalledApp`] values
+    /// for parity with [`crate::simctl::Simctl::list_apps`]. Backs `set-target`
+    /// bundle-id tab-completion on Android.
+    ///
+    /// Only third-party packages are listed (`-3`): the full set including
+    /// framework/system packages numbers in the hundreds and is noise for
+    /// target selection. `pm` emits one `package:<name>` line per package.
+    /// Android exposes no display name here, so `display_name` is empty and
+    /// `app_type` is `"User"`.
+    pub fn list_packages(serial: &str) -> Result<Vec<InstalledApp>, AdbError> {
+        let output = Command::new("adb")
+            .args(["-s", serial, "shell", "pm", "list", "packages", "-3"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(AdbError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(Self::parse_package_list(&stdout))
+    }
+
+    /// Parses `pm list packages` output into a list of [`InstalledApp`], sorted
+    /// by package name for stable completion ordering. Each non-empty line is
+    /// `package:<name>`; the `package:` prefix is stripped and blank lines are
+    /// skipped.
+    pub fn parse_package_list(stdout: &str) -> Vec<InstalledApp> {
+        let mut apps: Vec<InstalledApp> = stdout
+            .lines()
+            .filter_map(|line| {
+                let pkg = line.trim().strip_prefix("package:")?.trim();
+                if pkg.is_empty() {
+                    return None;
+                }
+                Some(InstalledApp {
+                    bundle_id: pkg.to_string(),
+                    display_name: String::new(),
+                    app_type: "User".to_string(),
+                })
+            })
+            .collect();
+        apps.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
+        apps
+    }
+
     /// Force-stops an installed package, independent of the agent. Runs `adb -s
     /// <serial> shell am force-stop <package>`. This is the Android analogue of
     /// [`crate::simctl::Simctl::terminate_app`] and backs `stop-target`.
@@ -591,6 +640,30 @@ emulator-5554          device product:sdk_gphone64_arm64 model:sdk_gphone64_arm6
 1A2B3C4D5E6F           device product:redfin model:Pixel_5 device:redfin transport_id:2\n\
 192.168.1.42:5555      device product:lineage_oriole model:Pixel_6_Pro device:oriole transport_id:3\n\
 emulator-5556          offline\n";
+
+    #[test]
+    fn test_parse_package_list_strips_prefix_and_sorts() {
+        let out = "package:com.example.beta\n\
+package:com.example.alpha\n\
+\n\
+package:org.example.gamma\n";
+        let apps = Adb::parse_package_list(out);
+        let ids: Vec<&str> = apps.iter().map(|a| a.bundle_id.as_str()).collect();
+        // package: prefix stripped, blank line dropped, sorted by name.
+        assert_eq!(
+            ids,
+            vec!["com.example.alpha", "com.example.beta", "org.example.gamma"]
+        );
+        // Android has no display name; type marked User.
+        assert!(apps.iter().all(|a| a.display_name.is_empty()));
+        assert!(apps.iter().all(|a| a.app_type == "User"));
+    }
+
+    #[test]
+    fn test_parse_package_list_empty() {
+        assert!(Adb::parse_package_list("").is_empty());
+        assert!(Adb::parse_package_list("\n\n").is_empty());
+    }
 
     #[test]
     fn test_parse_devices_counts_and_serials() {
