@@ -630,6 +630,21 @@ impl ServerState {
         project_dir: Option<String>,
         platform: Platform,
     ) -> IpcResponse {
+        // The REPL defaults `--platform` to iOS when omitted, so an explicit-iOS
+        // request is indistinguishable from an unspecified one. Device selection
+        // is mutually exclusive between platforms (`use-device`/`boot-device`
+        // clear the other side), so when an Android device is the active
+        // selection, route there — otherwise `start-agent` after
+        // `use-device <androidSerial>` would fall through to the iOS path and
+        // fail with "No simulator selected" despite a device being connected.
+        let platform = if platform == Platform::Ios
+            && self.simulator_udid.is_none()
+            && self.android_serial.is_some()
+        {
+            Platform::Android
+        } else {
+            platform
+        };
         match platform {
             Platform::Ios => self.handle_start_agent_ios(project_dir).await,
             Platform::Android => self.handle_start_agent_android(project_dir).await,
@@ -1460,6 +1475,28 @@ mod tests {
             IpcResponse::CommandResult { success, message } => {
                 assert!(!success);
                 assert!(message.contains("No Android device selected"));
+            }
+            other => panic!("expected CommandResult, got {other:?}"),
+        }
+    }
+
+    /// `start-agent` with no explicit platform (which the REPL sends as the
+    /// default iOS) routes to the Android path when an Android device is the
+    /// active selection, instead of failing with "No simulator selected".
+    /// We assert via the error message: the Android path reports a build/adb
+    /// failure (no real device in CI), never the iOS "No simulator selected".
+    #[tokio::test]
+    async fn start_agent_infers_android_from_selected_device() {
+        let mut state = ServerState::new("test".into());
+        state.simulator_udid = None;
+        state.android_serial = Some("emulator-5554".into());
+        let resp = state.handle_start_agent(None, Platform::Ios).await;
+        match resp {
+            IpcResponse::CommandResult { message, .. } => {
+                assert!(
+                    !message.contains("No simulator selected"),
+                    "expected Android routing, got iOS error: {message}"
+                );
             }
             other => panic!("expected CommandResult, got {other:?}"),
         }
