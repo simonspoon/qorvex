@@ -61,10 +61,7 @@ fn assert_equivalent(label: &str, ios: &ExecutionResult, android: &ExecutionResu
         "{label}: success mismatch (iOS={}, Android={})\n iOS msg: {}\n And msg: {}",
         ios.success, android.success, ios.message, android.message
     );
-    assert_eq!(
-        ios.message, android.message,
-        "{label}: message mismatch"
-    );
+    assert_eq!(ios.message, android.message, "{label}: message mismatch");
     assert_eq!(ios.data, android.data, "{label}: data mismatch");
     assert_eq!(
         ios.screenshot, android.screenshot,

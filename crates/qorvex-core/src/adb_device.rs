@@ -484,9 +484,7 @@ impl Adb {
             .lines()
             .map(str::trim)
             .filter(|line| {
-                !line.is_empty()
-                    && !line.starts_with("List of devices")
-                    && !line.starts_with('*')
+                !line.is_empty() && !line.starts_with("List of devices") && !line.starts_with('*')
             })
             .filter_map(Self::parse_device_line)
             .collect()
@@ -633,7 +631,10 @@ emulator-5556          offline\n";
     #[test]
     fn test_parse_devices_offline_not_ready() {
         let devices = Adb::parse_devices(SAMPLE_DEVICES);
-        let offline = devices.iter().find(|d| d.serial == "emulator-5556").unwrap();
+        let offline = devices
+            .iter()
+            .find(|d| d.serial == "emulator-5556")
+            .unwrap();
 
         assert_eq!(offline.state, "offline");
         assert!(!offline.is_ready());

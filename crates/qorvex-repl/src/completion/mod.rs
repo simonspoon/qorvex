@@ -356,8 +356,10 @@ fn device_candidates(
         .iter()
         .filter_map(|dev| {
             // Match the displayed UDID, falling back to the device name.
-            let (score, indices) =
-                best_match(filter.score(prefix, &dev.udid), filter.score(prefix, &dev.name))?;
+            let (score, indices) = best_match(
+                filter.score(prefix, &dev.udid),
+                filter.score(prefix, &dev.name),
+            )?;
 
             Some(Candidate {
                 text: dev.udid.clone(),
@@ -650,7 +652,10 @@ mod tests {
         // The adb serial is itself completable.
         let by_serial = device_candidates("emu", &sims, &droids);
         assert_eq!(
-            by_serial.iter().filter(|c| c.text == "emulator-5554").count(),
+            by_serial
+                .iter()
+                .filter(|c| c.text == "emulator-5554")
+                .count(),
             1
         );
 

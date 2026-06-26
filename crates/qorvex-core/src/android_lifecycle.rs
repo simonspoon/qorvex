@@ -92,7 +92,8 @@ const GRADLEW: &str = "gradlew";
 const APP_APK: &str = "build/outputs/apk/debug/qorvex-agent-android-debug.apk";
 /// The instrumentation APK produced by `assembleDebugAndroidTest`. This is the
 /// one `am instrument` launches.
-const TEST_APK: &str = "build/outputs/apk/androidTest/debug/qorvex-agent-android-debug-androidTest.apk";
+const TEST_APK: &str =
+    "build/outputs/apk/androidTest/debug/qorvex-agent-android-debug-androidTest.apk";
 /// The agent (host app) package; force-stopped on teardown as a fallback.
 const AGENT_PACKAGE: &str = "com.qorvex.agent";
 /// The instrumentation target `<package>/<runner>` for `am instrument`.
@@ -814,7 +815,10 @@ mod tests {
 
     #[test]
     fn tail_diagnostic_empty_stderr_returns_status() {
-        assert_eq!(tail_diagnostic("", "exit status: 1".into()), "exit status: 1");
+        assert_eq!(
+            tail_diagnostic("", "exit status: 1".into()),
+            "exit status: 1"
+        );
         assert_eq!(
             tail_diagnostic("   \n  \n", "exit status: 2".into()),
             "exit status: 2"

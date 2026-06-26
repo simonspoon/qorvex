@@ -396,9 +396,7 @@ mod tests {
         let after = ""; // rule removed
         assert_eq!(AdbForward::parse_forward_list(before).len(), 1);
         let remaining = AdbForward::parse_forward_list(after);
-        assert!(!remaining
-            .iter()
-            .any(|(_, local, _)| local == "tcp:43217"));
+        assert!(!remaining.iter().any(|(_, local, _)| local == "tcp:43217"));
     }
 
     #[test]

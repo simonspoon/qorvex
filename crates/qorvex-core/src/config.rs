@@ -312,10 +312,7 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate_android().unwrap_err();
-        assert!(matches!(
-            err,
-            AndroidConfigError::AgentSourceDirNotFound(_)
-        ));
+        assert!(matches!(err, AndroidConfigError::AgentSourceDirNotFound(_)));
         assert!(err.to_string().contains("does not exist"));
     }
 
@@ -351,10 +348,8 @@ mod tests {
     #[test]
     fn validate_android_ok_when_project_and_gradlew_exist() {
         // Build a temp project dir with a gradlew stub.
-        let base = std::env::temp_dir().join(format!(
-            "qorvex-android-cfgtest-{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("qorvex-android-cfgtest-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&base);
         std::fs::write(base.join("gradlew"), b"#!/bin/sh\n").unwrap();
         let config = QorvexConfig {

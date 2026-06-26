@@ -119,10 +119,13 @@ impl AndroidTransport {
                 // run it off the async runtime (parity with the `None` branch).
                 // Move the forward into the blocking task and hand it back so
                 // the re-issued rule's ownership stays in this transport.
-                let forward = tokio::task::spawn_blocking(move || forward.ensure().map(|()| forward))
-                    .await
-                    .map_err(|e| DriverError::CommandFailed(format!("adb forward task failed: {e}")))?
-                    .map_err(map_forward_error)?;
+                let forward =
+                    tokio::task::spawn_blocking(move || forward.ensure().map(|()| forward))
+                        .await
+                        .map_err(|e| {
+                            DriverError::CommandFailed(format!("adb forward task failed: {e}"))
+                        })?
+                        .map_err(map_forward_error)?;
                 *guard = Some(forward);
             }
             None => {
@@ -139,9 +142,9 @@ impl AndroidTransport {
             }
         }
         let addr_str = guard.as_ref().expect("forward set above").local_addr();
-        addr_str
-            .parse()
-            .map_err(|e| DriverError::ConnectionLost(format!("bad forward address {addr_str}: {e}")))
+        addr_str.parse().map_err(|e| {
+            DriverError::ConnectionLost(format!("bad forward address {addr_str}: {e}"))
+        })
     }
 }
 
@@ -346,7 +349,10 @@ mod tests {
     #[tokio::test]
     async fn tap_with_type_sends_request() {
         let driver = driver_with_mock(Response::Ok).await;
-        driver.tap_with_type("submit", false, "Button").await.unwrap();
+        driver
+            .tap_with_type("submit", false, "Button")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -439,8 +445,14 @@ mod tests {
         assert_eq!(tree[0].role.as_deref(), Some("android.widget.Button"));
         assert_eq!(tree[0].hittable, Some(true));
         assert_eq!(tree[0].children.len(), 1);
-        assert_eq!(tree[0].children[0].value.as_deref(), Some("user@example.com"));
-        assert_eq!(tree[0].children[0].element_type.as_deref(), Some("EditText"));
+        assert_eq!(
+            tree[0].children[0].value.as_deref(),
+            Some("user@example.com")
+        );
+        assert_eq!(
+            tree[0].children[0].element_type.as_deref(),
+            Some("EditText")
+        );
     }
 
     #[tokio::test]
@@ -482,7 +494,11 @@ mod tests {
         })
         .await;
         assert_eq!(
-            driver.get_element_value("email_field").await.unwrap().as_deref(),
+            driver
+                .get_element_value("email_field")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("user@example.com")
         );
     }
@@ -684,20 +700,22 @@ mod tests {
 
     #[test]
     fn is_connection_error_classifier() {
-        assert!(AndroidDriver::is_connection_error(&DriverError::NotConnected));
-        assert!(AndroidDriver::is_connection_error(&DriverError::ConnectionLost(
-            "x".into()
-        )));
+        assert!(AndroidDriver::is_connection_error(
+            &DriverError::NotConnected
+        ));
+        assert!(AndroidDriver::is_connection_error(
+            &DriverError::ConnectionLost("x".into())
+        ));
         assert!(AndroidDriver::is_connection_error(&DriverError::Timeout));
         assert!(AndroidDriver::is_connection_error(&DriverError::Io(
             std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken")
         )));
-        assert!(!AndroidDriver::is_connection_error(&DriverError::CommandFailed(
-            "not found".into()
-        )));
-        assert!(!AndroidDriver::is_connection_error(&DriverError::JsonParse(
-            "bad".into()
-        )));
+        assert!(!AndroidDriver::is_connection_error(
+            &DriverError::CommandFailed("not found".into())
+        ));
+        assert!(!AndroidDriver::is_connection_error(
+            &DriverError::JsonParse("bad".into())
+        ));
     }
 
     // --- expect_ok ---

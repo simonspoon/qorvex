@@ -208,7 +208,9 @@ impl<T: AgentTransport> AgentSession<T> {
         let bundle_id = self.target_bundle_id.lock().await.clone();
         if let Some(bid) = bundle_id {
             info!(bundle_id = %bid, "restoring target after recovery");
-            let response = self.send_raw(&Request::SetTarget { bundle_id: bid }).await?;
+            let response = self
+                .send_raw(&Request::SetTarget { bundle_id: bid })
+                .await?;
             expect_ok(response)?;
         }
         Ok(())

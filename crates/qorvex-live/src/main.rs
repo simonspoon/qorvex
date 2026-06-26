@@ -24,10 +24,10 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use qorvex_core::action::ActionLog;
-use qorvex_core::ipc::{IpcClient, IpcResponse};
-use qorvex_core::session::SessionEvent;
 use qorvex_core::adb_device::Adb;
 use qorvex_core::ipc::Platform;
+use qorvex_core::ipc::{IpcClient, IpcResponse};
+use qorvex_core::session::SessionEvent;
 use qorvex_core::simctl::Simctl;
 
 /// Target platform for the monitored session (CLI-facing; maps to
@@ -263,12 +263,8 @@ fn spawn_decode_base64_task(
 fn spawn_screenshot_task(source: ScreenshotSource, tx: mpsc::Sender<AppEvent>) {
     tokio::spawn(async move {
         let result = tokio::task::spawn_blocking(move || match source {
-            ScreenshotSource::Ios(udid) => {
-                Simctl::screenshot(&udid).map_err(|e| e.to_string())
-            }
-            ScreenshotSource::Android(serial) => {
-                Adb::screencap(&serial).map_err(|e| e.to_string())
-            }
+            ScreenshotSource::Ios(udid) => Simctl::screenshot(&udid).map_err(|e| e.to_string()),
+            ScreenshotSource::Android(serial) => Adb::screencap(&serial).map_err(|e| e.to_string()),
         })
         .await;
 
