@@ -173,17 +173,18 @@ pub struct App {
     startup_rx: Option<mpsc::Receiver<StartupResult>>,
 }
 
-/// Ensure the qorvex-server process is running for the given session.
+/// Number of connect attempts while waiting for a freshly-spawned server to
+/// bind, spaced [`CONNECT_POLL_INTERVAL`] apart (~10s total budget).
+const CONNECT_POLL_ATTEMPTS: u32 = 100;
+/// Delay between connect attempts in [`ensure_connected`].
+const CONNECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Spawn `qorvex-server` for the session as a detached background process.
 ///
-/// If the socket already exists, assumes the server is running.
-/// Otherwise, spawns `qorvex-server` as a detached background process
-/// and waits briefly for the socket to appear.
-fn ensure_server_running(session_name: &str) {
-    let sock = socket_path(session_name);
-    if sock.exists() {
-        return;
-    }
-    // Spawn qorvex-server as a detached background process
+/// The server cleans up any stale socket and rebinds on startup, so it is safe
+/// to call even if a stale socket file is present. Returns the spawn error if
+/// the binary can't be launched, so callers can fail fast instead of polling.
+fn spawn_server(session_name: &str) -> std::io::Result<()> {
     let log_dir = qorvex_core::session::logs_dir();
     let log_file = std::fs::File::create(log_dir.join("qorvex-server-launch.log")).ok();
 
@@ -196,15 +197,42 @@ fn ensure_server_running(session_name: &str) {
         );
         cmd.stderr(f);
     }
-    let _ = cmd.spawn();
+    cmd.spawn()?;
+    Ok(())
+}
 
-    // Wait briefly for socket to appear
-    for _ in 0..20 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if sock.exists() {
-            break;
+/// Ensure a qorvex-server is running and accepting connections, returning a
+/// connected client.
+///
+/// Connectability — not socket-file existence — is the readiness signal. A
+/// socket file can exist while the server is still binding (startup race) or be
+/// stale from a dead server, so polling the file is not enough.
+///
+/// 1. Fast path: if a live server already answers, return that connection.
+/// 2. Otherwise spawn the server (it removes any stale socket and rebinds).
+/// 3. Retry the connect with backoff until the server finishes binding
+///    (~10s budget) instead of failing on a single one-shot attempt.
+async fn ensure_connected(session_name: &str) -> Result<IpcClient, qorvex_core::ipc::IpcError> {
+    // A live server is already listening — connect immediately.
+    if let Ok(client) = IpcClient::connect(session_name).await {
+        return Ok(client);
+    }
+
+    // No live server (missing or stale socket). Spawn one; it rebinds cleanly.
+    // A spawn failure (e.g. binary not on PATH) is terminal — fail fast instead
+    // of polling the full budget for a server that will never appear.
+    spawn_server(session_name)?;
+
+    // Poll the actual connection until the freshly-spawned server is accepting.
+    let mut last_err = None;
+    for _ in 0..CONNECT_POLL_ATTEMPTS {
+        tokio::time::sleep(CONNECT_POLL_INTERVAL).await;
+        match IpcClient::connect(session_name).await {
+            Ok(client) => return Ok(client),
+            Err(e) => last_err = Some(e),
         }
     }
+    Err(last_err.expect("at least one connect attempt was made"))
 }
 
 impl App {
@@ -295,10 +323,8 @@ impl App {
     pub async fn new_blocking(session_name: String) -> Self {
         let mut app = Self::new(session_name.clone());
 
-        ensure_server_running(&session_name);
-
         let sock = socket_path(&session_name);
-        match IpcClient::connect(&session_name).await {
+        match ensure_connected(&session_name).await {
             Ok(mut c) => {
                 app.add_output(Line::from(format!(
                     "Connected to server | Session: {} | Socket: {:?}",
@@ -359,12 +385,10 @@ impl App {
             let mut cached_devices = Vec::new();
             let mut cached_android_devices = Vec::new();
 
-            // Ensure server is running (may block briefly)
-            ensure_server_running(&session_name);
-
-            // Connect IPC client
+            // Ensure server is running and accepting connections, retrying the
+            // connect while the freshly-spawned server finishes binding.
             let sock = socket_path(&session_name);
-            let client = match IpcClient::connect(&session_name).await {
+            let client = match ensure_connected(&session_name).await {
                 Ok(mut c) => {
                     messages.push(Line::from(format!(
                         "Connected to server | Session: {} | Socket: {:?}",
