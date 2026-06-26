@@ -372,6 +372,6 @@ pub fn commands_matching(prefix: &str) -> Vec<Candidate> {
         .collect();
 
     // Sort by score descending
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }

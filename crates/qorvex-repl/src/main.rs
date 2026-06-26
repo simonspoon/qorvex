@@ -313,22 +313,16 @@ async fn run_app(
                             app.selection.dragging = true;
                         }
                     }
-                    MouseEventKind::Drag(MouseButton::Left) => {
-                        if app.selection.dragging {
-                            if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app)
-                            {
-                                app.selection.endpoint = Some(pos);
-                            }
+                    MouseEventKind::Drag(MouseButton::Left) if app.selection.dragging => {
+                        if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
+                            app.selection.endpoint = Some(pos);
                         }
                     }
-                    MouseEventKind::Up(MouseButton::Left) => {
-                        if app.selection.dragging {
-                            if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app)
-                            {
-                                app.selection.endpoint = Some(pos);
-                            }
-                            app.selection.dragging = false;
+                    MouseEventKind::Up(MouseButton::Left) if app.selection.dragging => {
+                        if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
+                            app.selection.endpoint = Some(pos);
                         }
+                        app.selection.dragging = false;
                     }
                     MouseEventKind::ScrollUp => {
                         app.scroll_up();

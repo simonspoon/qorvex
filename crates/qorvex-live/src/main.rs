@@ -1,3 +1,10 @@
+// The TUI event loop matches on session/IPC/key events and branches with an
+// inner `if`. Clippy's `collapsible_match` wants these folded into match
+// guards, but the guards would need `.await` (illegal in a guard) or would move
+// bound values out of the pattern (E0507), and collapsing key events would
+// reroute non-Press events to the catch-all arm. Allow it crate-wide here.
+#![allow(clippy::collapsible_match)]
+
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},

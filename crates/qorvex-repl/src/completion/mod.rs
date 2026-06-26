@@ -275,7 +275,7 @@ fn element_candidates(prefix: &str, elements: &[UIElement]) -> Vec<Candidate> {
         .collect();
 
     // Sort by score descending
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
@@ -312,7 +312,7 @@ fn element_label_candidates(prefix: &str, elements: &[UIElement]) -> Vec<Candida
         .collect();
 
     // Sort by score descending
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
@@ -388,7 +388,7 @@ fn device_candidates(
     }));
 
     // Sort by score descending
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
@@ -439,7 +439,7 @@ fn bundle_id_candidates(prefix: &str, apps: &[InstalledApp]) -> Vec<Candidate> {
         .collect();
 
     // Sort by score descending
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
@@ -577,7 +577,7 @@ fn element_selector_candidates(
         .collect();
 
     // Sort by score descending
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
@@ -609,7 +609,7 @@ fn option_candidates(prefix: &str, command: &'static CommandDef, input: &str) ->
         })
         .collect();
 
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
