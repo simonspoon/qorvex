@@ -45,8 +45,18 @@ class CommandHandler {
     @Volatile
     private var targetPackage: String? = null
 
+    private val keyguardManager =
+        instrumentation.targetContext.getSystemService(android.content.Context.KEYGUARD_SERVICE)
+            as android.app.KeyguardManager
+
     fun handle(request: AgentRequest): AgentResponse = try {
-        when (request) {
+        // A real device's display times out while the operator drives Qorvex
+        // from the host, which sleeps the screen and (on a secured device)
+        // raises the keyguard — pausing the target app so commands that need its
+        // UI fail. screenGate() wakes the device and, if a secure keyguard
+        // remains, returns an actionable error instead of dumping the keyguard
+        // or a null window. Simulators never sleep, so iOS has no analogue.
+        screenGate(request) ?: when (request) {
             is AgentRequest.Heartbeat -> AgentResponse.Ok
             is AgentRequest.TapCoord -> handleTapCoord(request.x, request.y)
             is AgentRequest.TapElement ->
@@ -71,6 +81,67 @@ class CommandHandler {
     } catch (e: Exception) {
         AgentResponse.Error("Internal agent error: ${e.message ?: e.javaClass.simpleName}")
     }
+
+    // -- Screen / keyguard gate ---------------------------------------------
+
+    /**
+     * Commands that read or act on the target's accessibility window. The
+     * lifecycle/status requests (Heartbeat, SetTarget, GetTargetInfo) inspect no
+     * live window, so they neither wake the device nor get blocked by a lock.
+     */
+    private fun needsTargetWindow(request: AgentRequest): Boolean = when (request) {
+        is AgentRequest.Heartbeat,
+        is AgentRequest.SetTarget,
+        is AgentRequest.GetTargetInfo -> false
+        else -> true
+    }
+
+    /**
+     * Wake the screen for UI commands and, if the device is still locked behind a
+     * secure keyguard, return an actionable error; otherwise null (proceed).
+     * Best-effort: a swipe-only keyguard is dismissed and the target restored, so
+     * the command runs normally.
+     */
+    private fun screenGate(request: AgentRequest): AgentResponse? {
+        if (!needsTargetWindow(request)) return null
+        ensureInteractive()
+        return if (isScreenLocked()) {
+            AgentResponse.Error("Device screen is locked: unlock the phone to control the target")
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Wake the display and dismiss an insecure keyguard if the screen is off.
+     * On a real device the display times out while the operator works from the
+     * host; the target app is then paused and rootInActiveWindow points at the
+     * keyguard (or is null). A *secured* keyguard cannot be dismissed here — that
+     * is reported by [isScreenLocked]. All steps are best-effort.
+     */
+    private fun ensureInteractive() {
+        try {
+            val asleep = !uiDevice.isScreenOn
+            if (asleep) uiDevice.wakeUp()
+            // Dismiss based on keyguard state, not screen state: a swipe-only
+            // keyguard can be up while the screen is already on (woken by a
+            // notification or ambient tap), and gating dismissal on `asleep`
+            // would leave it — and fail the command with a false "locked".
+            val locked = keyguardManager.isKeyguardLocked
+            if (locked) uiDevice.executeShellCommand("wm dismiss-keyguard")
+            if (asleep || locked) uiDevice.waitForIdle(WAKE_IDLE_TIMEOUT_MS)
+        } catch (_: Exception) {
+            // Non-fatal: let the command run and surface its own diagnostic.
+        }
+    }
+
+    /** Whether a keyguard is still up (screen off, or a secure lock not dismissed). */
+    private fun isScreenLocked(): Boolean =
+        try {
+            !uiDevice.isScreenOn || keyguardManager.isKeyguardLocked
+        } catch (_: Exception) {
+            false
+        }
 
     // -- Root accessor ------------------------------------------------------
 
@@ -397,5 +468,10 @@ class CommandHandler {
             if (timeout <= 0L || SystemClock.uptimeMillis() >= deadline) return null
             SystemClock.sleep(intervalMs)
         }
+    }
+
+    private companion object {
+        /** Settle time after waking the screen / dismissing an insecure keyguard. */
+        const val WAKE_IDLE_TIMEOUT_MS = 2000L
     }
 }
