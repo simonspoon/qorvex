@@ -77,16 +77,34 @@ jobs:
           cp qorvex-agent/project.yml agent/
           cp qorvex-agent/Makefile agent/
 
+      - name: Bundle Android agent source
+        run: |
+          # Ship the Kotlin agent as source (the iOS parallel): the runtime
+          # builds it on the host via gradlew, so bundle the Gradle project
+          # minus the local build artifacts (.gradle/, build/, local.properties
+          # are gitignored and host-specific).
+          mkdir -p agent-android
+          rsync -a \
+            --exclude '.gradle/' \
+            --exclude 'build/' \
+            --exclude 'local.properties' \
+            --exclude '*.iml' \
+            --exclude '.idea/' \
+            --exclude '.kotlin/' \
+            qorvex-agent-android/ agent-android/
+
       - name: Create tarballs
         run: |
           cp -R agent dist-arm64/agent
           cp -R agent dist-x86_64/agent
+          cp -R agent-android dist-arm64/agent-android
+          cp -R agent-android dist-x86_64/agent-android
           cd dist-arm64
           tar czf ../qorvex-macos-arm64.tar.gz \
-            qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent
+            qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent agent-android
           cd ../dist-x86_64
           tar czf ../qorvex-macos-x86_64.tar.gz \
-            qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent
+            qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer agent agent-android
           cd ..
           shasum -a 256 qorvex-macos-*.tar.gz > checksums.txt
 

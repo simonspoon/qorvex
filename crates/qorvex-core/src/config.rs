@@ -49,8 +49,10 @@ pub struct QorvexConfig {
     pub agent_bundle_id: Option<String>,
 
     /// Path to the Android Kotlin agent project directory (containing `gradlew`).
-    /// Required to build/install/launch the Android agent (`start-agent`
-    /// targeting Android). The Android analog of `agent_source_dir`.
+    /// Used to build/install/launch the Android agent (`start-agent` targeting
+    /// Android). The Android analog of `agent_source_dir`: when absent,
+    /// resolution falls back to the Homebrew share path
+    /// (`HOMEBREW_PREFIX/share/qorvex/agent-android`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub android_agent_source_dir: Option<PathBuf>,
 
@@ -148,11 +150,18 @@ impl QorvexConfig {
         self.android_device_port.unwrap_or(8080)
     }
 
-    /// Returns the effective Android agent project directory (no fallback —
-    /// Android has no Homebrew-installed default, so this is the configured
-    /// value verbatim).
+    /// Returns the effective Android agent project directory.
+    ///
+    /// Resolution order (mirrors [`effective_agent_source_dir`] for iOS):
+    /// 1. Explicit `android_agent_source_dir` from config
+    /// 2. Homebrew share path (`HOMEBREW_PREFIX/share/qorvex/agent-android`)
+    ///
+    /// [`effective_agent_source_dir`]: Self::effective_agent_source_dir
     pub fn effective_android_agent_source_dir(&self) -> Option<PathBuf> {
-        self.android_agent_source_dir.clone()
+        if self.android_agent_source_dir.is_some() {
+            return self.android_agent_source_dir.clone();
+        }
+        homebrew_android_agent_path()
     }
 
     /// Validate the Android configuration required to build/launch the agent.
@@ -200,6 +209,22 @@ fn homebrew_agent_path() -> Option<PathBuf> {
     let prefixes = ["/opt/homebrew", "/usr/local"];
     for prefix in &prefixes {
         let path = PathBuf::from(prefix).join("share/qorvex/agent");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Probe for the Android agent source directory installed by Homebrew.
+///
+/// The Android analog of [`homebrew_agent_path`]: checks
+/// `HOMEBREW_PREFIX/share/qorvex/agent-android` (arm64 default: `/opt/homebrew`,
+/// Intel default: `/usr/local`). Returns the path only if the directory exists.
+fn homebrew_android_agent_path() -> Option<PathBuf> {
+    let prefixes = ["/opt/homebrew", "/usr/local"];
+    for prefix in &prefixes {
+        let path = PathBuf::from(prefix).join("share/qorvex/agent-android");
         if path.exists() {
             return Some(path);
         }
@@ -283,6 +308,28 @@ mod tests {
         assert!(loaded.android_device_port.is_none());
         // Default device port falls back to 8080.
         assert_eq!(loaded.android_device_port(), 8080);
+    }
+
+    #[test]
+    fn effective_android_agent_source_dir_prefers_explicit() {
+        let config = QorvexConfig {
+            android_agent_source_dir: Some(PathBuf::from("/explicit/android")),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.effective_android_agent_source_dir(),
+            Some(PathBuf::from("/explicit/android"))
+        );
+    }
+
+    #[test]
+    fn effective_android_agent_source_dir_falls_back_to_homebrew_or_none() {
+        // With no explicit dir, resolution falls back to the Homebrew share path
+        // if present, else None. On CI/dev machines without the brew-installed
+        // agent-android, this is None. Just verify it does not panic and never
+        // returns the (unset) explicit value.
+        let config = QorvexConfig::default();
+        let _ = config.effective_android_agent_source_dir();
     }
 
     #[test]
