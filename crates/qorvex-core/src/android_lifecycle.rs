@@ -1134,7 +1134,8 @@ mod tests {
     #[cfg(unix)]
     fn fake_jdk(tag: &str, version_line: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("qorvex-fake-jdk-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("qorvex-fake-jdk-{tag}-{}", std::process::id()));
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let java = bin.join("java");
