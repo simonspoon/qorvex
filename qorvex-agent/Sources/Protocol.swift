@@ -24,6 +24,7 @@ enum OpCode: UInt8 {
     case setTarget   = 0x12
     case findElement = 0x13
     case getTargetInfo = 0x14
+    case deviceUdid = 0x16
     case error      = 0x99
     case response   = 0xA0
 }
@@ -59,6 +60,7 @@ enum AgentRequest {
     case setTarget(bundleId: String)
     case findElement(selector: String, byLabel: Bool, elementType: String?)
     case getTargetInfo
+    case deviceUdid
 }
 
 // MARK: - Response
@@ -263,6 +265,9 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
 
     case .getTargetInfo:
         return .getTargetInfo
+
+    case .deviceUdid:
+        return .deviceUdid
 
     case .error, .response:
         throw ProtocolError.invalidPayload(

@@ -102,6 +102,12 @@ pub enum OpCode {
     /// of what is on screen (no payload). Distinguishes a healthy agent from a
     /// stale orphan whose UiAutomation connection is dead. Android-only.
     BridgeHealth = 0x15,
+    /// Ask the agent which device it is running on (no payload). The agent replies
+    /// with a [`Response::Value`] carrying the simulator UDID, letting the host
+    /// detect a cross-device attach before reusing a singleton agent on a shared
+    /// port. An agent that predates this opcode answers with an error, which the
+    /// host treats as "identity unknown".
+    DeviceUdid = 0x16,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -127,6 +133,7 @@ impl OpCode {
             0x13 => Ok(OpCode::FindElement),
             0x14 => Ok(OpCode::GetTargetInfo),
             0x15 => Ok(OpCode::BridgeHealth),
+            0x16 => Ok(OpCode::DeviceUdid),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -197,6 +204,8 @@ pub enum Request {
     GetTargetInfo,
     /// Probe the device-side accessibility bridge for liveness (Android-only).
     BridgeHealth,
+    /// Ask the agent for the UDID of the device it is running on (simulator-only).
+    DeviceUdid,
 }
 
 impl Request {
@@ -219,6 +228,7 @@ impl Request {
             Request::FindElement { .. } => "find_element",
             Request::GetTargetInfo => "get_target_info",
             Request::BridgeHealth => "bridge_health",
+            Request::DeviceUdid => "device_udid",
         }
     }
 }
@@ -576,6 +586,9 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
         Request::BridgeHealth => {
             payload.push(OpCode::BridgeHealth as u8);
         }
+        Request::DeviceUdid => {
+            payload.push(OpCode::DeviceUdid as u8);
+        }
     }
 
     encode_frame(&payload)
@@ -698,6 +711,8 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
         OpCode::GetTargetInfo => Ok(Request::GetTargetInfo),
 
         OpCode::BridgeHealth => Ok(Request::BridgeHealth),
+
+        OpCode::DeviceUdid => Ok(Request::DeviceUdid),
 
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
@@ -1086,6 +1101,18 @@ mod tests {
     }
 
     #[test]
+    fn request_device_udid() {
+        round_trip_request(&Request::DeviceUdid);
+    }
+
+    #[test]
+    fn device_udid_wire_format() {
+        let wire = encode_request(&Request::DeviceUdid);
+        // 4-byte header with length=1, then opcode 0x16
+        assert_eq!(wire, vec![1, 0, 0, 0, 0x16]);
+    }
+
+    #[test]
     fn response_target_info() {
         round_trip_response(&Response::TargetInfo {
             json: r#"{"bundle_id":"com.example.app","display_name":"MyApp","version":"1.0","build":"42","state":"running"}"#.to_string(),
@@ -1168,7 +1195,7 @@ mod tests {
     fn opcode_round_trip() {
         let codes: Vec<u8> = vec![
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14,
-            0x15, 0x99, 0xA0,
+            0x15, 0x16, 0x99, 0xA0,
         ];
         for &code in &codes {
             let op = OpCode::from_u8(code).unwrap();

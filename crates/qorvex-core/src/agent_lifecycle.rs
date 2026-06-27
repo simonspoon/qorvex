@@ -133,6 +133,23 @@ pub enum AgentLifecycleError {
     #[error("Agent is not running")]
     NotRunning,
 
+    /// The agent already listening on the shared port is bound to a different
+    /// device than the one requested. Reusing it would silently drive the wrong
+    /// simulator, so the lifecycle fails fast instead.
+    #[error(
+        "another agent is already running on 127.0.0.1:{port} for a different simulator \
+         ({holder}), but {requested} was requested — run `qorvex stop-agent` to release the \
+         port, or target the device already running"
+    )]
+    DeviceMismatch {
+        /// UDID of the simulator the listening agent is driving.
+        holder: String,
+        /// UDID of the simulator the caller asked for.
+        requested: String,
+        /// The shared TCP port the conflict is on.
+        port: u16,
+    },
+
     /// An I/O error occurred.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -576,14 +593,55 @@ impl AgentLifecycle {
         }
     }
 
+    /// Ask the agent currently listening on the local port which simulator it is
+    /// driving.
+    ///
+    /// Returns `Some(udid)` only when an agent answers and reports a UDID; returns
+    /// `None` when nothing answers in time or the agent cannot report its identity
+    /// (e.g. an older agent that predates the `DeviceUdid` opcode). Simulator-only:
+    /// a physical-device agent has no `SIMULATOR_UDID` and is reached over a
+    /// device-specific tunnel, so cross-attach cannot occur there.
+    async fn reachable_agent_udid(&self) -> Option<String> {
+        let addr = self.agent_addr();
+        let check = async {
+            let mut client = AgentClient::new(addr);
+            client.connect().await.ok()?;
+            let udid = client.device_udid().await.ok().flatten();
+            client.disconnect();
+            udid
+        };
+        tokio::time::timeout(Duration::from_secs(2), check)
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// Ensure the agent is running, starting it only if not already reachable.
     ///
     /// Unlike [`ensure_running`](Self::ensure_running) which always rebuilds,
     /// this method first checks whether the agent is already listening and
     /// skips the build/spawn cycle if it is.
+    ///
+    /// On simulators the agent is a singleton on the shared loopback port: every
+    /// booted simulator answers on `127.0.0.1:{agent_port}`, so a bare
+    /// reachability probe cannot tell whether the listening agent is driving the
+    /// requested device. Before reusing it, this confirms its reported UDID
+    /// matches [`self.udid`]; a mismatch returns [`AgentLifecycleError::DeviceMismatch`]
+    /// rather than silently attaching to another session's simulator.
     #[instrument(skip(self))]
     pub async fn ensure_agent_ready(&self) -> Result<(), AgentLifecycleError> {
         if self.is_agent_reachable().await {
+            if !self.config.is_physical {
+                if let Some(holder) = self.reachable_agent_udid().await {
+                    if !holder.eq_ignore_ascii_case(&self.udid) {
+                        return Err(AgentLifecycleError::DeviceMismatch {
+                            holder,
+                            requested: self.udid.clone(),
+                            port: self.config.agent_port,
+                        });
+                    }
+                }
+            }
             debug!("agent already reachable, skipping build");
             return Ok(());
         }
@@ -765,6 +823,93 @@ mod tests {
         let lifecycle = AgentLifecycle::new("test-udid".to_string(), config);
 
         assert!(!lifecycle.is_agent_reachable().await);
+    }
+
+    /// Start a mock simulator agent that answers heartbeats with `Ok` and
+    /// `DeviceUdid` probes with the given UDID, serving connections until the
+    /// test ends. Returns the loopback port it bound.
+    async fn mock_sim_agent(holder_udid: &str) -> u16 {
+        use crate::protocol::{
+            decode_request, encode_response, read_frame_length, Request, Response,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let holder = holder_udid.to_string();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let holder = holder.clone();
+                tokio::spawn(async move {
+                    loop {
+                        let mut header = [0u8; 4];
+                        if stream.read_exact(&mut header).await.is_err() {
+                            break; // client disconnected
+                        }
+                        let len = read_frame_length(&header) as usize;
+                        let mut payload = vec![0u8; len];
+                        if stream.read_exact(&mut payload).await.is_err() {
+                            break;
+                        }
+                        let resp = match decode_request(&payload) {
+                            Ok(Request::DeviceUdid) => Response::Value {
+                                value: Some(holder.clone()),
+                            },
+                            _ => Response::Ok,
+                        };
+                        if stream.write_all(&encode_response(&resp)).await.is_err() {
+                            break;
+                        }
+                        let _ = stream.flush().await;
+                    }
+                });
+            }
+        });
+
+        port
+    }
+
+    fn sim_lifecycle_on_port(udid: &str, port: u16) -> AgentLifecycle {
+        let mut config = AgentLifecycleConfig::new(PathBuf::from("/tmp/agent"));
+        config.agent_port = port;
+        AgentLifecycle::new(udid.to_string(), config)
+    }
+
+    #[tokio::test]
+    async fn ensure_agent_ready_rejects_cross_device_attach() {
+        // An agent for "OTHER-SIM" already holds the shared port; asking for
+        // "WANTED-SIM" must fail fast instead of silently driving OTHER-SIM.
+        let port = mock_sim_agent("OTHER-SIM").await;
+        let lifecycle = sim_lifecycle_on_port("WANTED-SIM", port);
+
+        let result = lifecycle.ensure_agent_ready().await;
+        match result {
+            Err(AgentLifecycleError::DeviceMismatch {
+                holder,
+                requested,
+                port: p,
+            }) => {
+                assert_eq!(holder, "OTHER-SIM");
+                assert_eq!(requested, "WANTED-SIM");
+                assert_eq!(p, port);
+            }
+            other => panic!("expected DeviceMismatch, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_agent_ready_reuses_matching_device() {
+        // The reachable agent is driving the requested simulator (case-insensitive
+        // match), so it is reused without spawning a new one.
+        let port = mock_sim_agent("same-sim").await;
+        let lifecycle = sim_lifecycle_on_port("SAME-SIM", port);
+
+        lifecycle.ensure_agent_ready().await.unwrap();
     }
 
     #[tokio::test]

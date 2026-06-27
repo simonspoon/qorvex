@@ -231,6 +231,21 @@ impl AgentClient {
         Ok(())
     }
 
+    /// Ask the agent which device (simulator UDID) it is running on.
+    ///
+    /// Used before reusing a singleton agent on a shared port to confirm it is
+    /// driving the device the caller asked for, rather than silently attaching to
+    /// another session's agent. Returns `Ok(Some(udid))` when the agent reports
+    /// its UDID, `Ok(None)` when it cannot (e.g. a physical device with no
+    /// `SIMULATOR_UDID`, or an agent that predates this opcode and answered with a
+    /// non-value response) — both cases mean "identity unknown, can't verify".
+    pub async fn device_udid(&mut self) -> Result<Option<String>, AgentClientError> {
+        match self.send(&Request::DeviceUdid).await? {
+            Response::Value { value } => Ok(value),
+            _ => Ok(None),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Internal frame I/O
     // -----------------------------------------------------------------------
@@ -423,6 +438,32 @@ mod tests {
         client.connect().await.unwrap();
         let result = client.bridge_health().await;
         assert!(matches!(result, Err(AgentClientError::AgentError(_))));
+        client.disconnect();
+    }
+
+    #[tokio::test]
+    async fn device_udid_returns_value_from_agent() {
+        let addr = mock_server(Response::Value {
+            value: Some("ABCD-1234".into()),
+        })
+        .await;
+
+        let mut client = AgentClient::new(addr);
+        client.connect().await.unwrap();
+        let udid = client.device_udid().await.unwrap();
+        assert_eq!(udid, Some("ABCD-1234".to_string()));
+        client.disconnect();
+    }
+
+    #[tokio::test]
+    async fn device_udid_none_when_agent_predates_opcode() {
+        // An older agent that does not understand DeviceUdid answers with a
+        // non-value response; the client maps that to "identity unknown".
+        let addr = mock_server(Response::Ok).await;
+
+        let mut client = AgentClient::new(addr);
+        client.connect().await.unwrap();
+        assert_eq!(client.device_udid().await.unwrap(), None);
         client.disconnect();
     }
 

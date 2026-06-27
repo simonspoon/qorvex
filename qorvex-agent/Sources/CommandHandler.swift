@@ -100,7 +100,23 @@ final class CommandHandler {
 
         case .getTargetInfo:
             return handleGetTargetInfo()
+
+        case .deviceUdid:
+            return handleDeviceUdid()
         }
+    }
+
+    // MARK: - Device identity
+
+    /// Report the UDID of the simulator this agent is running on so the host can
+    /// detect a cross-device attach before reusing this agent on the shared port.
+    ///
+    /// The simulator runtime exports `SIMULATOR_UDID` into every process it
+    /// launches, including this UI-test runner. Returns `.value(nil)` when it is
+    /// absent (e.g. running on a physical device), which the host reads as
+    /// "identity unknown".
+    private func handleDeviceUdid() -> AgentResponse {
+        return .value(ProcessInfo.processInfo.environment["SIMULATOR_UDID"])
     }
 
     // MARK: - Tap coordinate
