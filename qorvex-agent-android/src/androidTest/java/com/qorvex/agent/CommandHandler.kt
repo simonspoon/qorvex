@@ -13,6 +13,7 @@ import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.io.ByteArrayOutputStream
 
 class CommandHandler {
@@ -28,17 +29,12 @@ class CommandHandler {
         // returns null on a real device even when an app is foregrounded
         // (device-side `uiautomator dump` works, proving the a11y pipeline is
         // healthy — this is purely the UiAutomation connection not being
-        // configured). Setting the service info forces the accessibility
-        // connection to (re)establish and start tracking the active window.
-        // Guard the *assignment*, not just the mutation: serviceInfo is @NonNull,
-        // so writing back null (if the getter ever returns null) would throw in
-        // this init block and the agent would never start serving.
-        uiAutomation.serviceInfo?.let { info ->
-            info.flags = info.flags or
-                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-            uiAutomation.serviceInfo = info
-        }
+        // configured). [rebindWindow] sets the service info, which forces the
+        // accessibility connection to (re)establish and start tracking the
+        // active window — and, critically, enables `getWindows()` so [rootNode]'s
+        // window-list fallback can recover a stale-bound first connect without a
+        // second start-agent.
+        rebindWindow()
     }
 
     /** Currently targeted Android package name (set via SetTarget). */
@@ -145,8 +141,73 @@ class CommandHandler {
 
     // -- Root accessor ------------------------------------------------------
 
-    /** The active accessibility root window node, or null if none is available. */
-    private fun rootNode(): AccessibilityNodeInfo? = uiAutomation.rootInActiveWindow
+    /**
+     * The active accessibility root window node, or null if none is available.
+     *
+     * Falls back to the live window list when `rootInActiveWindow` is null. The
+     * reported first-connect symptom is a null active-window root while an app is
+     * foreground — yet raw `uiautomator dump`, which reads the window list, still
+     * works. [activeWindowRoot] reads that same source so a single attach can
+     * recover (re-asserting `serviceInfo` alone — what init does — is what proved
+     * insufficient at first connect). Callers own and recycle the returned node.
+     */
+    private fun rootNode(): AccessibilityNodeInfo? =
+        uiAutomation.rootInActiveWindow ?: activeWindowRoot()
+
+    /**
+     * Pick the current foreground window's root from the live window list,
+     * preferring the focused window, then the active one, so the app's window
+     * wins over system chrome (status/nav bars, IME). This is the source
+     * `uiautomator dump` uses, so it succeeds when `rootInActiveWindow` is stale.
+     */
+    private fun activeWindowRoot(): AccessibilityNodeInfo? {
+        val windows = try {
+            uiAutomation.windows
+        } catch (_: Exception) {
+            return null
+        }
+        // Rank: focused > active > application-typed. The type tiebreak matters
+        // because the sort is stable — without it, when no window is focused or
+        // active (a transient post-launch state) the first list entry wins, which
+        // can be system chrome (status/nav bar, IME) rather than the app.
+        val ordered = windows.sortedByDescending {
+            (if (it.isFocused) 4 else 0) +
+                (if (it.isActive) 2 else 0) +
+                (if (it.type == AccessibilityWindowInfo.TYPE_APPLICATION) 1 else 0)
+        }
+        var root: AccessibilityNodeInfo? = null
+        for (w in ordered) {
+            if (root == null) {
+                root = try { w.root } catch (_: Exception) { null }
+            }
+            // Release the window-info handle; the returned root is a separate
+            // node owned by the caller and survives this. No-op on API 33+.
+            @Suppress("DEPRECATION")
+            try { w.recycle() } catch (_: Exception) {}
+        }
+        return root
+    }
+
+    /**
+     * (Re)assert the UiAutomation service info to force the accessibility
+     * connection to re-establish and start tracking the *current* active window.
+     * This is the same configuration applied at startup; re-applying it is how a
+     * connection that latched onto a stale launch/splash window recovers.
+     *
+     * Guard the *assignment*, not just the mutation: `serviceInfo` is @NonNull,
+     * so writing back null (if the getter ever returns null) would throw. A
+     * setter failure is left to propagate — at startup it fails start-agent
+     * loudly (as the original init did); per-request it is caught by `handle`'s
+     * outer guard and returned as an error rather than silently degrading.
+     */
+    private fun rebindWindow() {
+        uiAutomation.serviceInfo?.let { info ->
+            info.flags = info.flags or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            uiAutomation.serviceInfo = info
+        }
+    }
 
     // -- Tap coordinate -----------------------------------------------------
 
@@ -353,8 +414,19 @@ class CommandHandler {
     // -- Screenshot ---------------------------------------------------------
 
     private fun handleScreenshot(): AgentResponse {
-        val bitmap = uiAutomation.takeScreenshot()
-            ?: return AgentResponse.Error("Screenshot failed: no bitmap produced")
+        // `takeScreenshot` is the one capture path that does not go through
+        // [rootNode], so it can't lean on its window-list fallback. If the a11y
+        // connection is stale it can return null; re-assert it, let the UI
+        // settle, and retry once before giving up.
+        val bitmap = (uiAutomation.takeScreenshot() ?: run {
+            rebindWindow()
+            try {
+                uiDevice.waitForIdle(REBIND_TIMEOUT_MS)
+            } catch (_: Exception) {
+                // Best-effort settle; the retry below surfaces a failure if it didn't help.
+            }
+            uiAutomation.takeScreenshot()
+        }) ?: return AgentResponse.Error("Screenshot failed: no bitmap produced")
         val out = ByteArrayOutputStream()
         val ok = bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
         bitmap.recycle()
@@ -473,5 +545,8 @@ class CommandHandler {
     private companion object {
         /** Settle time after waking the screen / dismissing an insecure keyguard. */
         const val WAKE_IDLE_TIMEOUT_MS = 2000L
+
+        /** Max time to wait for the UI to settle (waitForIdle) after a window re-bind. */
+        const val REBIND_TIMEOUT_MS = 2000L
     }
 }
