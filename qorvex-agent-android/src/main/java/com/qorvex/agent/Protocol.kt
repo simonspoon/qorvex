@@ -34,6 +34,7 @@ enum class OpCode(val value: Int) {
     SET_TARGET(0x12),
     FIND_ELEMENT(0x13),
     GET_TARGET_INFO(0x14),
+    BRIDGE_HEALTH(0x15),
     ERROR(0x99),
     RESPONSE(0xA0);
 
@@ -93,6 +94,7 @@ sealed class AgentRequest {
         val elementType: String?,
     ) : AgentRequest()
     object GetTargetInfo : AgentRequest()
+    object BridgeHealth : AgentRequest()
 }
 
 /** A response to send back to the Rust host. */
@@ -271,6 +273,8 @@ fun decodeRequest(data: ByteArray): AgentRequest {
         }
 
         OpCode.GET_TARGET_INFO -> AgentRequest.GetTargetInfo
+
+        OpCode.BRIDGE_HEALTH -> AgentRequest.BridgeHealth
 
         OpCode.ERROR, OpCode.RESPONSE ->
             throw ProtocolException.InvalidPayload(

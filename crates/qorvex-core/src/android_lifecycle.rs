@@ -78,7 +78,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::agent_client::AgentClient;
 
@@ -589,21 +589,75 @@ impl AndroidLifecycle {
             .is_ok_and(|inner| inner.is_some())
     }
 
-    /// Ensure the agent is running, starting it only if not already reachable.
+    /// Quick bridge-health check: confirm the agent's device-side UiAutomation
+    /// connection is alive, independent of what is on screen.
+    ///
+    /// [`is_agent_reachable`](Self::is_agent_reachable) only proves the TCP server
+    /// answers a heartbeat — which a stale agent *orphaned by a prior server*
+    /// (killed without teardown) keeps doing while its accessibility connection is
+    /// dead, persistently returning "no active window" for every UI command. This
+    /// sends a [`Request::BridgeHealth`]: the agent reports healthy only when its
+    /// bridge can reach the live window list, the signal that distinguishes a
+    /// working agent (even one on a locked or app-less screen — which still has
+    /// system windows) from a dead orphan (which sees no windows at all). The
+    /// probe deliberately does not require an *active/app* window and never passes
+    /// the agent's screen-gate, so a merely-locked device is not mistaken for a
+    /// dead bridge and needlessly rebuilt.
+    ///
+    /// Returns `true` if the agent reports a healthy bridge within
+    /// [`BRIDGE_HEALTH_TIMEOUT`], `false` otherwise.
+    pub async fn is_agent_bridge_healthy(&self, local_port: u16) -> bool {
+        let addr = Self::agent_addr(local_port);
+        let check = async {
+            let mut client = AgentClient::new(addr);
+            client.connect().await.ok()?;
+            let result = client.bridge_health().await;
+            client.disconnect();
+            result.ok()
+        };
+        tokio::time::timeout(BRIDGE_HEALTH_TIMEOUT, check)
+            .await
+            .is_ok_and(|inner| inner.is_some())
+    }
+
+    /// Ensure the agent is running, starting it only if not already reachable
+    /// **and healthy**.
     ///
     /// Unlike [`ensure_running`](Self::ensure_running) which always rebuilds,
     /// this first checks whether the agent is already serving on the forwarded
     /// port and skips the build/install/spawn cycle if it is. This is the entry
     /// point #89 should prefer when a forward may already point at a live agent.
+    ///
+    /// Reachability alone is not enough to reuse an agent: a stale orphan left by
+    /// a prior server keeps heartbeating with a dead UiAutomation bridge, so the
+    /// session would be stranded in "no active window". When the agent is
+    /// reachable but its bridge fails [`is_agent_bridge_healthy`](Self::is_agent_bridge_healthy),
+    /// the orphan is torn down ([`ensure_running`](Self::ensure_running) does not
+    /// stop a pre-existing process, so this teardown frees the device port for the
+    /// fresh spawn) and the full build/install/spawn cycle runs.
     #[instrument(skip(self))]
     pub async fn ensure_agent_ready(&self, local_port: u16) -> Result<(), AndroidLifecycleError> {
         if self.is_agent_reachable(local_port).await {
-            debug!("android agent already reachable, skipping build");
-            return Ok(());
+            if self.is_agent_bridge_healthy(local_port).await {
+                debug!("android agent already reachable and bridge healthy, skipping build");
+                return Ok(());
+            }
+            warn!(
+                "android agent reachable but UiAutomation bridge unhealthy \
+                 (stale orphan from a prior server); relaunching"
+            );
+            let _ = self.terminate_agent();
         }
         self.ensure_running(local_port).await
     }
 }
+
+/// Upper bound on the bridge-health probe (connect + [`Request::BridgeHealth`]
+/// round-trip). The agent answers in well under a second when healthy and
+/// returns promptly when its bridge is dead; this only caps a hung/half-open
+/// connection so the fast-path can't stall. Comfortably above the agent's own
+/// ~1s internal liveness poll.
+const BRIDGE_HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Lowest Java major version Gradle 8.10.2 + AGP 8.5.2 will run on.
 const MIN_BUILD_JAVA: u32 = 17;
@@ -1134,6 +1188,60 @@ mod tests {
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
         // Port with (almost certainly) nothing listening on loopback.
         assert!(!lifecycle.is_agent_reachable(19897).await);
+    }
+
+    #[tokio::test]
+    async fn is_agent_bridge_healthy_false_when_nothing_listening() {
+        let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
+        let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
+        assert!(!lifecycle.is_agent_bridge_healthy(19898).await);
+    }
+
+    /// Spawn a loopback mock agent that reads one request frame, asserts it is a
+    /// `BridgeHealth`, and replies with `response`. Returns the bound port.
+    async fn spawn_bridge_health_mock(response: crate::protocol::Response) -> u16 {
+        use crate::protocol::{decode_request, encode_response, read_frame_length, Request};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).await.unwrap();
+            let len = read_frame_length(&header) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            // The probe must send BridgeHealth, never a heartbeat or window-gated
+            // request — that is the whole point of a window-independent signal.
+            assert_eq!(decode_request(&payload).unwrap(), Request::BridgeHealth);
+            let bytes = encode_response(&response);
+            stream.write_all(&bytes).await.unwrap();
+            stream.flush().await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn is_agent_bridge_healthy_true_when_agent_reports_ok() {
+        let port = spawn_bridge_health_mock(crate::protocol::Response::Ok).await;
+        let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
+        let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
+        assert!(lifecycle.is_agent_bridge_healthy(port).await);
+    }
+
+    #[tokio::test]
+    async fn is_agent_bridge_healthy_false_when_agent_reports_error() {
+        // A reachable orphan whose bridge is dead answers the probe with an
+        // Error; the fast-path must read that as "not healthy" and not reuse it.
+        let port = spawn_bridge_health_mock(crate::protocol::Response::Error {
+            message: "Bridge unhealthy: no reachable windows".into(),
+        })
+        .await;
+        let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
+        let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
+        assert!(!lifecycle.is_agent_bridge_healthy(port).await);
     }
 
     #[tokio::test]

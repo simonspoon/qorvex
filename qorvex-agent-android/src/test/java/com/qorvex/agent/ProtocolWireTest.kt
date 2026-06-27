@@ -240,6 +240,12 @@ class ProtocolWireTest {
         assertTrue(decodeRequest(byteArrayOf(0x14)) is AgentRequest.GetTargetInfo)
     }
 
+    @Test
+    fun decodeBridgeHealth() {
+        // Opcode 0x15, no payload — matches Rust bridge_health_wire_format.
+        assertTrue(decodeRequest(byteArrayOf(0x15)) is AgentRequest.BridgeHealth)
+    }
+
     // -- Error handling ----------------------------------------------------
 
     @Test(expected = ProtocolException.InvalidOpCode::class)

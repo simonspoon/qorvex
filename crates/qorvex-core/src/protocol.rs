@@ -98,6 +98,10 @@ pub enum OpCode {
     FindElement = 0x13,
     /// Get metadata about the currently targeted application (no payload).
     GetTargetInfo = 0x14,
+    /// Probe the agent's device-side accessibility bridge for liveness, independent
+    /// of what is on screen (no payload). Distinguishes a healthy agent from a
+    /// stale orphan whose UiAutomation connection is dead. Android-only.
+    BridgeHealth = 0x15,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -122,6 +126,7 @@ impl OpCode {
             0x12 => Ok(OpCode::SetTarget),
             0x13 => Ok(OpCode::FindElement),
             0x14 => Ok(OpCode::GetTargetInfo),
+            0x15 => Ok(OpCode::BridgeHealth),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -190,6 +195,8 @@ pub enum Request {
     },
     /// Get metadata about the currently targeted application.
     GetTargetInfo,
+    /// Probe the device-side accessibility bridge for liveness (Android-only).
+    BridgeHealth,
 }
 
 impl Request {
@@ -211,6 +218,7 @@ impl Request {
             Request::SetTarget { .. } => "set_target",
             Request::FindElement { .. } => "find_element",
             Request::GetTargetInfo => "get_target_info",
+            Request::BridgeHealth => "bridge_health",
         }
     }
 }
@@ -565,6 +573,9 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
         Request::GetTargetInfo => {
             payload.push(OpCode::GetTargetInfo as u8);
         }
+        Request::BridgeHealth => {
+            payload.push(OpCode::BridgeHealth as u8);
+        }
     }
 
     encode_frame(&payload)
@@ -685,6 +696,8 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
         }
 
         OpCode::GetTargetInfo => Ok(Request::GetTargetInfo),
+
+        OpCode::BridgeHealth => Ok(Request::BridgeHealth),
 
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
@@ -1061,6 +1074,18 @@ mod tests {
     }
 
     #[test]
+    fn request_bridge_health() {
+        round_trip_request(&Request::BridgeHealth);
+    }
+
+    #[test]
+    fn bridge_health_wire_format() {
+        let wire = encode_request(&Request::BridgeHealth);
+        // 4-byte header with length=1, then opcode 0x15
+        assert_eq!(wire, vec![1, 0, 0, 0, 0x15]);
+    }
+
+    #[test]
     fn response_target_info() {
         round_trip_response(&Response::TargetInfo {
             json: r#"{"bundle_id":"com.example.app","display_name":"MyApp","version":"1.0","build":"42","state":"running"}"#.to_string(),
@@ -1143,7 +1168,7 @@ mod tests {
     fn opcode_round_trip() {
         let codes: Vec<u8> = vec![
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14,
-            0x99, 0xA0,
+            0x15, 0x99, 0xA0,
         ];
         for &code in &codes {
             let op = OpCode::from_u8(code).unwrap();

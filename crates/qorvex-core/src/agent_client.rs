@@ -218,6 +218,19 @@ impl AgentClient {
         Ok(())
     }
 
+    /// Probe the agent's device-side accessibility bridge for liveness.
+    ///
+    /// Unlike [`heartbeat`](Self::heartbeat) — which a stale orphan still answers
+    /// while its UiAutomation connection is dead — this asks the agent to confirm
+    /// its accessibility bridge can reach the live window list. The agent replies
+    /// [`Response::Ok`] only when the bridge is healthy and an [`Response::Error`]
+    /// (mapped to [`AgentClientError::AgentError`]) when it is not, so a `Ok(())`
+    /// here means "safe to reuse this agent".
+    pub async fn bridge_health(&mut self) -> Result<(), AgentClientError> {
+        self.send(&Request::BridgeHealth).await?;
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Internal frame I/O
     // -----------------------------------------------------------------------
@@ -384,6 +397,33 @@ mod tests {
         client.heartbeat().await.unwrap();
         client.disconnect();
         assert!(!client.is_connected());
+    }
+
+    #[tokio::test]
+    async fn bridge_health_ok_via_mock_server() {
+        let addr = mock_server(Response::Ok).await;
+
+        let mut client = AgentClient::new(addr);
+        client.connect().await.unwrap();
+        client.bridge_health().await.unwrap();
+        client.disconnect();
+    }
+
+    #[tokio::test]
+    async fn bridge_health_err_when_agent_reports_unhealthy() {
+        // A reachable-but-dead orphan answers the probe with an Error, which the
+        // client surfaces as AgentError — the signal the fast-path treats as
+        // "do not reuse".
+        let addr = mock_server(Response::Error {
+            message: "Bridge unhealthy".into(),
+        })
+        .await;
+
+        let mut client = AgentClient::new(addr);
+        client.connect().await.unwrap();
+        let result = client.bridge_health().await;
+        assert!(matches!(result, Err(AgentClientError::AgentError(_))));
+        client.disconnect();
     }
 
     #[tokio::test]

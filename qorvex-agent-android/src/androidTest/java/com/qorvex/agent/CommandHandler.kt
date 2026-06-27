@@ -54,6 +54,7 @@ class CommandHandler {
         // or a null window. Simulators never sleep, so iOS has no analogue.
         screenGate(request) ?: when (request) {
             is AgentRequest.Heartbeat -> AgentResponse.Ok
+            is AgentRequest.BridgeHealth -> handleBridgeHealth()
             is AgentRequest.TapCoord -> handleTapCoord(request.x, request.y)
             is AgentRequest.TapElement ->
                 handleTap(request.selector, byLabel = false, elementType = null, timeoutMs = request.timeoutMs)
@@ -88,6 +89,11 @@ class CommandHandler {
     private fun needsTargetWindow(request: AgentRequest): Boolean = when (request) {
         is AgentRequest.Heartbeat,
         is AgentRequest.SetTarget,
+        // BridgeHealth must NOT wake the screen or be blocked by a lock: it is a
+        // window-INDEPENDENT liveness probe whose entire job is to tell a healthy
+        // agent (locked screen included) apart from a dead orphan. Routing it
+        // through the gate would make a merely-locked device read as unhealthy.
+        is AgentRequest.BridgeHealth,
         is AgentRequest.GetTargetInfo -> false
         else -> true
     }
@@ -208,6 +214,56 @@ class CommandHandler {
             uiAutomation.serviceInfo = info
         }
     }
+
+    // -- Bridge health ------------------------------------------------------
+
+    /**
+     * Window-INDEPENDENT liveness probe for the device-side accessibility bridge.
+     *
+     * A stale agent orphaned by a prior server (killed without teardown) keeps
+     * answering heartbeats while its UiAutomation connection is dead — every UI
+     * command then fails with "no active window" forever, and the connection is
+     * unrecoverable in-process. This proves the bridge is genuinely alive by
+     * checking that the *window list* is reachable: a live connection always sees
+     * at least one window (status/nav bar, wallpaper, or the keyguard), whereas a
+     * dead orphan sees none, persistently. We deliberately do NOT require an
+     * *active/app* window — a healthy agent on a locked or app-less screen
+     * legitimately lacks one — so this never conflates "locked" or "between apps"
+     * (states a healthy agent recovers from) with "dead bridge". That is the same
+     * `uiAutomation.windows` source [activeWindowRoot] reads, so the orphan that
+     * makes DumpTree report "no active window" also reports unhealthy here.
+     *
+     * Polled briefly so a transient just-connected empty list is not misread as
+     * dead; the orphan stays empty for the whole window and reports unhealthy.
+     */
+    private fun handleBridgeHealth(): AgentResponse {
+        val deadline = SystemClock.uptimeMillis() + BRIDGE_HEALTH_PROBE_MS
+        while (true) {
+            if (windowListReachable()) return AgentResponse.Ok
+            if (SystemClock.uptimeMillis() >= deadline) {
+                return AgentResponse.Error(
+                    "Bridge unhealthy: UiAutomation reports no reachable windows " +
+                        "(stale or orphaned agent)",
+                )
+            }
+            SystemClock.sleep(BRIDGE_HEALTH_INTERVAL_MS)
+        }
+    }
+
+    /** True if the live window list can be retrieved and holds at least one window. */
+    private fun windowListReachable(): Boolean =
+        try {
+            val windows = uiAutomation.windows
+            val count = windows?.size ?: 0
+            windows?.forEach { w ->
+                // Release each window-info handle; we only inspect the count.
+                @Suppress("DEPRECATION")
+                try { w.recycle() } catch (_: Exception) {}
+            }
+            count > 0
+        } catch (_: Exception) {
+            false
+        }
 
     // -- Tap coordinate -----------------------------------------------------
 
@@ -548,5 +604,11 @@ class CommandHandler {
 
         /** Max time to wait for the UI to settle (waitForIdle) after a window re-bind. */
         const val REBIND_TIMEOUT_MS = 2000L
+
+        /** Total time to poll for a reachable window list before declaring the bridge dead. */
+        const val BRIDGE_HEALTH_PROBE_MS = 1000L
+
+        /** Interval between window-list reachability polls. */
+        const val BRIDGE_HEALTH_INTERVAL_MS = 100L
     }
 }
