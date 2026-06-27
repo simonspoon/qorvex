@@ -26,10 +26,13 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Setup logging
+    // Setup logging. Honor RUST_LOG when set; otherwise default to info.
     let log_dir = qorvex_core::session::logs_dir();
     let file_appender = tracing_appender::rolling::never(&log_dir, "qorvex-server.log");
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
         .with_writer(file_appender)
         .with_ansi(false)
         .init();
