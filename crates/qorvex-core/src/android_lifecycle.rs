@@ -80,7 +80,7 @@ use thiserror::Error;
 
 use tracing::{debug, info, instrument, warn};
 
-use crate::agent_client::AgentClient;
+use crate::agent_client::{AgentClient, AgentClientError};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -589,8 +589,8 @@ impl AndroidLifecycle {
             .is_ok_and(|inner| inner.is_some())
     }
 
-    /// Quick bridge-health check: confirm the agent's device-side UiAutomation
-    /// connection is alive, independent of what is on screen.
+    /// Probe the agent's device-side UiAutomation bridge for liveness,
+    /// independent of what is on screen.
     ///
     /// [`is_agent_reachable`](Self::is_agent_reachable) only proves the TCP server
     /// answers a heartbeat — which a stale agent *orphaned by a prior server*
@@ -604,20 +604,40 @@ impl AndroidLifecycle {
     /// the agent's screen-gate, so a merely-locked device is not mistaken for a
     /// dead bridge and needlessly rebuilt.
     ///
-    /// Returns `true` if the agent reports a healthy bridge within
-    /// [`BRIDGE_HEALTH_TIMEOUT`], `false` otherwise.
-    pub async fn is_agent_bridge_healthy(&self, local_port: u16) -> bool {
+    /// Returns a *three-way* verdict rather than a bool, because the agent serves
+    /// one TCP connection at a time on a device port that **every** session
+    /// shares (task #116). A bool would conflate a definitive "bridge is dead"
+    /// answer with a probe that merely couldn't get the connection — and the
+    /// caller force-stops the shared agent on the former. The distinction:
+    ///
+    /// - [`BridgeHealth::Healthy`] — the agent answered [`Response::Ok`].
+    /// - [`BridgeHealth::Unhealthy`] — the agent answered [`Response::Error`]
+    ///   ([`AgentClientError::AgentError`]): its bridge is genuinely dead, a real
+    ///   orphan that must be torn down and rebuilt.
+    /// - [`BridgeHealth::Indeterminate`] — no verdict (connect/read failed or the
+    ///   [`BRIDGE_HEALTH_TIMEOUT`] elapsed). A dead-bridge orphan *answers* the
+    ///   probe promptly with an error rather than timing out, so the likely cause
+    ///   here is that another session is holding the agent's single connection
+    ///   slot. The agent must **not** be force-stopped on this verdict — that is
+    ///   exactly the cross-session race in task #116.
+    async fn probe_bridge_health(&self, local_port: u16) -> BridgeHealth {
         let addr = Self::agent_addr(local_port);
         let check = async {
             let mut client = AgentClient::new(addr);
-            client.connect().await.ok()?;
+            client.connect().await?;
             let result = client.bridge_health().await;
             client.disconnect();
-            result.ok()
+            result
         };
-        tokio::time::timeout(BRIDGE_HEALTH_TIMEOUT, check)
-            .await
-            .is_ok_and(|inner| inner.is_some())
+        match tokio::time::timeout(BRIDGE_HEALTH_TIMEOUT, check).await {
+            Ok(Ok(())) => BridgeHealth::Healthy,
+            // The agent answered, but reported its bridge is dead — a real orphan.
+            Ok(Err(AgentClientError::AgentError(_))) => BridgeHealth::Unhealthy,
+            // Connect/read failure (Ok(Err(_))) or our own timeout (Err(_)): we
+            // never got a verdict. Treat as contention, not a dead bridge, so a
+            // possibly-in-use agent is never force-stopped.
+            Ok(Err(_)) | Err(_) => BridgeHealth::Indeterminate,
+        }
     }
 
     /// Ensure the agent is running, starting it only if not already reachable
@@ -630,26 +650,66 @@ impl AndroidLifecycle {
     ///
     /// Reachability alone is not enough to reuse an agent: a stale orphan left by
     /// a prior server keeps heartbeating with a dead UiAutomation bridge, so the
-    /// session would be stranded in "no active window". When the agent is
-    /// reachable but its bridge fails [`is_agent_bridge_healthy`](Self::is_agent_bridge_healthy),
-    /// the orphan is torn down ([`ensure_running`](Self::ensure_running) does not
-    /// stop a pre-existing process, so this teardown frees the device port for the
-    /// fresh spawn) and the full build/install/spawn cycle runs.
+    /// session would be stranded in "no active window". So when reachable, the
+    /// bridge is probed ([`probe_bridge_health`](Self::probe_bridge_health)) and
+    /// only a *definitive* [`BridgeHealth::Unhealthy`] verdict tears the orphan
+    /// down ([`ensure_running`](Self::ensure_running) does not stop a pre-existing
+    /// process, so this teardown frees the device port for the fresh spawn)
+    /// before the full build/install/spawn cycle runs.
+    ///
+    /// A [`BridgeHealth::Indeterminate`] verdict — the probe could not get the
+    /// agent's single (device-wide shared) connection slot — must **not** trigger
+    /// teardown: the agent heartbeated moments ago, so it is alive and most
+    /// likely just busy serving a concurrent session. Force-stopping it there is
+    /// the cross-session race in task #116; instead the live agent is reused.
     #[instrument(skip(self))]
     pub async fn ensure_agent_ready(&self, local_port: u16) -> Result<(), AndroidLifecycleError> {
         if self.is_agent_reachable(local_port).await {
-            if self.is_agent_bridge_healthy(local_port).await {
-                debug!("android agent already reachable and bridge healthy, skipping build");
-                return Ok(());
+            match self.probe_bridge_health(local_port).await {
+                BridgeHealth::Healthy => {
+                    debug!("android agent already reachable and bridge healthy, skipping build");
+                    return Ok(());
+                }
+                BridgeHealth::Indeterminate => {
+                    // Reachable (heartbeated) but the bridge probe got no verdict:
+                    // another session holds the agent's single connection slot. A
+                    // dead-bridge orphan answers the probe with an error rather
+                    // than timing out, so this is contention, not a dead agent —
+                    // reuse it instead of force-stopping one that may be in use by
+                    // another session (task #116).
+                    debug!(
+                        "android agent reachable but bridge probe inconclusive \
+                         (connection contended by another session); reusing"
+                    );
+                    return Ok(());
+                }
+                BridgeHealth::Unhealthy => {
+                    warn!(
+                        "android agent reachable but UiAutomation bridge reported \
+                         dead (stale orphan from a prior server); relaunching"
+                    );
+                    let _ = self.terminate_agent();
+                }
             }
-            warn!(
-                "android agent reachable but UiAutomation bridge unhealthy \
-                 (stale orphan from a prior server); relaunching"
-            );
-            let _ = self.terminate_agent();
         }
         self.ensure_running(local_port).await
     }
+}
+
+/// Three-way verdict from [`AndroidLifecycle::probe_bridge_health`]. Distinguishes
+/// a definitive "bridge is dead" answer from a probe that could not get a verdict,
+/// because only the former justifies tearing down the device-wide shared agent
+/// (task #116).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BridgeHealth {
+    /// The agent answered that its UiAutomation bridge can reach the window list.
+    Healthy,
+    /// The agent answered that its bridge is dead — a real stale orphan.
+    Unhealthy,
+    /// No verdict: connect/read failed or the probe timed out. Most likely the
+    /// agent's single TCP slot is held by a concurrent session, **not** proof the
+    /// bridge is dead — so the agent must not be force-stopped.
+    Indeterminate,
 }
 
 /// Upper bound on the bridge-health probe (connect + [`Request::BridgeHealth`]
@@ -1191,10 +1251,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn is_agent_bridge_healthy_false_when_nothing_listening() {
+    async fn probe_bridge_health_indeterminate_when_nothing_listening() {
         let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
-        assert!(!lifecycle.is_agent_bridge_healthy(19898).await);
+        // Connect is refused → no verdict. This must be Indeterminate, NOT
+        // Unhealthy: a probe that can't reach the agent must never be read as a
+        // dead bridge (which would force-stop a shared, possibly in-use agent —
+        // the task #116 race).
+        assert_eq!(
+            lifecycle.probe_bridge_health(19898).await,
+            BridgeHealth::Indeterminate
+        );
     }
 
     /// Spawn a loopback mock agent that reads one request frame, asserts it is a
@@ -1224,24 +1291,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn is_agent_bridge_healthy_true_when_agent_reports_ok() {
+    async fn probe_bridge_health_healthy_when_agent_reports_ok() {
         let port = spawn_bridge_health_mock(crate::protocol::Response::Ok).await;
         let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
-        assert!(lifecycle.is_agent_bridge_healthy(port).await);
+        assert_eq!(
+            lifecycle.probe_bridge_health(port).await,
+            BridgeHealth::Healthy
+        );
     }
 
     #[tokio::test]
-    async fn is_agent_bridge_healthy_false_when_agent_reports_error() {
-        // A reachable orphan whose bridge is dead answers the probe with an
-        // Error; the fast-path must read that as "not healthy" and not reuse it.
+    async fn probe_bridge_health_unhealthy_when_agent_reports_error() {
+        // A reachable orphan whose bridge is dead *answers* the probe with an
+        // Error — a definitive verdict. Only this justifies tearing it down.
         let port = spawn_bridge_health_mock(crate::protocol::Response::Error {
             message: "Bridge unhealthy: no reachable windows".into(),
         })
         .await;
         let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
-        assert!(!lifecycle.is_agent_bridge_healthy(port).await);
+        assert_eq!(
+            lifecycle.probe_bridge_health(port).await,
+            BridgeHealth::Unhealthy
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_bridge_health_indeterminate_when_connection_grabbed() {
+        // Model the task #116 race: another session holds the agent's single
+        // connection, so this probe connects but gets no usable answer (here the
+        // mock accepts then drops without replying → read fails). The verdict
+        // must be Indeterminate so the caller reuses the live agent instead of
+        // force-stopping one that is in use by the other session.
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            // Drop without replying — the bridge probe gets no verdict.
+        });
+        let config = AndroidLifecycleConfig::new(PathBuf::from("/tmp/agent-android"));
+        let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
+        assert_eq!(
+            lifecycle.probe_bridge_health(port).await,
+            BridgeHealth::Indeterminate
+        );
     }
 
     #[tokio::test]
