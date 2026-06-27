@@ -340,6 +340,9 @@ enum Command {
         platform: PlatformArg,
     },
 
+    /// Stop the managed automation agent (leaves the server running)
+    StopAgent,
+
     /// Stop the server for this session
     Stop,
 
@@ -772,6 +775,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             )
             .await
         }
+        Command::StopAgent => send_command(&mut client, IpcRequest::StopAgent, &cli).await,
         Command::Stop => stop_server(&mut client, &cli).await,
         Command::Status => get_status(&mut client, &cli).await,
         Command::Log => get_log(&mut client, &cli).await,
