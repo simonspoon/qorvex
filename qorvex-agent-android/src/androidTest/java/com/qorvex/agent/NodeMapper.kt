@@ -136,11 +136,17 @@ object NodeMapper {
     fun frame(node: AccessibilityNodeInfo): FrameJSON {
         val r = Rect()
         node.getBoundsInScreen(r)
+        // For a node scrolled out of its container, `getBoundsInScreen` returns a
+        // rect clipped to the viewport — its `bottom`/`right` can land above/left
+        // of `top`/`left`, yielding a negative size. Such a frame is meaningless
+        // (the node is off-screen, and `hittable` already reports false), and a
+        // negative extent breaks any consumer deriving a center point. Clamp the
+        // size to >= 0 so the frame is always sane.
         return FrameJSON(
             x = r.left.toDouble(),
             y = r.top.toDouble(),
-            width = (r.right - r.left).toDouble(),
-            height = (r.bottom - r.top).toDouble(),
+            width = (r.right - r.left).coerceAtLeast(0).toDouble(),
+            height = (r.bottom - r.top).coerceAtLeast(0).toDouble(),
         )
     }
 
