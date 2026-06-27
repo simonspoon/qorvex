@@ -192,6 +192,13 @@ pub enum IpcRequest {
         project_dir: Option<String>,
         #[serde(default)]
         platform: Platform,
+        /// JDK home the *client* shell resolved (`QORVEX_ANDROID_JAVA_HOME`,
+        /// else `JAVA_HOME`), forwarded so the persistent server daemon can pin
+        /// a Gradle-compatible JDK for the Android build. The daemon's own
+        /// environment is frozen at spawn time, so a value exported in a later
+        /// shell can only reach it over IPC. `None` for iOS / when unset.
+        #[serde(default)]
+        java_home: Option<String>,
     },
     /// Stop the managed agent process.
     StopAgent,
@@ -818,6 +825,7 @@ mod platform_tests {
             IpcRequest::StartAgent {
                 project_dir,
                 platform,
+                ..
             } => {
                 assert!(project_dir.is_none());
                 assert_eq!(platform, Platform::Ios);

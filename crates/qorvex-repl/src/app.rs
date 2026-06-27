@@ -630,6 +630,7 @@ impl App {
             "start-agent" => IpcRequest::StartAgent {
                 project_dir: args.positional.first().cloned(),
                 platform: platform_from_args(&args),
+                java_home: qorvex_core::android_lifecycle::client_java_home_override(),
             },
             "stop-agent" => IpcRequest::StopAgent,
             "set-target" => IpcRequest::SetTarget {
@@ -1091,6 +1092,7 @@ impl App {
             "start-agent" => IpcRequest::StartAgent {
                 project_dir: args.positional.first().cloned(),
                 platform: platform_from_args(&args),
+                java_home: qorvex_core::android_lifecycle::client_java_home_override(),
             },
             "stop-agent" => IpcRequest::StopAgent,
             "set-target" => IpcRequest::SetTarget {

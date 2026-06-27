@@ -119,6 +119,11 @@ pub struct AndroidLifecycleConfig {
     pub startup_timeout: Duration,
     /// Maximum number of launch retries before giving up.
     pub max_retries: u32,
+    /// JDK home forwarded by the client to pin the Gradle build's Java, taking
+    /// precedence over this (daemon) process's ambient environment. `None` lets
+    /// resolution fall back to the daemon's own `QORVEX_ANDROID_JAVA_HOME` /
+    /// `JAVA_HOME` / `java_home -v 17`. See [`resolve_build_java_home`].
+    pub java_home: Option<PathBuf>,
 }
 
 impl AndroidLifecycleConfig {
@@ -131,6 +136,7 @@ impl AndroidLifecycleConfig {
             device_port: crate::android_driver::DEFAULT_ANDROID_AGENT_PORT,
             startup_timeout: Duration::from_secs(60),
             max_retries: 3,
+            java_home: None,
         }
     }
 }
@@ -286,8 +292,10 @@ impl AndroidLifecycle {
 
         // Pin a Gradle-compatible JDK (17) for the daemon when we can find one,
         // so the build does not depend on the host's ambient JAVA_HOME pointing
-        // at a supported Java version (Gradle 8.10.2 rejects Java > 23).
-        let pinned_jdk = resolve_build_java_home();
+        // at a supported Java version (Gradle 8.10.2 rejects Java > 23). A
+        // client-forwarded `java_home` wins over this daemon process's frozen
+        // environment (the whole point of forwarding it).
+        let pinned_jdk = resolve_build_java_home(self.config.java_home.as_deref());
         if let Some(ref jh) = pinned_jdk {
             debug!(java_home = %jh.display(), "pinning JDK for Gradle build");
             cmd.env("JAVA_HOME", jh);
@@ -301,7 +309,9 @@ impl AndroidLifecycle {
             if pinned_jdk.is_none() {
                 diag.push_str(
                     "\n(hint: no JDK 17 found — Gradle 8.10.2 needs Java 17–23. \
-                     Install a JDK 17, or set QORVEX_ANDROID_JAVA_HOME to one.)",
+                     Install a JDK 17, then set QORVEX_ANDROID_JAVA_HOME (or \
+                     JAVA_HOME) to it in the shell you run qorvex from — it is \
+                     forwarded to the server, so no server restart is needed.)",
                 );
             }
             return Err(AndroidLifecycleError::BuildFailed(diag));
@@ -615,15 +625,22 @@ const MAX_BUILD_JAVA: u32 = 23;
 /// (even an older one like 11) when no exact match exists.
 ///
 /// Resolution order (first that validates wins):
-/// 1. `QORVEX_ANDROID_JAVA_HOME` — explicit override.
-/// 2. The ambient `JAVA_HOME` — what the build already relied on.
-/// 3. macOS `/usr/libexec/java_home -v 17` — the canonical JDK-17 locator.
+/// 1. `client_override` — the JDK the client shell forwarded over IPC. The
+///    server is a persistent daemon whose environment is frozen at spawn, so a
+///    freshly-exported `QORVEX_ANDROID_JAVA_HOME` can only reach it this way;
+///    honoring it first is what makes the hint's advice actually work.
+/// 2. `QORVEX_ANDROID_JAVA_HOME` — explicit override in the daemon's own env.
+/// 3. The ambient `JAVA_HOME` — what the build already relied on.
+/// 4. macOS `/usr/libexec/java_home -v 17` — the canonical JDK-17 locator.
 ///
 /// Returns `None` if no compatible JDK can be pinned, in which case the build
 /// falls back to the ambient `JAVA_HOME` (and `build_agent` adds a hint on
 /// failure).
-fn resolve_build_java_home() -> Option<PathBuf> {
+fn resolve_build_java_home(client_override: Option<&Path>) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(client) = client_override {
+        candidates.push(client.to_path_buf());
+    }
     if let Some(explicit) = std::env::var_os("QORVEX_ANDROID_JAVA_HOME") {
         candidates.push(PathBuf::from(explicit));
     }
@@ -648,6 +665,24 @@ fn resolve_build_java_home() -> Option<PathBuf> {
         java_major_version(home)
             .is_some_and(|major| (MIN_BUILD_JAVA..=MAX_BUILD_JAVA).contains(&major))
     })
+}
+
+/// The JDK home a *client* (REPL/CLI) should forward to the server for the
+/// Android Gradle build, read from the client's own environment.
+///
+/// The server runs as a persistent, detached daemon whose environment is frozen
+/// at spawn time, so a `QORVEX_ANDROID_JAVA_HOME` (or `JAVA_HOME`) exported in a
+/// later shell never reaches it. Clients read it here and send it on the
+/// `StartAgent` request so `start-agent` honors it without a server restart.
+/// Prefers the explicit `QORVEX_ANDROID_JAVA_HOME`, falling back to the ambient
+/// `JAVA_HOME`; the server still validates the chosen path's Java version.
+pub fn client_java_home_override() -> Option<String> {
+    // Treat an explicitly-empty value as unset, so a stray `QORVEX_ANDROID_JAVA_HOME=`
+    // does not suppress the `JAVA_HOME` fallback (and an empty path is never forwarded).
+    fn non_empty(var: &str) -> Option<String> {
+        std::env::var(var).ok().filter(|s| !s.is_empty())
+    }
+    non_empty("QORVEX_ANDROID_JAVA_HOME").or_else(|| non_empty("JAVA_HOME"))
 }
 
 /// Run `<java_home>/bin/java -version` and parse the major version (e.g. 17, 23,
@@ -732,6 +767,7 @@ mod tests {
             device_port: 9999,
             startup_timeout: Duration::from_secs(10),
             max_retries: 5,
+            java_home: None,
         };
         assert_eq!(config.device_port, 9999);
         assert_eq!(config.startup_timeout, Duration::from_secs(10));
@@ -876,6 +912,7 @@ mod tests {
             device_port: 5555,
             startup_timeout: Duration::from_secs(15),
             max_retries: 2,
+            java_home: None,
         };
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
         assert_eq!(lifecycle.serial(), "emulator-5554");
@@ -935,6 +972,48 @@ mod tests {
         assert_eq!(parse_java_major(""), None);
     }
 
+    // --- build JDK resolution: client override (the QORVEX_ANDROID_JAVA_HOME
+    //     daemon-env fix) ---
+
+    /// Build a fake JDK home whose `bin/java -version` reports `version_line`.
+    #[cfg(unix)]
+    fn fake_jdk(tag: &str, version_line: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("qorvex-fake-jdk-{tag}-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let java = bin.join("java");
+        std::fs::write(&java, format!("#!/bin/sh\necho '{version_line}' 1>&2\n")).unwrap();
+        std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    }
+
+    /// A client-forwarded JDK that validates is pinned ahead of the daemon's own
+    /// (frozen) environment — the core of the QORVEX_ANDROID_JAVA_HOME fix.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_build_java_home_honors_validated_client_override() {
+        let dir = fake_jdk("ok", "openjdk version \"17.0.19\" 2026-04-21");
+        assert_eq!(
+            resolve_build_java_home(Some(&dir)).as_deref(),
+            Some(dir.as_path())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A too-new client JDK is validated and skipped, never blindly pinned —
+    /// resolution falls through to the other candidates instead.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_build_java_home_rejects_unsupported_client_override() {
+        let dir = fake_jdk("new", "openjdk version \"26.0.1\" 2026-09-16");
+        assert_ne!(
+            resolve_build_java_home(Some(&dir)).as_deref(),
+            Some(dir.as_path())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // --- tail_diagnostic reducer ---
 
     #[test]
@@ -982,6 +1061,7 @@ mod tests {
             device_port: 8080,
             startup_timeout: Duration::from_secs(1),
             max_retries: 3,
+            java_home: None,
         };
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
         // No child process and nothing listening → the loop falls through to
@@ -1019,6 +1099,7 @@ mod tests {
             device_port: 8080,
             startup_timeout: Duration::from_secs(5),
             max_retries: 3,
+            java_home: None,
         };
         let lifecycle = AndroidLifecycle::new("emulator-5554".into(), config);
         assert!(lifecycle.wait_for_ready(port).await.is_ok());

@@ -141,7 +141,8 @@ impl ServerState {
             IpcRequest::StartAgent {
                 project_dir,
                 platform,
-            } => self.handle_start_agent(project_dir, platform).await,
+                java_home,
+            } => self.handle_start_agent(project_dir, platform, java_home).await,
             IpcRequest::StopAgent => self.handle_stop_agent(),
             IpcRequest::Connect { host, port } => self.handle_connect(&host, port).await,
 
@@ -630,6 +631,7 @@ impl ServerState {
         &mut self,
         project_dir: Option<String>,
         platform: Platform,
+        java_home: Option<String>,
     ) -> IpcResponse {
         // The REPL defaults `--platform` to iOS when omitted, so an explicit-iOS
         // request is indistinguishable from an unspecified one. Device selection
@@ -648,7 +650,7 @@ impl ServerState {
         };
         match platform {
             Platform::Ios => self.handle_start_agent_ios(project_dir).await,
-            Platform::Android => self.handle_start_agent_android(project_dir).await,
+            Platform::Android => self.handle_start_agent_android(project_dir, java_home).await,
         }
     }
 
@@ -658,7 +660,11 @@ impl ServerState {
     ///
     /// Missing or invalid Android config yields a clear validation error here
     /// (spec F3) rather than a downstream Gradle/adb crash.
-    async fn handle_start_agent_android(&mut self, project_dir: Option<String>) -> IpcResponse {
+    async fn handle_start_agent_android(
+        &mut self,
+        project_dir: Option<String>,
+        java_home: Option<String>,
+    ) -> IpcResponse {
         let serial = match self.android_serial.clone() {
             Some(s) => s,
             None => {
@@ -728,6 +734,10 @@ impl ServerState {
 
         let mut lc_config = AndroidLifecycleConfig::new(project_dir);
         lc_config.device_port = device_port;
+        // Honor the JDK the *client* shell resolved: the daemon's own env was
+        // frozen when it was spawned, so this is the only path by which a
+        // freshly-exported QORVEX_ANDROID_JAVA_HOME reaches the Gradle build.
+        lc_config.java_home = java_home.map(PathBuf::from);
         let lifecycle = Arc::new(AndroidLifecycle::new(serial.clone(), lc_config));
 
         // Fast-path: skip the Gradle build/install/spawn cycle when the agent
@@ -1496,7 +1506,7 @@ mod tests {
     async fn start_agent_android_without_device_errors() {
         let mut state = ServerState::new("test".into());
         state.android_serial = None;
-        let resp = state.handle_start_agent_android(None).await;
+        let resp = state.handle_start_agent_android(None, None).await;
         match resp {
             IpcResponse::CommandResult { success, message } => {
                 assert!(!success);
@@ -1516,7 +1526,7 @@ mod tests {
         let mut state = ServerState::new("test".into());
         state.simulator_udid = None;
         state.android_serial = Some("emulator-5554".into());
-        let resp = state.handle_start_agent(None, Platform::Ios).await;
+        let resp = state.handle_start_agent(None, Platform::Ios, None).await;
         match resp {
             IpcResponse::CommandResult { message, .. } => {
                 assert!(

@@ -766,6 +766,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 IpcRequest::StartAgent {
                     project_dir: project_dir.clone(),
                     platform: Platform::from(platform),
+                    java_home: qorvex_core::android_lifecycle::client_java_home_override(),
                 },
                 &cli,
             )
