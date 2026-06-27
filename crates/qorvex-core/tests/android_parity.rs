@@ -52,6 +52,26 @@ use qorvex_core::action::ActionType;
 use qorvex_core::executor::ExecutionResult;
 use qorvex_core::protocol::Response;
 
+/// Normalize an `ExecutionResult::data` payload for cross-backend comparison by
+/// stripping the wall-clock `elapsed_ms` field. That field is measured
+/// independently on each backend (see `executor.rs`), so byte-for-byte equality
+/// of the raw JSON was inherently racy — comparing it directly made the tap
+/// parity assertions fail ~1-in-3 runs. Everything *structural* in `data`
+/// (e.g. the `frame` returned by `wait_for`) is preserved and still compared.
+/// A `None` payload stays `None`; a non-object or non-JSON payload is compared
+/// verbatim (wrapped as a JSON string) so unexpected shapes still mismatch loudly.
+fn normalized_data(data: &Option<String>) -> Option<serde_json::Value> {
+    data.as_ref()
+        .map(|raw| match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(serde_json::Value::Object(mut map)) => {
+                map.remove("elapsed_ms");
+                serde_json::Value::Object(map)
+            }
+            Ok(other) => other,
+            Err(_) => serde_json::Value::String(raw.clone()),
+        })
+}
+
 /// Assert two `ExecutionResult`s are equivalent across the iOS and Android
 /// backends. The executor is backend-agnostic, so identical agent responses
 /// must yield identical user-facing results.
@@ -62,7 +82,13 @@ fn assert_equivalent(label: &str, ios: &ExecutionResult, android: &ExecutionResu
         ios.success, android.success, ios.message, android.message
     );
     assert_eq!(ios.message, android.message, "{label}: message mismatch");
-    assert_eq!(ios.data, android.data, "{label}: data mismatch");
+    assert_eq!(
+        normalized_data(&ios.data),
+        normalized_data(&android.data),
+        "{label}: data mismatch (elapsed_ms stripped)\n iOS: {:?}\n And: {:?}",
+        ios.data,
+        android.data
+    );
     assert_eq!(
         ios.screenshot, android.screenshot,
         "{label}: screenshot mismatch"
