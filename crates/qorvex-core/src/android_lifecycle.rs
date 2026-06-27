@@ -631,40 +631,81 @@ const MAX_BUILD_JAVA: u32 = 23;
 ///    honoring it first is what makes the hint's advice actually work.
 /// 2. `QORVEX_ANDROID_JAVA_HOME` — explicit override in the daemon's own env.
 /// 3. The ambient `JAVA_HOME` — what the build already relied on.
-/// 4. macOS `/usr/libexec/java_home -v 17` — the canonical JDK-17 locator.
+/// 4. Homebrew `openjdk@17` kegs (`/opt/homebrew` and `/usr/local` prefixes) —
+///    so a brew-installed 17 is found without a manual override.
+/// 5. macOS `/usr/libexec/java_home -v 17` — the canonical JDK-17 locator.
 ///
 /// Returns `None` if no compatible JDK can be pinned, in which case the build
 /// falls back to the ambient `JAVA_HOME` (and `build_agent` adds a hint on
 /// failure).
 fn resolve_build_java_home(client_override: Option<&Path>) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(client) = client_override {
-        candidates.push(client.to_path_buf());
-    }
-    if let Some(explicit) = std::env::var_os("QORVEX_ANDROID_JAVA_HOME") {
-        candidates.push(PathBuf::from(explicit));
-    }
-    if let Some(ambient) = std::env::var_os("JAVA_HOME") {
-        candidates.push(PathBuf::from(ambient));
-    }
-    // macOS: ask the system for a JDK 17 home. Non-macOS hosts (no
-    // `/usr/libexec/java_home`) just skip this candidate.
-    if let Ok(output) = Command::new("/usr/libexec/java_home")
-        .args(["-v", "17"])
-        .output()
-    {
-        if output.status.success() {
-            let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !home.is_empty() {
-                candidates.push(PathBuf::from(home));
-            }
-        }
-    }
-
+    let candidates = build_java_home_candidates(
+        client_override,
+        std::env::var_os("QORVEX_ANDROID_JAVA_HOME").map(PathBuf::from),
+        std::env::var_os("JAVA_HOME").map(PathBuf::from),
+        &BREW_OPENJDK17_PREFIXES,
+        system_java_home_17(),
+    );
     candidates.into_iter().find(|home| {
         java_major_version(home)
             .is_some_and(|major| (MIN_BUILD_JAVA..=MAX_BUILD_JAVA).contains(&major))
     })
+}
+
+/// Homebrew `openjdk@17` keg prefixes probed as JDK candidates — Apple-silicon
+/// (`/opt/homebrew`) then Intel (`/usr/local`). Each is validated by its
+/// `bin/java -version` like any other candidate, so a missing keg is harmless.
+const BREW_OPENJDK17_PREFIXES: [&str; 2] =
+    ["/opt/homebrew/opt/openjdk@17", "/usr/local/opt/openjdk@17"];
+
+/// Assemble the ordered list of JDK candidates (no validation). Kept pure in its
+/// inputs so the resolution-order contract — in particular that the Homebrew
+/// kegs are probed after the env overrides but before the unreliable
+/// `/usr/libexec/java_home` — is unit-testable without touching the process env.
+fn build_java_home_candidates(
+    client_override: Option<&Path>,
+    explicit_env: Option<PathBuf>,
+    ambient_env: Option<PathBuf>,
+    brew_prefixes: &[&str],
+    system_java_home: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(client) = client_override {
+        candidates.push(client.to_path_buf());
+    }
+    if let Some(explicit) = explicit_env {
+        candidates.push(explicit);
+    }
+    if let Some(ambient) = ambient_env {
+        candidates.push(ambient);
+    }
+    // Homebrew's `openjdk@17` keg — the common way to get a JDK 17 on macOS, and
+    // preferred over `/usr/libexec/java_home`, which can return an incompatible
+    // JDK (e.g. 11) when no exact 17 is registered with the system — exactly the
+    // case on a machine whose only 17 is the brew keg.
+    candidates.extend(brew_prefixes.iter().map(PathBuf::from));
+    if let Some(system) = system_java_home {
+        candidates.push(system);
+    }
+    candidates
+}
+
+/// macOS `/usr/libexec/java_home -v 17` — the canonical JDK-17 locator. Returns
+/// `None` off-macOS (binary absent) or when the system has no JDK 17 home.
+fn system_java_home_17() -> Option<PathBuf> {
+    let output = Command::new("/usr/libexec/java_home")
+        .args(["-v", "17"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if home.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(home))
+    }
 }
 
 /// The JDK home a *client* (REPL/CLI) should forward to the server for the
@@ -1012,6 +1053,47 @@ mod tests {
             Some(dir.as_path())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Homebrew `openjdk@17` kegs are probed after the env overrides and
+    /// before the (unreliable) system `java_home`, so a brew-only machine can
+    /// self-resolve a compatible 17 without a manual override.
+    #[test]
+    fn build_java_home_candidates_probes_brew_between_overrides_and_system() {
+        let client = PathBuf::from("/client/jdk");
+        let candidates = build_java_home_candidates(
+            Some(&client),
+            Some(PathBuf::from("/explicit/jdk")),
+            Some(PathBuf::from("/ambient/jdk")),
+            &BREW_OPENJDK17_PREFIXES,
+            Some(PathBuf::from("/system/jdk17")),
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/client/jdk"),
+                PathBuf::from("/explicit/jdk"),
+                PathBuf::from("/ambient/jdk"),
+                PathBuf::from("/opt/homebrew/opt/openjdk@17"),
+                PathBuf::from("/usr/local/opt/openjdk@17"),
+                PathBuf::from("/system/jdk17"),
+            ]
+        );
+    }
+
+    /// With no env overrides and no system JDK (the brew-only / `java_home`
+    /// returns-11 case), the brew kegs are still the candidates that get probed.
+    #[test]
+    fn build_java_home_candidates_brew_only() {
+        let candidates =
+            build_java_home_candidates(None, None, None, &BREW_OPENJDK17_PREFIXES, None);
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/opt/homebrew/opt/openjdk@17"),
+                PathBuf::from("/usr/local/opt/openjdk@17"),
+            ]
+        );
     }
 
     // --- tail_diagnostic reducer ---
