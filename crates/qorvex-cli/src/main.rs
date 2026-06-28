@@ -1147,6 +1147,14 @@ async fn send_command(
     }
 }
 
+/// True when `udid` names a known simulator in `simulators` (the simctl device
+/// list). `start --device` also accepts physical iOS UDIDs and Android serials;
+/// neither matches a simctl device, so both correctly read as non-simulator and
+/// still get the foreground physical-device signing build.
+fn is_known_simulator(udid: &str, simulators: &[qorvex_core::simctl::SimulatorDevice]) -> bool {
+    simulators.iter().any(|d| d.udid == udid)
+}
+
 async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     use qorvex_core::config::QorvexConfig;
     use qorvex_core::ipc::socket_path;
@@ -1157,7 +1165,20 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     // CLI process so interactive prompts (keychain, Apple ID) work properly.
     // The server runs in the background with stdio redirected, so it can't
     // handle interactive prompts.
-    if device.is_some() {
+    //
+    // `start --device <udid>` also accepts simulator UDIDs (and Android
+    // serials). The build below is a *physical iOS* signing build
+    // (build-for-testing for iphoneos + codesign); running it for a simulator
+    // is wrong and pops Apple ID / provisioning prompts for no reason. Resolve
+    // sim-vs-physical here — using the same authoritative source as the server
+    // (`simctl`) — and only sign-build for a non-simulator target. A simctl
+    // failure yields an empty list, so an iOS UDID we can't classify still gets
+    // the signing build (preserving the physical-device path).
+    let run_signing_build = match device.as_deref() {
+        Some(udid) => !is_known_simulator(udid, &Simctl::list_devices().unwrap_or_default()),
+        None => false,
+    };
+    if run_signing_build {
         let config = QorvexConfig::load();
         if let (Some(ref agent_dir), Some(ref team)) = (
             &config.effective_agent_source_dir(),
@@ -1386,5 +1407,35 @@ mod tests {
         for path in created_files {
             let _ = fs::remove_file(path);
         }
+    }
+
+    fn sim(udid: &str) -> qorvex_core::simctl::SimulatorDevice {
+        qorvex_core::simctl::SimulatorDevice {
+            udid: udid.to_string(),
+            name: "iPhone 15 Pro".to_string(),
+            state: "Booted".to_string(),
+            device_type: None,
+        }
+    }
+
+    #[test]
+    fn simulator_target_is_recognized() {
+        let sims = vec![sim("SIM-AAAA-1111"), sim("SIM-BBBB-2222")];
+        // A UDID present in the simctl list is a simulator -> no signing build.
+        assert!(is_known_simulator("SIM-BBBB-2222", &sims));
+    }
+
+    #[test]
+    fn physical_and_android_targets_are_not_simulators() {
+        let sims = vec![sim("SIM-AAAA-1111")];
+        // Physical iOS UDID (40-hex) is absent from simctl -> signing build runs.
+        assert!(!is_known_simulator(
+            "00008140abcdef0123456789abcdef0123456789",
+            &sims
+        ));
+        // Android serial is likewise absent -> not a simulator.
+        assert!(!is_known_simulator("emulator-5554", &sims));
+        // Empty simctl list (e.g. simctl failed) -> nothing is a simulator.
+        assert!(!is_known_simulator("SIM-AAAA-1111", &[]));
     }
 }
