@@ -96,6 +96,8 @@ const TEST_APK: &str =
     "build/outputs/apk/androidTest/debug/qorvex-agent-android-debug-androidTest.apk";
 /// The agent (host app) package; force-stopped on teardown as a fallback.
 const AGENT_PACKAGE: &str = "com.qorvex.agent";
+/// The instrumentation (test) package; uninstalled on a signature mismatch.
+const TEST_PACKAGE: &str = "com.qorvex.agent.test";
 /// The instrumentation target `<package>/<runner>` for `am instrument`.
 const INSTRUMENT_TARGET: &str = "com.qorvex.agent.test/androidx.test.runner.AndroidJUnitRunner";
 /// The fully-qualified entry-point test method (the long-lived serve loop).
@@ -334,7 +336,7 @@ impl AndroidLifecycle {
     ///   `adb install` rejects it.
     #[instrument(skip(self))]
     pub fn install_agent(&self) -> Result<(), AndroidLifecycleError> {
-        for rel in [APP_APK, TEST_APK] {
+        for (rel, package) in [(APP_APK, AGENT_PACKAGE), (TEST_APK, TEST_PACKAGE)] {
             let apk = self.apk_path(rel);
             if !apk.exists() {
                 return Err(AndroidLifecycleError::InstallFailed(format!(
@@ -342,14 +344,38 @@ impl AndroidLifecycle {
                     apk.display()
                 )));
             }
-            self.adb_install(&apk.to_string_lossy())?;
+            self.adb_install(&apk.to_string_lossy(), package)?;
         }
         info!("android agent APKs installed");
         Ok(())
     }
 
+    /// Install one APK, recovering once from a signature mismatch.
+    ///
+    /// A previously installed copy of `package` (e.g. a from-source build) may
+    /// be signed with a different key than this APK — common when switching
+    /// between a `cargo`/source build and a Homebrew install. `adb install -r`
+    /// cannot overwrite across signatures and reports
+    /// `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. When that happens we uninstall the
+    /// stale package and retry the install once.
+    fn adb_install(&self, apk: &str, package: &str) -> Result<(), AndroidLifecycleError> {
+        match self.run_adb_install(apk) {
+            Err(AndroidLifecycleError::InstallFailed(detail))
+                if detail.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") =>
+            {
+                warn!(
+                    package,
+                    "signature mismatch with installed package; uninstalling and reinstalling"
+                );
+                self.adb_uninstall(package);
+                self.run_adb_install(apk)
+            }
+            other => other,
+        }
+    }
+
     /// Run a single `adb -s <serial> install -r <apk>` and classify the result.
-    fn adb_install(&self, apk: &str) -> Result<(), AndroidLifecycleError> {
+    fn run_adb_install(&self, apk: &str) -> Result<(), AndroidLifecycleError> {
         let output = Command::new("adb")
             .args(["-s", &self.serial, "install", "-r", apk])
             .stdout(std::process::Stdio::piped())
@@ -370,6 +396,17 @@ impl AndroidLifecycle {
             )));
         }
         Ok(())
+    }
+
+    /// Best-effort `adb -s <serial> uninstall <package>` to clear a stale,
+    /// differently-signed copy before reinstalling. Failures are ignored — the
+    /// package may simply not be installed.
+    fn adb_uninstall(&self, package: &str) {
+        let _ = Command::new("adb")
+            .args(["-s", &self.serial, "uninstall", package])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
     }
 
     /// Spawn the long-lived agent via `adb shell am instrument -w`.
@@ -953,6 +990,16 @@ mod tests {
             err.to_string(),
             "Failed to install Android agent APK: INSTALL_FAILED_INVALID_APK"
         );
+    }
+
+    /// The package we uninstall on a signature mismatch must be exactly the
+    /// instrumentation target package `am instrument` launches — that is the
+    /// package the `INSTALL_FAILED_UPDATE_INCOMPATIBLE` failure names. Guards
+    /// against the uninstall and the install drifting to different packages.
+    #[test]
+    fn test_package_matches_instrument_target() {
+        let target_package = INSTRUMENT_TARGET.split('/').next().unwrap();
+        assert_eq!(target_package, TEST_PACKAGE);
     }
 
     #[test]
