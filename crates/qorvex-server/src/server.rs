@@ -147,7 +147,7 @@ impl ServerState {
             IpcRequest::Connect { host, port } => self.handle_connect(&host, port).await,
 
             // ── Target App Lifecycle ────────────────────────────────────
-            IpcRequest::StartTarget => self.handle_start_target().await,
+            IpcRequest::StartTarget { force } => self.handle_start_target(force).await,
             IpcRequest::StopTarget => self.handle_stop_target().await,
 
             // ── Target Info ─────────────────────────────────────────────
@@ -1052,7 +1052,17 @@ impl ServerState {
         response
     }
 
-    async fn handle_start_target(&self) -> IpcResponse {
+    /// Launches the target app, reporting whether it *actually* launched or
+    /// was already running.
+    ///
+    /// Neither backend relaunches a running app on its own, and both report
+    /// success either way — a silent no-op that makes a caller relying on
+    /// launch-time setup (a suite that reseeds its database on start) assert
+    /// against the previous run's state. So the running process id is probed
+    /// before launching, and the outcome is surfaced in both the message and
+    /// the structured `data` payload. `force` terminates the running copy
+    /// first, making the relaunch real.
+    async fn handle_start_target(&self, force: bool) -> IpcResponse {
         let Some(ref bundle_id) = self.target_bundle_id else {
             return IpcResponse::CommandResult {
                 success: false,
@@ -1063,24 +1073,31 @@ impl ServerState {
         // Simctl): route to adb when an Android device is selected, else
         // Simctl. Android target selection clears `simulator_udid`, so the
         // serial check distinguishes the two.
-        let launch_result = if let Some(ref serial) = self.android_serial {
-            Adb::launch_app(serial, bundle_id).map_err(|e| e.to_string())
-        } else if let Some(ref udid) = self.simulator_udid {
-            Simctl::launch_app(udid, bundle_id).map_err(|e| e.to_string())
-        } else {
-            return IpcResponse::CommandResult {
-                success: false,
-                message: "No device selected.".to_string(),
+        let launch_result: Result<(bool, Option<u32>), String> =
+            if let Some(ref serial) = self.android_serial {
+                Self::start_target_android(serial, bundle_id, force).map_err(|e| e.to_string())
+            } else if let Some(ref udid) = self.simulator_udid {
+                Self::start_target_ios(udid, bundle_id, force).map_err(|e| e.to_string())
+            } else {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: "No device selected.".to_string(),
+                };
             };
-        };
+
         let (response, action_result) = match launch_result {
-            Ok(()) => (
-                IpcResponse::CommandResult {
-                    success: true,
-                    message: format!("Launched {}", bundle_id),
-                },
-                ActionResult::Success,
-            ),
+            Ok((was_running, pid)) => {
+                let (message, data) = start_target_report(bundle_id, was_running, pid, force);
+                (
+                    IpcResponse::ActionResult {
+                        success: true,
+                        message,
+                        screenshot: None,
+                        data: Some(data.to_string()),
+                    },
+                    ActionResult::Success,
+                )
+            }
             Err(e) => {
                 let msg = format!("Failed to launch app: {}", e);
                 (
@@ -1092,9 +1109,40 @@ impl ServerState {
                 )
             }
         };
-        self.log_action(ActionType::StartTarget, action_result, None, None)
+        self.log_action(ActionType::StartTarget { force }, action_result, None, None)
             .await;
         response
+    }
+
+    /// iOS leg of [`Self::handle_start_target`]: returns
+    /// `(was_already_running, pid_after_launch)`. `simctl launch` reports the
+    /// pid itself, so only the pre-launch probe is extra.
+    fn start_target_ios(
+        udid: &str,
+        bundle_id: &str,
+        force: bool,
+    ) -> Result<(bool, Option<u32>), qorvex_core::simctl::SimctlError> {
+        let was_running = Simctl::app_pid(udid, bundle_id)?.is_some();
+        let pid = Simctl::launch_app(udid, bundle_id, force)?;
+        Ok((was_running, pid))
+    }
+
+    /// Android leg of [`Self::handle_start_target`]. `monkey` prints no pid, so
+    /// the process is probed on both sides of the launch; `force` force-stops
+    /// the running copy first, since a LAUNCHER intent only brings an existing
+    /// process to the front.
+    fn start_target_android(
+        serial: &str,
+        package: &str,
+        force: bool,
+    ) -> Result<(bool, Option<u32>), qorvex_core::adb_device::AdbError> {
+        let was_running = Adb::app_pid(serial, package)?.is_some();
+        if force && was_running {
+            Adb::force_stop(serial, package)?;
+        }
+        Adb::launch_app(serial, package)?;
+        let pid = Adb::app_pid(serial, package)?;
+        Ok((was_running, pid))
     }
 
     async fn handle_stop_target(&self) -> IpcResponse {
@@ -1428,9 +1476,85 @@ fn strip_quotes(s: &str) -> &str {
     }
 }
 
+/// Builds `start-target`'s human message and structured payload from the
+/// launch outcome.
+///
+/// Kept separate from the handler so the three-way branch — launched / already
+/// running / relaunched — is testable without a device. `launched` is the field
+/// a script branches on: it is false *only* for the attach case, which is the
+/// outcome the caller previously could not detect.
+fn start_target_report(
+    bundle_id: &str,
+    was_running: bool,
+    pid: Option<u32>,
+    force: bool,
+) -> (String, serde_json::Value) {
+    let pid_note = match pid {
+        Some(p) => format!(" (pid {})", p),
+        None => String::new(),
+    };
+    let message = if !was_running {
+        format!("Launched {}{}", bundle_id, pid_note)
+    } else if force {
+        format!("Relaunched {}{}", bundle_id, pid_note)
+    } else {
+        format!(
+            "{} already running{} — not relaunched; pass --force to restart it",
+            bundle_id, pid_note
+        )
+    };
+    let data = serde_json::json!({
+        "bundle_id": bundle_id,
+        "launched": force || !was_running,
+        "already_running": was_running,
+        "pid": pid,
+    });
+    (message, data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- start-target outcome reporting ---
+
+    #[test]
+    fn start_target_report_fresh_launch() {
+        let (msg, data) = start_target_report("com.example.App", false, Some(42), false);
+        assert_eq!(msg, "Launched com.example.App (pid 42)");
+        assert_eq!(data["launched"], true);
+        assert_eq!(data["already_running"], false);
+        assert_eq!(data["pid"], 42);
+    }
+
+    #[test]
+    fn start_target_report_already_running_is_not_a_launch() {
+        // The case the caller could not previously detect: success, but
+        // nothing actually started.
+        let (msg, data) = start_target_report("com.example.App", true, Some(42), false);
+        assert!(msg.contains("already running (pid 42)"), "{msg}");
+        assert!(msg.contains("--force"), "{msg}");
+        assert_eq!(data["launched"], false);
+        assert_eq!(data["already_running"], true);
+    }
+
+    #[test]
+    fn start_target_report_force_relaunch_counts_as_launched() {
+        let (msg, data) = start_target_report("com.example.App", true, Some(99), true);
+        assert_eq!(msg, "Relaunched com.example.App (pid 99)");
+        assert_eq!(data["launched"], true);
+        assert_eq!(data["already_running"], true);
+    }
+
+    #[test]
+    fn start_target_report_omits_pid_when_unknown() {
+        // An unparseable/absent pid degrades the report; it must not fabricate
+        // one or drop the outcome.
+        let (msg, data) = start_target_report("com.example.App", false, None, false);
+        assert_eq!(msg, "Launched com.example.App");
+        assert_eq!(data["pid"], serde_json::Value::Null);
+        assert_eq!(data["launched"], true);
+    }
 
     /// Build an `AndroidLifecycle` pointing at a dummy project — `new` does no
     /// device I/O, so this is safe with no emulator/adb present. `terminate_agent`

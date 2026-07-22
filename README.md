@@ -121,7 +121,7 @@ Available commands:
 - `start-agent <path>` — Build and launch the agent from a project directory (Swift for iOS; pass `--platform android` for the Gradle/Kotlin agent project)
 - `stop-agent` — Stop a managed agent process
 - `set-target <bundle_id>` — Set target app bundle ID
-- `start-target` — Launch the target app
+- `start-target` — Launch the target app. An already-running app is left alone and reported as `already running (pid N)` rather than relaunched; add `--force` to terminate it first and restart from scratch.
 - `stop-target` — Terminate the target app
 - `set-timeout <ms>` — Set default timeout for tap/wait operations (default: 5000ms); no arg prints current value
 - `start-session` — Begin a new session (auto-starts agent if configured)

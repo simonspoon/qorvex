@@ -94,7 +94,7 @@ done
 | `qorvex wait-for <selector> -o <ms>` | Wait for element |
 | `qorvex wait-for-not <selector> -o <ms>` | Wait for element to disappear |
 | `qorvex set-target <bundle_id>` | Set target app bundle ID |
-| `qorvex start-target` | Launch the target app |
+| `qorvex start-target [--force]` | Launch the target app (`--force` restarts one that is already running) |
 | `qorvex stop-target` | Terminate the target app |
 | `qorvex comment 'text'` | Log a comment |
 | `qorvex boot-device <udid>` | Boot a simulator |

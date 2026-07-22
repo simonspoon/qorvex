@@ -211,23 +211,75 @@ impl Simctl {
         Ok(())
     }
 
-    /// Launches an app on a simulator device.
+    /// Launches an app on a simulator device, returning its process id.
     ///
     /// Runs `xcrun simctl launch <udid> <bundle_id>` to start the specified
-    /// application on the given simulator.
+    /// application on the given simulator. **simctl does not relaunch an app
+    /// that is already running** — it returns the existing process id and the
+    /// app keeps its current state. Pass `force` to add
+    /// `--terminate-running-process`, which kills any running copy first so the
+    /// app really does start from scratch.
     ///
     /// # Arguments
     ///
     /// * `udid` - The unique device identifier of the target simulator
     /// * `bundle_id` - The bundle identifier of the app to launch
+    /// * `force` - Terminate a running copy first instead of attaching to it
     ///
     /// # Errors
     ///
     /// - [`SimctlError::Io`] if the command fails to execute
     /// - [`SimctlError::CommandFailed`] if simctl returns an error
-    pub fn launch_app(udid: &str, bundle_id: &str) -> Result<(), SimctlError> {
+    pub fn launch_app(
+        udid: &str,
+        bundle_id: &str,
+        force: bool,
+    ) -> Result<Option<u32>, SimctlError> {
+        let mut args = vec!["simctl", "launch"];
+        if force {
+            args.push("--terminate-running-process");
+        }
+        args.push(udid);
+        args.push(bundle_id);
+        let output = Command::new("xcrun").args(&args).output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(Self::parse_launch_pid(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
+    /// Extracts the process id from `simctl launch` output, which is a single
+    /// `<bundle id>: <pid>` line. Returns `None` if the line is missing or
+    /// malformed — the launch itself is reported by the exit status, so an
+    /// unparseable pid degrades the report rather than failing the command.
+    fn parse_launch_pid(stdout: &str) -> Option<u32> {
+        stdout
+            .lines()
+            .find_map(|line| line.rsplit_once(':'))
+            .and_then(|(_, pid)| pid.trim().parse().ok())
+    }
+
+    /// Returns the process id of `bundle_id` on the simulator, or `None` when
+    /// the app is not running.
+    ///
+    /// Runs `xcrun simctl spawn <udid> launchctl list`, whose output lists one
+    /// `<pid>\t<status>\t<label>` row per service; a running app appears as
+    /// `UIKitApplication:<bundle id>[...]`. This is the only pre-launch running
+    /// check simctl offers — `simctl launch` itself cannot be used, since it
+    /// starts the app as a side effect.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if the spawn fails (e.g. device not booted)
+    pub fn app_pid(udid: &str, bundle_id: &str) -> Result<Option<u32>, SimctlError> {
         let output = Command::new("xcrun")
-            .args(["simctl", "launch", udid, bundle_id])
+            .args(["simctl", "spawn", udid, "launchctl", "list"])
             .output()?;
 
         if !output.status.success() {
@@ -235,7 +287,22 @@ impl Simctl {
                 String::from_utf8_lossy(&output.stderr).to_string(),
             ));
         }
-        Ok(())
+        Ok(Self::parse_launchctl_pid(
+            &String::from_utf8_lossy(&output.stdout),
+            bundle_id,
+        ))
+    }
+
+    /// Finds the pid of `bundle_id`'s `UIKitApplication` row in `launchctl
+    /// list` output. A not-yet-running-but-registered service has `-` in the
+    /// pid column, which reads as "not running" here.
+    fn parse_launchctl_pid(stdout: &str, bundle_id: &str) -> Option<u32> {
+        let needle = format!("UIKitApplication:{}[", bundle_id);
+        stdout
+            .lines()
+            .find(|line| line.contains(&needle))
+            .and_then(|line| line.split_whitespace().next())
+            .and_then(|pid| pid.parse().ok())
     }
 
     /// Terminates an app on a simulator device.
@@ -656,5 +723,59 @@ mod tests {
         let result = Simctl::boot("invalid-udid-that-does-not-exist");
 
         assert!(result.is_err());
+    }
+
+    // --- start-target launch reporting ---
+
+    // Real `xcrun simctl launch` output: one `<bundle>: <pid>` line.
+    #[test]
+    fn test_parse_launch_pid() {
+        assert_eq!(
+            Simctl::parse_launch_pid("com.apple.mobilesafari: 2481\n"),
+            Some(2481)
+        );
+    }
+
+    #[test]
+    fn test_parse_launch_pid_missing() {
+        assert_eq!(Simctl::parse_launch_pid(""), None);
+        assert_eq!(Simctl::parse_launch_pid("com.example.App: n/a\n"), None);
+    }
+
+    // Real `simctl spawn <udid> launchctl list` rows: pid, status, label.
+    const SAMPLE_LAUNCHCTL_LIST: &str = "PID\tStatus\tLabel\n\
+2840\t0\tUIKitApplication:com.apple.mobilesafari[58ea][rb-legacy]\n\
+-\t0\tUIKitApplication:com.example.Idle[1f2e][rb-legacy]\n\
+71\t0\tcom.apple.backboardd\n";
+
+    #[test]
+    fn test_parse_launchctl_pid_running() {
+        assert_eq!(
+            Simctl::parse_launchctl_pid(SAMPLE_LAUNCHCTL_LIST, "com.apple.mobilesafari"),
+            Some(2840)
+        );
+    }
+
+    #[test]
+    fn test_parse_launchctl_pid_not_running() {
+        // Absent entirely, and present-but-unlaunched (`-` in the pid column):
+        // both mean "not running", so start-target reports a real launch.
+        assert_eq!(
+            Simctl::parse_launchctl_pid(SAMPLE_LAUNCHCTL_LIST, "com.example.Absent"),
+            None
+        );
+        assert_eq!(
+            Simctl::parse_launchctl_pid(SAMPLE_LAUNCHCTL_LIST, "com.example.Idle"),
+            None
+        );
+    }
+
+    // A bundle id that is a prefix of another must not match it — the `[`
+    // suffix in the needle is what keeps `com.example.App` off
+    // `com.example.AppTwo`.
+    #[test]
+    fn test_parse_launchctl_pid_no_prefix_collision() {
+        let list = "1234\t0\tUIKitApplication:com.example.AppTwo[aaaa][rb-legacy]\n";
+        assert_eq!(Simctl::parse_launchctl_pid(list, "com.example.App"), None);
     }
 }

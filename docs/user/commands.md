@@ -31,8 +31,27 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Stop agent | `stop-agent` | — |
 | Set target app | `set-target <bundle_id>` | `qorvex set-target <bundle_id>` |
 | Get target app info | `get-target-info` | `qorvex target-info` |
-| Launch target app | `start-target` | `qorvex start-target` |
+| Launch target app | `start-target [--force]` | `qorvex start-target [--force]` |
 | Terminate target app | `stop-target` | `qorvex stop-target` |
+
+> **Already-running apps:** neither backend relaunches an app that is already
+> up, so `start-target` reports which happened instead of silently no-opping:
+> ```bash
+> $ qorvex start-target
+> Launched com.example.App (pid 34955)
+> $ qorvex start-target
+> com.example.App already running (pid 34955) — not relaunched; pass --force to restart it
+> $ qorvex start-target --force
+> Relaunched com.example.App (pid 35408)
+> ```
+> Scripts should branch on the structured form rather than the message:
+> ```bash
+> qorvex --format json start-target
+> {"already_running":false,"bundle_id":"com.example.App","launched":true,"pid":36228}
+> ```
+> This matters for a suite whose fixtures reset **on launch** — without `--force`
+> a second script attaches to the first one's mutated state. Either pass
+> `--force`, or `stop-target` before `start-target`.
 
 > **Physical devices:** `start-target` and `stop-target` use `xcrun simctl` and only work for simulators. To launch or terminate an app on a physical device:
 > ```bash

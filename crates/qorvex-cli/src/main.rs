@@ -270,7 +270,13 @@ enum Command {
     },
 
     /// Launch the target application
-    StartTarget,
+    StartTarget {
+        /// Terminate a running copy first so the app restarts from scratch.
+        /// Without it an already-running app is left as-is and reported as
+        /// "already running" rather than relaunched.
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Terminate the target application
     StopTarget,
@@ -756,7 +762,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             )
             .await
         }
-        Command::StartTarget => send_command(&mut client, IpcRequest::StartTarget, &cli).await,
+        Command::StartTarget { force } => execute_start_target(&mut client, &cli, force).await,
         Command::StopTarget => send_command(&mut client, IpcRequest::StopTarget, &cli).await,
         Command::TargetInfo => execute_target_info(&mut client, &cli).await,
         Command::StartSession => send_command(&mut client, IpcRequest::StartSession, &cli).await,
@@ -868,6 +874,57 @@ async fn execute_action(
         }
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Sends `start-target` and reports whether the app really launched.
+///
+/// Unlike the other lifecycle commands this does not go through
+/// [`send_command`]: the server answers with an `ActionResult` carrying a
+/// `{launched, already_running, pid}` payload, so a script can branch on the
+/// outcome (`--format json`) instead of parsing the human message.
+async fn execute_start_target(
+    client: &mut IpcClient,
+    cli: &Cli,
+    force: bool,
+) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::StartTarget { force })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::ActionResult {
+            success,
+            message,
+            data,
+            ..
+        } => {
+            if !success {
+                return Err(CliError::ActionFailed(message));
+            }
+            if cli.format == OutputFormat::Json {
+                match data {
+                    Some(ref d) => println!("{}", d),
+                    None => println!("{}", serde_json::json!({ "message": message })),
+                }
+            } else if !cli.quiet {
+                eprintln!("{}", message);
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { success, message } => {
+            if success {
+                if !cli.quiet {
+                    eprintln!("{}", message);
+                }
+                Ok(())
+            } else {
+                Err(CliError::ActionFailed(message))
+            }
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response".to_string())),
     }
 }
 

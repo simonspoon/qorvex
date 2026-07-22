@@ -207,7 +207,14 @@ pub enum IpcRequest {
 
     // --- Target App Lifecycle ---
     /// Launch the target application on the simulator.
-    StartTarget,
+    StartTarget {
+        /// Terminate a running copy first so the app restarts from scratch.
+        /// Without it an already-running app is left alone (and reported as
+        /// such). `#[serde(default)]` keeps older clients, which send no
+        /// field, wire-compatible.
+        #[serde(default)]
+        force: bool,
+    },
     /// Terminate the target application on the simulator.
     StopTarget,
 
@@ -814,6 +821,19 @@ mod platform_tests {
                 assert_eq!(platform, Platform::Ios);
             }
             other => panic!("expected BootDevice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_start_target_request_without_force_defaults_to_false() {
+        // An old client sent `StartTarget` as a unit variant, with no `force`
+        // field. It must still deserialize, defaulting to the unchanged
+        // attach-if-running behaviour.
+        let legacy = r#"{"type":"StartTarget"}"#;
+        let req: IpcRequest = serde_json::from_str(legacy).unwrap();
+        match req {
+            IpcRequest::StartTarget { force } => assert!(!force),
+            other => panic!("expected StartTarget, got {other:?}"),
         }
     }
 

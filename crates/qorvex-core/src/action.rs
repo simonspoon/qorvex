@@ -171,7 +171,14 @@ pub enum ActionType {
     },
 
     /// Launch the target application.
-    StartTarget,
+    StartTarget {
+        /// Whether the launch terminated a running copy first. Recorded so a
+        /// log replayed through the converter reproduces the relaunch instead
+        /// of silently attaching to whatever is already running.
+        /// `#[serde(default)]` keeps logs written before this field readable.
+        #[serde(default)]
+        force: bool,
+    },
 
     /// Terminate the target application.
     StopTarget,
@@ -200,7 +207,7 @@ impl ActionType {
             ActionType::WaitFor { .. } => "wait_for",
             ActionType::WaitForNot { .. } => "wait_for_not",
             ActionType::SetTarget { .. } => "set_target",
-            ActionType::StartTarget => "start_target",
+            ActionType::StartTarget { .. } => "start_target",
             ActionType::StopTarget => "stop_target",
             ActionType::GetTargetInfo => "get_target_info",
             ActionType::StartSession => "start_session",
@@ -223,7 +230,7 @@ impl ActionType {
             ActionType::WaitFor { .. } => "Find",
             ActionType::WaitForNot { .. } => "Gone",
             ActionType::SetTarget { .. } => "Target",
-            ActionType::StartTarget => "StartTarget",
+            ActionType::StartTarget { .. } => "StartTarget",
             ActionType::StopTarget => "StopTarget",
             ActionType::GetTargetInfo => "TargetInfo",
             ActionType::StartSession => "Start",
@@ -265,7 +272,7 @@ impl ActionType {
             }
             ActionType::LogComment { message } => message.clone(),
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
-            ActionType::StartTarget | ActionType::StopTarget | ActionType::GetTargetInfo => {
+            ActionType::StartTarget { .. } | ActionType::StopTarget | ActionType::GetTargetInfo => {
                 String::new()
             }
             _ => String::new(),
@@ -344,6 +351,24 @@ impl ActionLog {
             wait_ms: None,
             tap_ms: None,
             tag,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_start_target_log_entry_without_force_deserializes() {
+        // Action logs written before `force` existed recorded `StartTarget` as
+        // a bare tag. `qorvex convert` reads those files, so they must still
+        // parse — and replay as the non-forcing form.
+        let legacy = r#"{"type":"StartTarget"}"#;
+        let action: ActionType = serde_json::from_str(legacy).unwrap();
+        match action {
+            ActionType::StartTarget { force } => assert!(!force),
+            other => panic!("expected StartTarget, got {other:?}"),
         }
     }
 }

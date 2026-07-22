@@ -148,7 +148,11 @@ pub static COMMANDS: &[CommandDef] = &[
         name: "start-target",
         description: "Launch the target application",
         args: &[],
-        options: &[],
+        options: &[OptionSpec {
+            flag: "--force",
+            takes_value: false,
+            description: "Relaunch even if the app is already running",
+        }],
     },
     CommandDef {
         name: "stop-target",

@@ -124,7 +124,13 @@ impl LogConverter {
             ActionType::SetTarget { bundle_id } => {
                 Some(format!("qorvex set-target {}", shell_escape(bundle_id)))
             }
-            ActionType::StartTarget => Some("qorvex start-target".to_string()),
+            // Carry `--force` through: a replayed script that dropped it would
+            // attach to whatever is already running instead of relaunching.
+            ActionType::StartTarget { force } => Some(if *force {
+                "qorvex start-target --force".to_string()
+            } else {
+                "qorvex start-target".to_string()
+            }),
             ActionType::StopTarget => Some("qorvex stop-target".to_string()),
             ActionType::GetTargetInfo => Some("qorvex get-target-info".to_string()),
             ActionType::LogComment { message } => Some(format!("# {}", message)),
@@ -474,8 +480,16 @@ mod tests {
     #[test]
     fn test_start_target_to_command() {
         assert_eq!(
-            LogConverter::action_to_command(&ActionType::StartTarget, None),
+            LogConverter::action_to_command(&ActionType::StartTarget { force: false }, None),
             Some("qorvex start-target".to_string())
+        );
+    }
+
+    #[test]
+    fn test_start_target_force_to_command() {
+        assert_eq!(
+            LogConverter::action_to_command(&ActionType::StartTarget { force: true }, None),
+            Some("qorvex start-target --force".to_string())
         );
     }
 

@@ -636,7 +636,7 @@ impl App {
             "set-target" => IpcRequest::SetTarget {
                 bundle_id: args.positional.first().cloned().unwrap_or_default(),
             },
-            "start-target" => IpcRequest::StartTarget,
+            "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
             "set-timeout" => {
@@ -1098,7 +1098,7 @@ impl App {
             "set-target" => IpcRequest::SetTarget {
                 bundle_id: args.positional.first().cloned().unwrap_or_default(),
             },
-            "start-target" => IpcRequest::StartTarget,
+            "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
             "set-timeout" => {
@@ -1554,6 +1554,9 @@ pub(crate) struct ParsedArgs {
     /// `--platform ios|android` selector for device/agent commands.
     /// `None` (omitted) means the iOS default (additive).
     pub platform: Option<String>,
+    /// `--force` on `start-target`: relaunch instead of attaching to an
+    /// already-running app.
+    pub force: bool,
 }
 
 /// Tokenize input using shell-style rules: split on whitespace, respect double quotes.
@@ -1616,6 +1619,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         timeout: None,
         element_type: None,
         platform: None,
+        force: false,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -1634,6 +1638,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             "--platform" => {
                 args.platform = iter.next();
             }
+            "--force" => args.force = true,
             _ => args.positional.push(tok),
         }
     }
@@ -1659,6 +1664,17 @@ mod tests {
         let (cmd, args) = parse_command("tap button1");
         assert_eq!(cmd, "tap");
         assert_eq!(args.positional, vec!["button1"]);
+    }
+
+    #[test]
+    fn test_parse_command_force_flag() {
+        // `--force` is a bare flag: it must not swallow the next token, and it
+        // stays off unless spelled.
+        let (cmd, args) = parse_command("start-target --force");
+        assert_eq!(cmd, "start-target");
+        assert!(args.force);
+        assert!(args.positional.is_empty());
+        assert!(!parse_command("start-target").1.force);
     }
 
     #[test]

@@ -421,6 +421,36 @@ impl Adb {
         Ok(())
     }
 
+    /// Returns the process id of `package` on the device, or `None` when the
+    /// app is not running.
+    ///
+    /// Runs `adb -s <serial> shell pidof <package>`, which exits non-zero with
+    /// empty output when nothing matches — that is "not running", not an
+    /// error. A multi-process app prints several space-separated pids; the
+    /// first (the main process) is returned. This is the Android analogue of
+    /// [`crate::simctl::Simctl::app_pid`] and lets `start-target` tell a real
+    /// launch apart from a no-op against an already-running app.
+    ///
+    /// # Errors
+    ///
+    /// - [`AdbError::Io`] if adb cannot be executed
+    pub fn app_pid(serial: &str, package: &str) -> Result<Option<u32>, AdbError> {
+        let output = Command::new("adb")
+            .args(["-s", serial, "shell", "pidof", package])
+            .output()?;
+
+        Ok(Self::parse_pidof(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    /// Extracts the first pid from `pidof` output. Empty (or non-numeric)
+    /// output means the package has no running process.
+    fn parse_pidof(stdout: &str) -> Option<u32> {
+        stdout
+            .split_whitespace()
+            .next()
+            .and_then(|p| p.parse().ok())
+    }
+
     /// Lists third-party (user-installed) packages on the device via `adb -s
     /// <serial> shell pm list packages -3`, returned as [`InstalledApp`] values
     /// for parity with [`crate::simctl::Simctl::list_apps`]. Backs `set-target`
@@ -804,5 +834,26 @@ emulator-5554 device\n";
         assert_eq!(json, "\"emulator\"");
         let back: DeviceKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, DeviceKind::Emulator);
+    }
+
+    // --- start-target launch reporting ---
+
+    #[test]
+    fn test_parse_pidof_running() {
+        assert_eq!(Adb::parse_pidof("12345\n"), Some(12345));
+    }
+
+    #[test]
+    fn test_parse_pidof_not_running() {
+        // `pidof` prints nothing (and exits non-zero) for a package with no
+        // live process — that is "not running", not a failure.
+        assert_eq!(Adb::parse_pidof(""), None);
+        assert_eq!(Adb::parse_pidof("\n"), None);
+    }
+
+    #[test]
+    fn test_parse_pidof_multiprocess_takes_first() {
+        // A multi-process app prints every pid; the first is the main process.
+        assert_eq!(Adb::parse_pidof("4321 4400 4501\n"), Some(4321));
     }
 }

@@ -363,7 +363,7 @@ async fn parity_set_target() {
 async fn parity_start_target() {
     run_parity(
         "start-target",
-        ActionType::StartTarget,
+        ActionType::StartTarget { force: false },
         vec![Response::Ok, Response::Ok],
     )
     .await;
@@ -489,7 +489,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::WaitFor { .. }
             | ActionType::WaitForNot { .. }
             | ActionType::SetTarget { .. }
-            | ActionType::StartTarget
+            | ActionType::StartTarget { .. }
             | ActionType::StopTarget
             | ActionType::GetTargetInfo
             | ActionType::LogComment { .. } => "driver",
