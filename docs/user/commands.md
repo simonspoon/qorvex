@@ -34,6 +34,20 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Launch target app | `start-target [--force]` | `qorvex start-target [--force]` |
 | Terminate target app | `stop-target` | `qorvex stop-target` |
 
+> **No agent needed to choose an app:** `set-target`, `start-target` and
+> `stop-target` all work with only a device selected — launching and terminating
+> go through `simctl`/`adb`, and `set-target` just records the id. So switching
+> the app under test costs nothing:
+> ```bash
+> $ qorvex use-device <udid>
+> $ qorvex set-target com.example.App     # no start-agent required
+> $ qorvex start-target
+> Launched com.example.App (pid 34955)
+> ```
+> With no agent reachable, `set-target` says so and still records the id:
+> `Target set to com.example.App (recorded; no agent connected)`. An agent
+> started later picks up the recorded target — no second `set-target`.
+
 > **Already-running apps:** neither backend relaunches an app that is already
 > up, so `start-target` reports which happened instead of silently no-opping:
 > ```bash

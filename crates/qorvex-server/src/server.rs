@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::adb_device::Adb;
@@ -16,7 +16,7 @@ use qorvex_core::agent_lifecycle::{AgentLifecycle, AgentLifecycleConfig};
 use qorvex_core::android_driver::AndroidDriver;
 use qorvex_core::android_lifecycle::{AndroidLifecycle, AndroidLifecycleConfig};
 use qorvex_core::config::QorvexConfig;
-use qorvex_core::driver::{flatten_elements, AutomationDriver};
+use qorvex_core::driver::{flatten_elements, AutomationDriver, DriverError};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{IpcRequest, IpcResponse, Platform};
 use qorvex_core::session::Session;
@@ -1006,39 +1006,21 @@ impl ServerState {
                 message: "set_target requires a bundle_id".to_string(),
             };
         }
-        let (response, action_result) = match &self.executor {
-            Some(executor) => match executor.driver().set_target(bundle_id).await {
-                Ok(()) => {
-                    self.target_bundle_id = Some(bundle_id.to_string());
-                    (
-                        IpcResponse::CommandResult {
-                            success: true,
-                            message: format!("Target set to {}", bundle_id),
-                        },
-                        ActionResult::Success,
-                    )
-                }
-                Err(e) => {
-                    let msg = format!("Failed to set target: {}", e);
-                    (
-                        IpcResponse::CommandResult {
-                            success: false,
-                            message: msg.clone(),
-                        },
-                        ActionResult::Failure(msg),
-                    )
-                }
-            },
-            None => {
-                let msg = "No agent connected".to_string();
-                (
-                    IpcResponse::CommandResult {
-                        success: false,
-                        message: msg.clone(),
-                    },
-                    ActionResult::Failure(msg),
-                )
-            }
+        let (response, action_result) = match self.record_target(bundle_id).await {
+            Ok(message) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message,
+                },
+                ActionResult::Success,
+            ),
+            Err(msg) => (
+                IpcResponse::CommandResult {
+                    success: false,
+                    message: msg.clone(),
+                },
+                ActionResult::Failure(msg),
+            ),
         };
         self.log_action(
             ActionType::SetTarget {
@@ -1320,6 +1302,43 @@ impl ServerState {
             };
         }
 
+        // Nor does `set-target`: it writes server state, and the agent's copy
+        // is a cache pushed opportunistically (see `record_target`). Routing it
+        // through the executor below would fail the whole command whenever the
+        // agent is absent or unreachable — even though `start-target` /
+        // `stop-target`, the only readers of that state, drive simctl/adb and
+        // need no agent at all.
+        if let ActionType::SetTarget { ref bundle_id } = action {
+            let bundle_id = strip_quotes(bundle_id).to_string();
+            if bundle_id.is_empty() {
+                return IpcResponse::Error {
+                    message: "set_target requires a bundle_id".to_string(),
+                };
+            }
+            let (response, action_result) = match self.record_target(&bundle_id).await {
+                Ok(message) => (
+                    IpcResponse::ActionResult {
+                        success: true,
+                        message,
+                        screenshot: None,
+                        data: None,
+                    },
+                    ActionResult::Success,
+                ),
+                Err(msg) => (
+                    IpcResponse::ActionResult {
+                        success: false,
+                        message: msg.clone(),
+                        screenshot: None,
+                        data: None,
+                    },
+                    ActionResult::Failure(msg),
+                ),
+            };
+            self.log_action(action, action_result, None, tag).await;
+            return response;
+        }
+
         let driver_guard = self.shared_driver.lock().await;
         let driver_opt = driver_guard.clone();
         drop(driver_guard);
@@ -1343,13 +1362,6 @@ impl ServerState {
                 } else {
                     ActionResult::Failure(result.message.clone())
                 };
-                // Sync server state when target is set via Execute path
-                if result.success {
-                    if let ActionType::SetTarget { ref bundle_id } = action {
-                        self.target_bundle_id = Some(bundle_id.clone());
-                    }
-                }
-
                 let duration_ms = result
                     .data
                     .as_ref()
@@ -1401,7 +1413,53 @@ impl ServerState {
     /// Set the executor and update the shared driver so IPC clients reuse the same connection.
     pub async fn set_executor_with_driver(&mut self, driver: Arc<dyn AutomationDriver>) {
         self.executor = Some(ActionExecutor::new(driver.clone()));
-        *self.shared_driver.lock().await = Some(driver);
+        *self.shared_driver.lock().await = Some(driver.clone());
+        // A target recorded while no agent was connected lives only in server
+        // state, so hand it to the fresh driver — otherwise automation would
+        // drive nothing until a second set-target. This is also where a bundle
+        // id recorded blind gets validated for the first time; a bad one fails
+        // loudly here rather than silently doing nothing later.
+        if let Some(bundle_id) = self.target_bundle_id.clone() {
+            if let Err(e) = driver.set_target(&bundle_id).await {
+                warn!(bundle_id = %bundle_id, error = %e, "failed to apply recorded target to agent");
+            }
+        }
+    }
+
+    /// Pushes the target bundle id to the agent if one is reachable, then
+    /// records it. `Ok` carries the message to report, `Err` the failure.
+    ///
+    /// The record is what `start-target` / `stop-target` read, and those drive
+    /// simctl/adb directly — they never need an agent. Recording used to happen
+    /// only on a successful driver round-trip, so choosing which app to launch
+    /// meant standing up a whole agent connection first.
+    ///
+    /// Which failures are fatal turns on *who* failed. An unreachable agent is
+    /// the connection's problem, not the id's: the id is recorded anyway and
+    /// the push retried when an agent (re)connects
+    /// ([`Self::set_executor_with_driver`]). A [`DriverError::CommandFailed`]
+    /// is the agent answering — the Android agent refuses a package that isn't
+    /// installed — so that stays fatal and nothing is recorded, or a typo'd id
+    /// would sit in server state waiting to fail again at `start-target`.
+    async fn record_target(&mut self, bundle_id: &str) -> Result<String, String> {
+        // Prefer the shared driver (set when an agent connects); fall back to
+        // the executor's, mirroring `handle_execute`.
+        let driver = match self.shared_driver.lock().await.clone() {
+            Some(driver) => Some(driver),
+            None => self.executor.as_ref().map(|e| e.driver().clone()),
+        };
+        let note = match driver {
+            Some(driver) => match driver.set_target(bundle_id).await {
+                Ok(()) => String::new(),
+                Err(e) if is_agent_rejection(&e) => {
+                    return Err(format!("Failed to set target: {}", e))
+                }
+                Err(e) => format!(" (recorded; agent not updated: {})", e),
+            },
+            None => " (recorded; no agent connected)".to_string(),
+        };
+        self.target_bundle_id = Some(bundle_id.to_string());
+        Ok(format!("Target set to {}{}", bundle_id, note))
     }
 
     /// Log an action to the current session.
@@ -1467,6 +1525,17 @@ fn is_valid_udid(udid: &str) -> bool {
 }
 
 /// Strip surrounding quotes from a string if present.
+/// Whether a failed `set_target` push was the agent *rejecting the id* rather
+/// than the agent being unreachable.
+///
+/// Only `CommandFailed` carries an answer from the agent — the Android agent
+/// returns one for a package that isn't installed. Everything else
+/// (`NotConnected`, `ConnectionLost`, `Timeout`, IO, parse) describes the
+/// connection, and says nothing about whether the bundle id is good.
+fn is_agent_rejection(e: &DriverError) -> bool {
+    matches!(e, DriverError::CommandFailed(_))
+}
+
 fn strip_quotes(s: &str) -> &str {
     let s = s.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
@@ -1669,5 +1738,170 @@ mod tests {
     fn android_forward_defaults_to_none() {
         let state = ServerState::new("test".into());
         assert!(state.android_forward.is_none());
+    }
+
+    // --- set-target without an agent ---
+
+    /// `ServerState::new` seeds an executor whenever a simulator happens to be
+    /// booted on the host, which would mask the agentless path under test.
+    async fn agentless_state() -> ServerState {
+        let mut state = ServerState::new("test".into());
+        state.executor = None;
+        *state.shared_driver.lock().await = None;
+        state
+    }
+
+    /// The reported failure mode: an executor exists (a simulator was booted,
+    /// so `ServerState::new` seeded one) but nothing is connected behind it, so
+    /// the driver push fails with `NotConnected`. The id must still be recorded
+    /// — that is what made `set-target` demand a full agent connection.
+    async fn unreachable_agent_state() -> ServerState {
+        let mut state = agentless_state().await;
+        // Port 1 is privileged and unbound: `connect` is never called, so every
+        // request fails at the "no client" check with `NotConnected`.
+        state.executor = Some(ActionExecutor::with_agent("127.0.0.1".to_string(), 1));
+        state
+    }
+
+    /// The REPL's `set-target` records the bundle id with no agent connected,
+    /// so `start-target` — which drives simctl/adb directly — is usable without
+    /// standing up an agent connection just to store a string.
+    #[tokio::test]
+    async fn set_target_without_agent_records_bundle_id() {
+        let mut state = agentless_state().await;
+        match state.handle_set_target("com.example.App").await {
+            IpcResponse::CommandResult { success, message } => {
+                assert!(success, "{message}");
+                assert!(message.contains("com.example.App"), "{message}");
+            }
+            other => panic!("expected CommandResult, got {other:?}"),
+        }
+        assert_eq!(state.target_bundle_id.as_deref(), Some("com.example.App"));
+    }
+
+    /// The CLI routes `set-target` through `Execute`, which used to reject it
+    /// with "No automation backend connected" before the handler ever ran.
+    #[tokio::test]
+    async fn execute_set_target_without_agent_records_bundle_id() {
+        let mut state = agentless_state().await;
+        let action = ActionType::SetTarget {
+            bundle_id: "com.example.App".to_string(),
+        };
+        match state.handle_execute(action, None).await {
+            IpcResponse::ActionResult {
+                success, message, ..
+            } => {
+                assert!(success, "{message}");
+            }
+            other => panic!("expected ActionResult, got {other:?}"),
+        }
+        assert_eq!(state.target_bundle_id.as_deref(), Some("com.example.App"));
+    }
+
+    /// An unreachable agent is reported, not fatal: the id is recorded and the
+    /// caller is told the agent did not get it.
+    #[tokio::test]
+    async fn set_target_with_unreachable_agent_still_records() {
+        let mut state = unreachable_agent_state().await;
+        match state.handle_set_target("com.example.App").await {
+            IpcResponse::CommandResult { success, message } => {
+                assert!(success, "{message}");
+                assert!(message.contains("agent not updated"), "{message}");
+            }
+            other => panic!("expected CommandResult, got {other:?}"),
+        }
+        assert_eq!(state.target_bundle_id.as_deref(), Some("com.example.App"));
+    }
+
+    /// Same for the CLI's `Execute` path — this is the exact command that
+    /// failed with "Not connected to automation backend".
+    #[tokio::test]
+    async fn execute_set_target_with_unreachable_agent_still_records() {
+        let mut state = unreachable_agent_state().await;
+        let action = ActionType::SetTarget {
+            bundle_id: "com.example.App".to_string(),
+        };
+        match state.handle_execute(action, None).await {
+            IpcResponse::ActionResult {
+                success, message, ..
+            } => {
+                assert!(success, "{message}");
+                assert!(message.contains("agent not updated"), "{message}");
+            }
+            other => panic!("expected ActionResult, got {other:?}"),
+        }
+        assert_eq!(state.target_bundle_id.as_deref(), Some("com.example.App"));
+    }
+
+    /// An agent that *answers* with a rejection is not the same as one that
+    /// cannot be reached. The Android agent refuses a package that isn't
+    /// installed (`CommandFailed`), and that must stay fatal — otherwise a
+    /// typo'd id sits in server state waiting to fail again at `start-target`.
+    /// Every other variant is the connection, not the id.
+    #[test]
+    fn only_an_agent_answer_counts_as_rejecting_the_target() {
+        assert!(is_agent_rejection(&DriverError::CommandFailed(
+            "Target application is not installed".into()
+        )));
+        assert!(!is_agent_rejection(&DriverError::NotConnected));
+        assert!(!is_agent_rejection(&DriverError::ConnectionLost(
+            "reset by peer".into()
+        )));
+        assert!(!is_agent_rejection(&DriverError::Timeout));
+    }
+
+    /// Connecting an agent must not clobber a target recorded while none was
+    /// around — `set_executor_with_driver` re-pushes it, and that push must be
+    /// non-fatal when it fails. (The push itself is verified end-to-end against
+    /// a real simulator; with no agent listening here, only its harmlessness
+    /// and the surviving state are asserted.)
+    #[tokio::test]
+    async fn connecting_an_agent_preserves_the_recorded_target() {
+        let mut state = agentless_state().await;
+        state.handle_set_target("com.example.App").await;
+
+        let driver = Arc::new(AndroidDriver::new("emulator-5554", Some(1), 1));
+        state.set_executor_with_driver(driver).await;
+
+        assert_eq!(state.target_bundle_id.as_deref(), Some("com.example.App"));
+        assert!(state.shared_driver.lock().await.is_some());
+    }
+
+    /// Only `set-target` is exempt: everything else still needs a driver, so a
+    /// missing agent must not be silently swallowed.
+    #[tokio::test]
+    async fn execute_other_action_without_agent_still_errors() {
+        let mut state = agentless_state().await;
+        let action = ActionType::Tap {
+            selector: "ok".to_string(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: None,
+        };
+        match state.handle_execute(action, None).await {
+            IpcResponse::Error { message } => {
+                assert!(
+                    message.contains("No automation backend connected"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(state.target_bundle_id.is_none());
+    }
+
+    /// An empty bundle id records nothing — the agentless path must not turn
+    /// `set-target ""` into a stored target that later launches nothing.
+    #[tokio::test]
+    async fn execute_set_target_empty_bundle_id_records_nothing() {
+        let mut state = agentless_state().await;
+        let action = ActionType::SetTarget {
+            bundle_id: "  ".to_string(),
+        };
+        match state.handle_execute(action, None).await {
+            IpcResponse::Error { .. } => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(state.target_bundle_id.is_none());
     }
 }
