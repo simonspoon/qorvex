@@ -142,7 +142,10 @@ impl ServerState {
                 project_dir,
                 platform,
                 java_home,
-            } => self.handle_start_agent(project_dir, platform, java_home).await,
+            } => {
+                self.handle_start_agent(project_dir, platform, java_home)
+                    .await
+            }
             IpcRequest::StopAgent => self.handle_stop_agent(),
             IpcRequest::Connect { host, port } => self.handle_connect(&host, port).await,
 
@@ -650,7 +653,10 @@ impl ServerState {
         };
         match platform {
             Platform::Ios => self.handle_start_agent_ios(project_dir).await,
-            Platform::Android => self.handle_start_agent_android(project_dir, java_home).await,
+            Platform::Android => {
+                self.handle_start_agent_android(project_dir, java_home)
+                    .await
+            }
         }
     }
 
