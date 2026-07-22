@@ -525,7 +525,8 @@ fn element_selector_candidates(
                     let composed = format!("{} --type {}", id, elem_type);
                     (composed, CandidateKind::ElementSelectorById)
                 }
-            } else if let Some(label) = label {
+            } else {
+                let label = label?;
                 let quoted_label = quote_if_needed(label);
                 if label_is_unique {
                     // Unique label: selector, label flag
@@ -536,8 +537,6 @@ fn element_selector_candidates(
                     let composed = format!("{} --label --type {}", quoted_label, elem_type);
                     (composed, CandidateKind::ElementSelectorByLabel)
                 }
-            } else {
-                return None;
             };
 
             // Try matching against identifier or label

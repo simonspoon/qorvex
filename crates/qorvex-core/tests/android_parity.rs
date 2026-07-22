@@ -72,6 +72,30 @@ fn normalized_data(data: &Option<String>) -> Option<serde_json::Value> {
         })
 }
 
+/// Normalize a user-facing `message` the same way [`normalized_data`] treats
+/// the `elapsed_ms` payload field: mask the wall-clock duration baked into the
+/// timeout/error text (`"Timeout after 1ms: ..."`), which each backend measures
+/// independently and so races across the two runs. Everything else in the
+/// message is preserved and still compared.
+fn normalized_message(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+
+    while let Some(idx) = rest.find("after ") {
+        let (head, tail) = rest.split_at(idx + "after ".len());
+        out.push_str(head);
+        let digits = tail.len() - tail.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && tail[digits..].starts_with("ms") {
+            out.push_str("<elapsed>");
+            rest = &tail[digits..];
+        } else {
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Assert two `ExecutionResult`s are equivalent across the iOS and Android
 /// backends. The executor is backend-agnostic, so identical agent responses
 /// must yield identical user-facing results.
@@ -81,7 +105,13 @@ fn assert_equivalent(label: &str, ios: &ExecutionResult, android: &ExecutionResu
         "{label}: success mismatch (iOS={}, Android={})\n iOS msg: {}\n And msg: {}",
         ios.success, android.success, ios.message, android.message
     );
-    assert_eq!(ios.message, android.message, "{label}: message mismatch");
+    assert_eq!(
+        normalized_message(&ios.message),
+        normalized_message(&android.message),
+        "{label}: message mismatch (elapsed time masked)\n iOS: {}\n And: {}",
+        ios.message,
+        android.message
+    );
     assert_eq!(
         normalized_data(&ios.data),
         normalized_data(&android.data),
