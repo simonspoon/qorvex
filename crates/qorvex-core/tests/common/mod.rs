@@ -262,7 +262,7 @@ impl TestHarness {
         let session_name = unique_session_name();
 
         // Use a temp directory for log files so tests don't pollute ~/.qorvex/logs.
-        let tmp_dir = std::env::temp_dir().join(format!("qorvex_test_{}", &session_name));
+        let tmp_dir = std::env::temp_dir().join(format!("qorvex_test_{}", session_name));
         let session = Session::new_with_log_dir(None, &session_name, tmp_dir);
 
         // Stand up a mock agent and connect a driver.
