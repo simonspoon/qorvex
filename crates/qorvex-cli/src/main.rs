@@ -815,6 +815,13 @@ async fn execute_action(
         action,
         ActionType::GetScreenInfo | ActionType::GetValue { .. }
     );
+    // Config actions change server state instead of touching the screen, and
+    // the server's reply carries the only report of what happened — e.g.
+    // `set-target` appends "(recorded; no agent connected)" when it stored the
+    // id without an agent to push it to. The `|ts|Action|target|dur|` trace
+    // line below would drop that note, so print the message instead, the way
+    // `execute_start_target` does.
+    let is_config_action = matches!(action, ActionType::SetTarget { .. });
     let action_label = action.display_name();
     let action_target = action.display_target();
     let request = IpcRequest::Execute { action, tag };
@@ -854,17 +861,23 @@ async fn execute_action(
                         }
                     }
                     if !cli.quiet {
-                        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3fZ");
-                        let duration_str = data
-                            .as_ref()
-                            .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                            .and_then(|parsed| parsed.get("elapsed_ms").and_then(|v| v.as_u64()))
-                            .map(|ms| format!("{}ms", ms))
-                            .unwrap_or_default();
-                        eprintln!(
-                            "|{}|{}|{}|{}|",
-                            now, action_label, action_target, duration_str
-                        );
+                        if is_config_action {
+                            eprintln!("{}", message);
+                        } else {
+                            let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3fZ");
+                            let duration_str = data
+                                .as_ref()
+                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                                .and_then(|parsed| {
+                                    parsed.get("elapsed_ms").and_then(|v| v.as_u64())
+                                })
+                                .map(|ms| format!("{}ms", ms))
+                                .unwrap_or_default();
+                            eprintln!(
+                                "|{}|{}|{}|{}|",
+                                now, action_label, action_target, duration_str
+                            );
+                        }
                     }
                 } else {
                     return Err(CliError::ActionFailed(message));
