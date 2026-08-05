@@ -6,7 +6,7 @@ mod format;
 mod ui;
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use ratatui::{
@@ -87,7 +87,7 @@ async fn main() -> io::Result<()> {
 }
 
 /// Convert mouse (column, row) screen coordinates to a TextPosition in the output buffer.
-fn mouse_to_text_position(column: u16, row: u16, app: &App) -> Option<app::TextPosition> {
+fn mouse_to_text_position(column: u16, row: u16, app: &mut App) -> Option<app::TextPosition> {
     let area = app.output_area?;
 
     // Inner area (inside borders)
@@ -107,50 +107,32 @@ fn mouse_to_text_position(column: u16, row: u16, app: &App) -> Option<app::TextP
     }
 
     // Calculate which visual line corresponds to this row, accounting for scroll
-    let lines: Vec<&ratatui::text::Line> = app.output_history.iter().collect();
-
-    // Build a map of visual rows to (logical_line, char_offset)
-    let total_visual_lines: usize = lines
-        .iter()
-        .map(|line| {
-            let w = line.width();
-            if w == 0 || inner_width == 0 {
-                1
-            } else {
-                w.div_ceil(inner_width)
-            }
-        })
-        .sum();
+    app.ensure_visual_layout(inner_width);
+    let total_visual_lines = app.total_visual_lines();
 
     let max_scroll = total_visual_lines.saturating_sub(inner_height);
     let scroll_y = max_scroll.saturating_sub(app.output_scroll_position);
 
     let target_visual_row = scroll_y + rel_row;
 
-    let mut visual_row = 0;
-    for (line_idx, line) in lines.iter().enumerate() {
-        let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let w = line.width();
-        let wrapped_rows = if w == 0 || inner_width == 0 {
-            1
-        } else {
-            w.div_ceil(inner_width)
-        };
+    // Last logical line starting at or before the target row.
+    let starts = app.visual_layout();
+    let line_count = app.output_history.len();
+    let line_idx = starts.partition_point(|&row| row <= target_visual_row) - 1;
 
-        if target_visual_row < visual_row + wrapped_rows {
-            // This is the line
-            let row_within_line = target_visual_row - visual_row;
-            let col = row_within_line * inner_width + rel_col;
-            let col = col.min(line_str.len());
-            return Some(app::TextPosition::new(line_idx, col));
-        }
-        visual_row += wrapped_rows;
+    if line_idx < line_count {
+        let line = &app.output_history[line_idx];
+        let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let row_within_line = target_visual_row - starts[line_idx];
+        let col = row_within_line * inner_width + rel_col;
+        let col = col.min(line_str.len());
+        return Some(app::TextPosition::new(line_idx, col));
     }
 
     // Past the end — clamp to last line
-    if let Some(last) = lines.last() {
+    if let Some(last) = app.output_history.back() {
         let line_str: String = last.spans.iter().map(|s| s.content.as_ref()).collect();
-        Some(app::TextPosition::new(lines.len() - 1, line_str.len()))
+        Some(app::TextPosition::new(line_count - 1, line_str.len()))
     } else {
         None
     }
@@ -166,7 +148,7 @@ async fn run_batch(session: String) -> io::Result<()> {
     let mut app = App::new_blocking(session).await;
 
     // Drain and print startup messages
-    for line in app.output_history.drain(..) {
+    for line in app.take_output() {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         println!("{}", text);
     }
@@ -186,7 +168,7 @@ async fn run_batch(session: String) -> io::Result<()> {
         app.process_command(&line).await;
 
         // Drain output and print as plain text
-        for output_line in app.output_history.drain(..) {
+        for output_line in app.take_output() {
             let text: String = output_line
                 .spans
                 .iter()
@@ -231,108 +213,20 @@ async fn run_app(
             Duration::from_millis(100)
         };
         if event::poll(poll_timeout)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    if key.kind != KeyEventKind::Press {
-                        continue;
-                    }
+            handle_event(app, event::read()?);
 
-                    // Ctrl+C: copy if selection active, otherwise quit
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('c')
-                    {
-                        if app.selection.has_selection() {
-                            app.copy_selection_to_clipboard();
-                        } else {
-                            app.should_quit = true;
-                        }
-                    }
-                    // Any keypress clears selection (except Ctrl+C which already handled it)
-                    else {
-                        app.selection.clear();
-
-                        // Handle completion navigation
-                        if app.completion.visible {
-                            match key.code {
-                                KeyCode::Tab | KeyCode::Enter => {
-                                    app.accept_completion();
-                                }
-                                KeyCode::Up => {
-                                    app.completion.select_prev();
-                                }
-                                KeyCode::Down => {
-                                    app.completion.select_next();
-                                }
-                                KeyCode::Esc => {
-                                    app.completion.hide();
-                                }
-                                _ => {
-                                    // Pass through to input handler
-                                    app.input.handle_event(&Event::Key(key));
-                                    app.update_completion();
-                                }
-                            }
-                        }
-                        // Handle normal input
-                        else {
-                            match key.code {
-                                KeyCode::Enter => {
-                                    if !app.is_processing {
-                                        app.execute_command();
-                                    }
-                                }
-                                KeyCode::Char('q') if app.input.value().is_empty() => {
-                                    app.should_quit = true;
-                                }
-                                KeyCode::Up => {
-                                    app.scroll_up();
-                                }
-                                KeyCode::Down => {
-                                    app.scroll_down();
-                                }
-                                KeyCode::Tab => {
-                                    app.update_completion();
-                                }
-                                KeyCode::Esc => {
-                                    // Clear input
-                                    app.input = tui_input::Input::default();
-                                }
-                                _ => {
-                                    app.input.handle_event(&Event::Key(key));
-                                    app.update_completion();
-                                }
-                            }
-                        }
-                    }
-                }
-                Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
-                            app.selection.clear();
-                            app.selection.anchor = Some(pos);
-                            app.selection.dragging = true;
-                        }
-                    }
-                    MouseEventKind::Drag(MouseButton::Left) if app.selection.dragging => {
-                        if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
-                            app.selection.endpoint = Some(pos);
-                        }
-                    }
-                    MouseEventKind::Up(MouseButton::Left) if app.selection.dragging => {
-                        if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
-                            app.selection.endpoint = Some(pos);
-                        }
-                        app.selection.dragging = false;
-                    }
-                    MouseEventKind::ScrollUp => {
-                        app.scroll_up();
-                    }
-                    MouseEventKind::ScrollDown => {
-                        app.scroll_down();
-                    }
-                    _ => {}
-                },
-                _ => {}
+            // Consume everything already queued so a burst of keystrokes costs
+            // one draw, not one per key. Bounded so a mouse-drag storm cannot
+            // starve rendering.
+            let drain_start = Instant::now();
+            let mut drained = 0;
+            while !app.should_quit
+                && drained < MAX_DRAINED_EVENTS
+                && drain_start.elapsed() < MAX_DRAIN_TIME
+                && event::poll(Duration::ZERO)?
+            {
+                handle_event(app, event::read()?);
+                drained += 1;
             }
         }
 
@@ -342,6 +236,116 @@ async fn run_app(
     }
 
     Ok(())
+}
+
+/// Upper bound on events consumed before forcing a redraw.
+const MAX_DRAINED_EVENTS: usize = 256;
+/// Upper bound on time spent draining events before forcing a redraw.
+const MAX_DRAIN_TIME: Duration = Duration::from_millis(10);
+
+/// Apply a single terminal event to the app state.
+fn handle_event(app: &mut App, event: Event) {
+    match event {
+        Event::Key(key) => {
+            if key.kind != KeyEventKind::Press {
+                return;
+            }
+
+            // Ctrl+C: copy if selection active, otherwise quit
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                if app.selection.has_selection() {
+                    app.copy_selection_to_clipboard();
+                } else {
+                    app.should_quit = true;
+                }
+            }
+            // Any keypress clears selection (except Ctrl+C which already handled it)
+            else {
+                app.selection.clear();
+
+                // Handle completion navigation
+                if app.completion.visible {
+                    match key.code {
+                        KeyCode::Tab | KeyCode::Enter => {
+                            app.accept_completion();
+                        }
+                        KeyCode::Up => {
+                            app.completion.select_prev();
+                        }
+                        KeyCode::Down => {
+                            app.completion.select_next();
+                        }
+                        KeyCode::Esc => {
+                            app.completion.hide();
+                        }
+                        _ => {
+                            // Pass through to input handler
+                            app.input.handle_event(&Event::Key(key));
+                            app.update_completion();
+                        }
+                    }
+                }
+                // Handle normal input
+                else {
+                    match key.code {
+                        KeyCode::Enter => {
+                            if !app.is_processing {
+                                app.execute_command();
+                            }
+                        }
+                        KeyCode::Char('q') if app.input.value().is_empty() => {
+                            app.should_quit = true;
+                        }
+                        KeyCode::Up => {
+                            app.scroll_up();
+                        }
+                        KeyCode::Down => {
+                            app.scroll_down();
+                        }
+                        KeyCode::Tab => {
+                            app.update_completion();
+                        }
+                        KeyCode::Esc => {
+                            // Clear input
+                            app.input = tui_input::Input::default();
+                        }
+                        _ => {
+                            app.input.handle_event(&Event::Key(key));
+                            app.update_completion();
+                        }
+                    }
+                }
+            }
+        }
+        Event::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
+                    app.selection.clear();
+                    app.selection.anchor = Some(pos);
+                    app.selection.dragging = true;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) if app.selection.dragging => {
+                if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
+                    app.selection.endpoint = Some(pos);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) if app.selection.dragging => {
+                if let Some(pos) = mouse_to_text_position(mouse.column, mouse.row, app) {
+                    app.selection.endpoint = Some(pos);
+                }
+                app.selection.dragging = false;
+            }
+            MouseEventKind::ScrollUp => {
+                app.scroll_up();
+            }
+            MouseEventKind::ScrollDown => {
+                app.scroll_down();
+            }
+            _ => {}
+        },
+        _ => {}
+    }
 }
 
 #[cfg(test)]

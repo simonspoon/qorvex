@@ -104,6 +104,31 @@ struct StartupResult {
     cached_android_devices: Vec<AndroidDevice>,
 }
 
+/// Number of visual (wrapped) rows a logical line occupies at `inner_width`.
+///
+/// This is the wrap arithmetic the whole output pane is keyed on — rendering,
+/// selection highlighting and mouse hit-testing must all agree, so they all
+/// call this.
+pub fn wrapped_rows(line: &Line, inner_width: usize) -> usize {
+    let w = line.width();
+    if w == 0 || inner_width == 0 {
+        1
+    } else {
+        w.div_ceil(inner_width)
+    }
+}
+
+/// Prefix sums of `wrapped_rows` over `output_history`, valid for one
+/// (width, history revision) pair.
+#[derive(Debug, Default)]
+struct VisualLineCache {
+    inner_width: usize,
+    revision: u64,
+    /// `starts[i]` = first visual row of logical line `i`; last entry is the
+    /// total visual line count. Length is `output_history.len() + 1`.
+    starts: Vec<usize>,
+}
+
 /// Application state.
 pub struct App {
     // --- TUI state (kept as-is) ---
@@ -121,6 +146,10 @@ pub struct App {
     pub output_area: Option<Rect>,
     /// Whether the app should quit.
     pub should_quit: bool,
+    /// Bumped whenever `output_history` is mutated; invalidates `visual_cache`.
+    history_revision: u64,
+    /// Cached wrapped-row layout of `output_history`.
+    visual_cache: VisualLineCache,
 
     // --- IPC client ---
     /// Session name.
@@ -291,6 +320,8 @@ impl App {
             selection: SelectionState::default(),
             output_area: None,
             should_quit: false,
+            history_revision: 0,
+            visual_cache: VisualLineCache::default(),
             session_name,
             client: None,
             cached_elements: Vec::new(),
@@ -474,8 +505,49 @@ impl App {
         if self.output_history.len() > MAX_OUTPUT_HISTORY {
             self.output_history.pop_front();
         }
+        self.history_revision += 1;
         // Auto-scroll to bottom
         self.output_scroll_position = 0;
+    }
+
+    /// Take every output line, leaving the history empty (batch mode).
+    pub fn take_output(&mut self) -> Vec<Line<'static>> {
+        self.history_revision += 1;
+        self.output_history.drain(..).collect()
+    }
+
+    /// Recompute the wrapped-row layout if the width or history changed.
+    ///
+    /// Must be called before `visual_layout` for the width being rendered.
+    pub fn ensure_visual_layout(&mut self, inner_width: usize) {
+        let cache = &mut self.visual_cache;
+        if cache.inner_width == inner_width
+            && cache.revision == self.history_revision
+            && cache.starts.len() == self.output_history.len() + 1
+        {
+            return;
+        }
+        cache.starts.clear();
+        cache.starts.push(0);
+        let mut acc = 0;
+        for line in &self.output_history {
+            acc += wrapped_rows(line, inner_width);
+            cache.starts.push(acc);
+        }
+        cache.inner_width = inner_width;
+        cache.revision = self.history_revision;
+    }
+
+    /// Visual-row start of each logical line; the final entry is the total
+    /// visual line count. Only valid for the width last passed to
+    /// `ensure_visual_layout`.
+    pub fn visual_layout(&self) -> &[usize] {
+        &self.visual_cache.starts
+    }
+
+    /// Total visual (wrapped) rows in the output history.
+    pub fn total_visual_lines(&self) -> usize {
+        self.visual_cache.starts.last().copied().unwrap_or(0)
     }
 
     /// Update completion state based on current input.
@@ -1819,6 +1891,8 @@ mod tests {
             selection: SelectionState::default(),
             output_area: None,
             should_quit: false,
+            history_revision: 0,
+            visual_cache: VisualLineCache::default(),
             session_name: session_name.clone(),
             client: Some(client),
             cached_elements: Vec::new(),
@@ -1865,6 +1939,8 @@ mod tests {
             selection: SelectionState::default(),
             output_area: None,
             should_quit: false,
+            history_revision: 0,
+            visual_cache: VisualLineCache::default(),
             session_name: "nonexistent".to_string(),
             client: None,
             cached_elements: Vec::new(),

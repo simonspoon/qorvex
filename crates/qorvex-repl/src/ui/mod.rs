@@ -60,6 +60,23 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+/// Half-open range of logical line indices whose visual rows intersect
+/// `[scroll_y, scroll_y + viewport_height)`.
+///
+/// `starts` is `App::visual_layout()`: strictly increasing, one entry per
+/// logical line plus a total.
+fn visible_line_range(starts: &[usize], scroll_y: usize, viewport_height: usize) -> (usize, usize) {
+    let line_count = starts.len().saturating_sub(1);
+    // Last line starting at or before scroll_y (starts[0] == 0, so this is >= 1).
+    let first = starts.partition_point(|&row| row <= scroll_y) - 1;
+    let first = first.min(line_count);
+    // Lines starting before the bottom of the viewport.
+    let last = starts
+        .partition_point(|&row| row < scroll_y + viewport_height)
+        .min(line_count);
+    (first, last.max(first))
+}
+
 fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .title(" Output ")
@@ -70,48 +87,51 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = inner.width as usize;
     let viewport_height = inner.height as usize;
 
-    let lines: Vec<Line> = app.output_history.iter().cloned().collect();
-
-    // Calculate total visual lines after wrapping
-    let total_visual_lines: usize = lines
-        .iter()
-        .map(|line| {
-            let w = line.width();
-            if w == 0 || inner_width == 0 {
-                1
-            } else {
-                w.div_ceil(inner_width)
-            }
-        })
-        .sum();
+    app.ensure_visual_layout(inner_width);
+    let total_visual_lines = app.total_visual_lines();
 
     // Clamp scroll offset and compute scroll position
     let max_scroll = total_visual_lines.saturating_sub(viewport_height);
     app.output_scroll_position = app.output_scroll_position.min(max_scroll);
     let scroll_y = max_scroll.saturating_sub(app.output_scroll_position);
 
+    // Only the logical lines whose visual rows intersect the viewport need to be
+    // cloned and handed to Paragraph — the rest would just be re-wrapped and
+    // discarded, which is what made typing lag once history filled up.
+    let (first, last) = visible_line_range(app.visual_layout(), scroll_y, viewport_height);
+    let lines: Vec<Line> = app
+        .output_history
+        .iter()
+        .skip(first)
+        .take(last - first)
+        .cloned()
+        .collect();
+    // Residual scroll within the first rendered line.
+    let inner_scroll = scroll_y - app.visual_layout()[first];
+
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((scroll_y as u16, 0));
+        .scroll((inner_scroll as u16, 0));
 
     frame.render_widget(paragraph, area);
 
     // Render selection overlay
     if let Some((sel_start, sel_end)) = app.selection.range() {
         let sel_style = Theme::text_selection();
-        let lines_vec: Vec<&Line> = app.output_history.iter().collect();
+        let starts = app.visual_layout();
 
-        // Walk through visual lines to find which screen cells to highlight
-        let mut visual_row: usize = 0;
-        for (line_idx, line) in lines_vec.iter().enumerate() {
+        // Walk the visible logical lines to find which screen cells to highlight
+        for (line_idx, line) in app
+            .output_history
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(last - first)
+        {
             let line_str: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            let w = line.width();
-            let wrapped_rows = if w == 0 || inner_width == 0 {
-                1
-            } else {
-                w.div_ceil(inner_width)
-            };
+            let visual_row = starts[line_idx];
+            let wrapped_rows = crate::app::wrapped_rows(line, inner_width);
 
             for wrap_row in 0..wrapped_rows {
                 let vrow = visual_row + wrap_row;
@@ -165,11 +185,6 @@ fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
                         }
                     }
                 }
-            }
-
-            visual_row += wrapped_rows;
-            if visual_row >= scroll_y + viewport_height {
-                break; // Past viewport
             }
         }
     }
@@ -236,4 +251,152 @@ fn render_completion(frame: &mut Frame, app: &App, input_area: Rect) {
 
     let popup_area = popup.area(cursor_x, cursor_y, frame.area());
     frame.render_widget(popup, popup_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Position;
+    use ratatui::Terminal;
+    use std::time::{Duration, Instant};
+
+    fn app_with_history(count: usize) -> App {
+        let mut app = App::new("perf-test".to_string());
+        for i in 0..count {
+            app.add_output(Line::from(format!("line {:04} {}", i, "x ".repeat(56))));
+        }
+        app
+    }
+
+    #[test]
+    fn test_visible_line_range() {
+        // Three logical lines occupying 1, 3 and 1 visual rows.
+        let starts = [0, 1, 4, 5];
+
+        // Whole history fits in the viewport.
+        assert_eq!(visible_line_range(&starts, 0, 10), (0, 3));
+        // Viewport starting mid-way through line 1.
+        assert_eq!(visible_line_range(&starts, 2, 2), (1, 2));
+        // Viewport covering the tail of line 1 and line 2.
+        assert_eq!(visible_line_range(&starts, 3, 2), (1, 3));
+        // Empty history.
+        assert_eq!(visible_line_range(&[0], 0, 10), (0, 0));
+        // Degenerate viewport.
+        assert_eq!(visible_line_range(&starts, 4, 0), (2, 2));
+    }
+
+    /// A full scrollback must not cost a full-history render per frame.
+    #[tokio::test]
+    async fn test_render_full_history_is_fast() {
+        let mut app = app_with_history(1000);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+        let start = Instant::now();
+        for _ in 0..200 {
+            terminal.draw(|f| render(f, &mut app)).unwrap();
+        }
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "200 frames over a 1000-line history took {:?}",
+            elapsed
+        );
+    }
+
+    /// The selection overlay must still land on the right logical lines now
+    /// that it walks only the sliced range.
+    #[tokio::test]
+    async fn test_selection_overlay_lands_on_selected_lines() {
+        let mut app = app_with_history(200);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        // First render establishes output_area / the visual layout.
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+
+        // Select the whole of the second-to-last logical line.
+        let last_idx = app.output_history.len() - 1;
+        app.selection.anchor = Some(crate::app::TextPosition::new(last_idx - 1, 0));
+        app.selection.endpoint = Some(crate::app::TextPosition::new(last_idx, 0));
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+
+        let area = app.output_area.unwrap();
+        let buffer = terminal.backend().buffer();
+        let selected_bg = Theme::text_selection().bg.unwrap();
+
+        // Rows holding the selected line are highlighted; the last line is not.
+        let starts = app.visual_layout();
+        let scroll_y = starts[starts.len() - 1] - (area.height.saturating_sub(2) as usize);
+        for (idx, expected) in [(last_idx - 1, true), (last_idx, false)] {
+            let screen_row = area.y + 1 + (starts[idx] - scroll_y) as u16;
+            let cell = buffer.cell(Position::new(area.x + 1, screen_row)).unwrap();
+            assert_eq!(
+                cell.bg == selected_bg,
+                expected,
+                "line {} at row {} highlight mismatch",
+                idx,
+                screen_row
+            );
+        }
+    }
+
+    /// The sliced render must produce the same pixels as handing the whole
+    /// history to Paragraph, at every scroll position.
+    #[tokio::test]
+    async fn test_sliced_render_matches_full_render() {
+        let mut app = app_with_history(200);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+
+        for scroll in [0usize, 1, 17, 100, 10_000] {
+            app.output_scroll_position = scroll;
+            terminal.draw(|f| render(f, &mut app)).unwrap();
+            let sliced = terminal.backend().buffer().clone();
+
+            let output_area = app.output_area.unwrap();
+            let inner_width = output_area.width.saturating_sub(2) as usize;
+            let inner_height = output_area.height.saturating_sub(2) as usize;
+
+            // Same frame the old way: whole history handed to Paragraph.
+            let total: usize = app
+                .output_history
+                .iter()
+                .map(|l| crate::app::wrapped_rows(l, inner_width))
+                .sum();
+            let scroll_y = total
+                .saturating_sub(inner_height)
+                .saturating_sub(app.output_scroll_position);
+            let mut reference = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            reference
+                .draw(|f| {
+                    let block = Block::default()
+                        .title(" Output ")
+                        .borders(Borders::ALL)
+                        .border_style(Theme::muted());
+                    let lines: Vec<Line> = app.output_history.iter().cloned().collect();
+                    let paragraph = Paragraph::new(lines)
+                        .block(block)
+                        .wrap(Wrap { trim: false })
+                        .scroll((scroll_y as u16, 0));
+                    f.render_widget(paragraph, output_area);
+                })
+                .unwrap();
+            let full = reference.backend().buffer().clone();
+
+            // Compare the inner output pane only (the reference frame has no
+            // title/input panes, and the scrollbar overwrites the right border).
+            for y in output_area.y + 1..output_area.y + output_area.height - 1 {
+                for x in output_area.x + 1..output_area.x + output_area.width - 1 {
+                    let pos = Position::new(x, y);
+                    assert_eq!(
+                        sliced.cell(pos).unwrap().symbol(),
+                        full.cell(pos).unwrap().symbol(),
+                        "scroll {} mismatch at ({}, {})",
+                        scroll,
+                        x,
+                        y
+                    );
+                }
+            }
+        }
+    }
 }
