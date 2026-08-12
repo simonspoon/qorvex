@@ -112,13 +112,40 @@ If a read timeout occurs, the next command will report "Not connected". For mana
 6. Both: Run `qorvex list-physical-devices` — WiFi devices are discovered via CoreDevice (`xcrun devicectl`); USB devices via usbmuxd
 7. **Device name shows as "Unknown":** `list-physical-devices` uses usbmuxd which may not have the human-readable name. To confirm the device name, run `xcrun devicectl list devices` instead.
 
-### Agent Startup Timeout on Physical Device After Fresh Install
+### Signing Errors on Physical Device
 
-**Symptoms:** `start-agent` times out on a physical device immediately after running `install.sh` on a new machine, even though it works on the original machine.
+**Symptoms:** `start-agent` fails with "no Apple Development Team configured", or xcodebuild reports a signing failure such as "No profiles for 'com.qorvex.agent' were found" / "the bundle identifier is not available" / "is not available. Please enter a different string".
 
-**Cause:** Older `install.sh` versions only pre-built the agent for simulator. The lifecycle manager detected the simulator `.xctestrun`, skipped the build, then silently failed to install on the physical device. Current `install.sh` builds for both platforms — re-running it fixes this.
+Physical-device builds must be code signed. Simulator builds are unsigned, so neither key below applies to them.
 
-**Fix:** Re-run `./install.sh` from the qorvex source directory to build the physical device agent bundle.
+**"No Apple Development Team configured":** Add your 10-character Apple Team ID to `~/.qorvex/config.json`:
+
+```json
+{
+  "development_team": "ABCDE12345"
+}
+```
+
+Find the ID in Xcode ▸ Settings ▸ Accounts, or at developer.apple.com/account under Membership details. qorvex fails fast on this rather than building a runner signed with the wrong identity.
+
+**"Bundle identifier is not available" / registered to another team:** The default App ID `com.qorvex.agent` is already registered to a different Apple Developer account, which blocks automatic signing for yours. Pick an identifier in a namespace you own:
+
+```json
+{
+  "development_team": "ABCDE12345",
+  "agent_bundle_id": "com.example.qorvex.agent"
+}
+```
+
+qorvex renames the agent app and its UI-test runner together — they become `<id>` and `<id>.uitests`.
+
+### First Physical Device Start Is Slow or Prompts for Access
+
+**Symptoms:** The first `start-agent` against a physical device takes noticeably longer than a simulator start, or macOS prompts for keychain / Apple ID access and the start appears to hang.
+
+**Cause:** `install.sh` does not pre-build the physical-device (`iphoneos`) runner, because it cannot be signed correctly at install time. qorvex builds it on first use against a device — and rebuilds it on every start — so it always carries the signature of the team in `development_team`.
+
+**Fix:** This is expected; let the build finish. Run `qorvex start --device <udid>` from a terminal where you can answer the keychain/Apple ID prompts, rather than from a background or automated context.
 
 ### "Unlock X to Continue" / Agent Startup Timeout
 

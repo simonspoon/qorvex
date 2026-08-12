@@ -35,7 +35,7 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 - Rust 1.70+
 - **For Swift agent**: [xcodegen](https://github.com/yonaskolb/XcodeGen) and Xcode (see `qorvex-agent/README.md`)
 - **For qorvex-streamer**: macOS 13+ and Screen Recording permission
-- **For physical devices**: iOS device with developer mode enabled; connected via USB or on the same WiFi network (iOS 17+)
+- **For physical devices**: iOS device with developer mode enabled; connected via USB or on the same WiFi network (iOS 17+); an Apple Development Team ID set as `development_team` in `~/.qorvex/config.json` (see [Directory Structure](#directory-structure)) — physical-device agent builds must be code signed
 
 ## Installation
 
@@ -68,7 +68,8 @@ xcodebuild build-for-testing \
 ### From source
 
 ```bash
-# Install everything: Rust binaries, Swift streamer, Swift agent (simulator + physical)
+# Install everything: Rust binaries, Swift streamer, Swift agent (simulator only —
+# the physical-device runner is built on first use so it carries your signing team)
 ./install.sh
 
 # Or install Rust crates individually
@@ -352,6 +353,7 @@ Qorvex stores runtime files in `~/.qorvex/`:
 ```
 
 - **Config** (`~/.qorvex/config.json`) — Persistent settings. Stores `agent_source_dir` so that `start-session` and `start-agent` can auto-build the Swift agent. Written by `install.sh`. When `agent_source_dir` is not set, the server automatically checks for a Homebrew-installed agent at `HOMEBREW_PREFIX/share/qorvex/agent`.
+  - **iOS signing keys** (used for physical devices only — simulator builds are unsigned): `development_team` (your 10-character Apple Team ID — **required** for any physical iOS device; find it in Xcode ▸ Settings ▸ Accounts or at developer.apple.com/account under Membership details). Without it, qorvex fails fast with a clear error rather than building a runner signed with the wrong identity. `agent_bundle_id` (optional override, e.g. `"com.example.qorvex.agent"`) is needed when the default App ID `com.qorvex.agent` is already registered to another team, which blocks automatic signing for yours; qorvex renames the agent app and its UI-test runner together (they become `<id>` and `<id>.uitests`).
   - **Android keys** (used by `--platform android` commands): `android_agent_source_dir` (path to the Kotlin agent project containing `gradlew` — **required** to build/launch the Android agent), `android_sdk_root` (optional Android SDK path; only needed when `adb`/`emulator` are not on `PATH`), and `android_device_port` (the agent's device-side TCP port, defaults to `8080`). Missing or invalid Android config produces a clear validation error when `start-agent --platform android` runs, not a downstream Gradle/adb crash.
 - **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Live TUI use these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.

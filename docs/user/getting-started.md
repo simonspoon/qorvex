@@ -5,7 +5,7 @@
 - macOS with Xcode and iOS Simulators installed
 - Rust 1.70+
 - [xcodegen](https://github.com/yonaskolb/XcodeGen) (for building the Swift agent)
-- For physical devices: iOS device with developer mode enabled, connected via USB or on the same WiFi network (iOS 17+)
+- For physical devices: iOS device with developer mode enabled, connected via USB or on the same WiFi network (iOS 17+), plus an Apple Development Team ID in `~/.qorvex/config.json` (see [Physical Device Signing](#physical-device-signing))
 
 ## Installation
 
@@ -27,7 +27,9 @@ cd qorvex
 ./install.sh
 ```
 
-`install.sh` installs all Rust binaries, records the agent project path in `~/.qorvex/config.json`, and pre-builds the Swift agent for **both simulator and physical devices**. Run it on every machine where you intend to use qorvex.
+`install.sh` installs all Rust binaries, records the agent project path in `~/.qorvex/config.json`, and pre-builds the Swift agent **for the simulator only**. Run it on every machine where you intend to use qorvex.
+
+The physical-device runner is not pre-built, because it cannot be code signed correctly at install time. qorvex builds it on first use against a physical device — and rebuilds it every time — so it always carries your configured team's signature. See [Physical Device Signing](#physical-device-signing).
 
 ### Individual Crates
 
@@ -44,7 +46,22 @@ make -C qorvex-agent build      # XCTest automation agent
 make -C qorvex-streamer build   # Live video streamer (macOS 13+)
 ```
 
-`install.sh` builds both automatically (agent is built for both simulator and physical devices).
+`install.sh` builds both automatically (the agent is built for the simulator; the physical-device runner is built on first use against a device).
+
+## Physical Device Signing
+
+Physical-device builds must be code signed; simulator builds are unsigned and need no configuration. Add your Apple Development Team ID to `~/.qorvex/config.json`:
+
+```json
+{
+  "development_team": "ABCDE12345"
+}
+```
+
+- **`development_team`** (required for any physical device) -- your 10-character Apple Team ID. Find it in Xcode ▸ Settings ▸ Accounts, or at developer.apple.com/account under Membership details. Without it, qorvex fails fast with a clear error instead of building a runner it cannot sign for you.
+- **`agent_bundle_id`** (optional) -- e.g. `"com.example.qorvex.agent"`. Set this when the default App ID `com.qorvex.agent` is already registered to another team, which blocks automatic signing for yours. qorvex renames the agent app and its UI-test runner together (they become `<id>` and `<id>.uitests`).
+
+The first `start-agent` against a physical device is slower than a simulator start because the runner is built and signed then -- and on every subsequent start, so the signature always matches your configured team. macOS may prompt for keychain or Apple ID access during that build, so run `qorvex start --device <udid>` in a terminal where you can answer the prompts.
 
 ## Shell Completions (Optional)
 
@@ -140,7 +157,7 @@ After your first session, `~/.qorvex/` will contain:
 
 ```
 ~/.qorvex/
-├── config.json                  # Agent source dir and other settings
+├── config.json                  # Agent source dir, signing team, and other settings
 ├── qorvex_default.sock          # IPC socket (while session is active)
 └── logs/
     └── default_20250101_120000.jsonl  # Action log

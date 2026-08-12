@@ -72,6 +72,8 @@ The Rust side manages the agent's full lifecycle through `AgentLifecycle` (defin
 | `startup_timeout` | `Duration` | 30s |
 | `max_retries` | `u32` | `3` |
 | `is_physical` | `bool` | `false` |
+| `development_team` | `Option<String>` | `None` (10-char Apple Team ID from `~/.qorvex/config.json`; **required** when `is_physical` is `true`) |
+| `agent_bundle_id` | `Option<String>` | `None` (bundle ID override from `~/.qorvex/config.json`; defaults to `com.qorvex.agent`) |
 
 ### Build
 
@@ -83,7 +85,26 @@ xcodebuild build-for-testing \
   -derivedDataPath .build
 ```
 
-When `is_physical` is `false` (default), the destination is `generic/platform=iOS Simulator`, which produces a universal simulator bundle that works with any booted simulator. When `is_physical` is `true`, the destination is `generic/platform=iOS`, which produces a physical device build. `install.sh` builds for simulator by default.
+When `is_physical` is `false` (default), the destination is `generic/platform=iOS Simulator`, which produces a universal simulator bundle that works with any booted simulator. When `is_physical` is `true`, the destination is `generic/platform=iOS`, which produces a physical device build. `install.sh` builds for simulator only.
+
+### Physical-Device Signing Overrides
+
+The packaged project builds unsigned (`CODE_SIGNING_ALLOWED = NO`), which is fine for simulators but unusable on a device. For physical builds, `build_args` appends signing overrides on top of the command above:
+
+```
+DEVELOPMENT_TEAM=<development_team>
+CODE_SIGN_STYLE=Automatic
+CODE_SIGN_IDENTITY=Apple Development
+CODE_SIGNING_ALLOWED=YES
+CODE_SIGNING_REQUIRED=YES
+-allowProvisioningUpdates
+QORVEX_AGENT_BUNDLE_ID=<agent_bundle_id>   # only when configured
+```
+
+- `development_team` is **required** for physical builds. Without it, `build_args` returns `AgentLifecycleError::SigningNotConfigured` before xcodebuild is invoked, rather than producing a runner signed for whoever the packaged project happens to resolve to.
+- `agent_bundle_id` overrides the project's `QORVEX_AGENT_BUNDLE_ID` variable, **not** `PRODUCT_BUNDLE_IDENTIFIER` directly: a command-line build setting applies to every target, which would give the app and the UI-test bundle the same identifier. The project derives both ids from the variable, so they stay distinct (`<id>` and `<id>.uitests`). Needed when `com.qorvex.agent` is already registered to another team, which blocks automatic signing.
+
+Physical-device runs never reuse pre-built products — the runner is rebuilt on every start so its signature always matches the currently configured team. This makes the first (and every) physical-device start slower than a simulator start, and the build may prompt for keychain or Apple ID access.
 
 ### Spawn
 
@@ -152,13 +173,15 @@ Without bidirectional keepalive, the OS can silently drop idle connections and o
 
 |  | `ensure_running` | `ensure_agent_ready` |
 |---|---|---|
-| Builds agent | Only if no platform-matching `Build/Products/*.xctestrun` exists (pre-built by `install.sh` skips build; checks `iphoneos` vs `iphonesimulator` in filename) | No -- checks TCP reachability first; delegates to `ensure_running` if unreachable |
+| Builds agent | Simulators: only if no `iphonesimulator` `Build/Products/*.xctestrun` exists (pre-built by `install.sh` skips the build). Physical devices: **always** — pre-built products are never reused, so the runner carries the configured team's signature | No -- checks TCP reachability first; delegates to `ensure_running` if unreachable |
 | Use case | Fresh start or known stale agent | Idempotent startup, skip build/spawn if already running |
 | Retry behavior | Up to `max_retries + 1` attempts (spawn + health check); both `StartupTimeout` and `SpawnFailed` trigger a retry | Attempts health check first; delegates to `ensure_running` only if unreachable |
 
-`ensure_running` calls `is_agent_built()` to detect whether a platform-matching `.xctestrun` file exists in `.build/Build/Products/`. The check looks for `iphonesimulator` in the filename when targeting a simulator and `iphoneos` when targeting a physical device — so a simulator pre-build does **not** satisfy a physical device session (and vice versa). If pre-built products are present (normal case after `install.sh`), the build step is skipped and startup reduces to spawn + health check.
+For simulators, `ensure_running` calls `is_agent_built()` to detect whether a platform-matching `.xctestrun` file exists in `.build/Build/Products/` (it looks for `iphonesimulator` in the filename). If pre-built products are present (normal case after `install.sh`), the build step is skipped and startup reduces to spawn + health check.
 
-> **Pitfall:** Before this check was platform-aware, `install.sh` only pre-built for simulator. On a fresh install, selecting a physical device would silently use the simulator `.xctestrun`, causing `xcodebuild test-without-building` to fail and `wait_for_ready` to time out. `install.sh` now builds for both platforms, and stderr is captured so that early failures surface a diagnostic `SpawnFailed` error instead of a generic timeout.
+Physical devices skip that shortcut entirely and always call `build_agent()`. Pre-built `iphoneos` products carry whatever signing identity the packaging build resolved — typically none, since it never saw the user's team — so reusing them deploys a runner that is not signed for this device's developer. `build-for-testing` is incremental, so when the products already match the configured team this is close to a no-op. For the same reason `install.sh` no longer pre-builds the `iphoneos` runner at all.
+
+> **Pitfall:** Before this was signing-aware, a physical-device session could reuse a pre-built `.xctestrun` and deploy a runner signed for the wrong team (or unsigned). Stderr is captured on spawn so that early failures surface a diagnostic `SpawnFailed` error instead of a generic timeout, and a missing `development_team` now fails with `SigningNotConfigured` before xcodebuild runs.
 
 ## Crash Recovery (via `AgentDriver::with_lifecycle`)
 

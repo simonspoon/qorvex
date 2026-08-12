@@ -1250,6 +1250,12 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     };
     if run_signing_build {
         let config = QorvexConfig::load();
+        // Only pre-build here when a team is configured. `run_signing_build` is
+        // a heuristic — it is also true for Android serials and for any UDID
+        // when `simctl` fails — so a missing team must not abort the start.
+        // The authoritative refusal lives in `AgentLifecycle::build_args`, which
+        // the server reaches only once it knows the target really is a physical
+        // iOS device.
         if let (Some(ref agent_dir), Some(ref team)) = (
             &config.effective_agent_source_dir(),
             &config.development_team,
@@ -1263,10 +1269,14 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
                     eprintln!("Building agent for physical device...");
                 }
                 let team_arg = format!("DEVELOPMENT_TEAM={}", team);
+                // Override the project's bundle-ID variable rather than
+                // PRODUCT_BUNDLE_IDENTIFIER: a command-line build setting applies
+                // to every target, which would collide the app and its UI-test
+                // runner on one identifier.
                 let bid_arg = config
                     .agent_bundle_id
                     .as_ref()
-                    .map(|bid| format!("PRODUCT_BUNDLE_IDENTIFIER={}", bid));
+                    .map(|bid| format!("QORVEX_AGENT_BUNDLE_ID={}", bid));
                 let mut args = vec![
                     "build-for-testing",
                     "-project",

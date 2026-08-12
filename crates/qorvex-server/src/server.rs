@@ -859,6 +859,7 @@ impl ServerState {
                     lc_config.tunnel_address = self.tunnel_address.clone();
                     lc_config.direct_host = self.direct_host.clone();
                     lc_config.development_team = config.development_team.clone();
+                    lc_config.agent_bundle_id = config.agent_bundle_id.clone();
                 }
                 let lifecycle = Arc::new(AgentLifecycle::new(udid.clone(), lc_config));
 

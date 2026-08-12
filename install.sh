@@ -57,6 +57,14 @@ fi
 echo "Agent source recorded: $AGENT_SOURCE_DIR"
 echo "Android agent source recorded: $ANDROID_AGENT_SOURCE_DIR"
 
+# Regenerate the Xcode project from project.yml. The .xcodeproj is generated and
+# gitignored, so an existing one may predate project.yml — notably the
+# QORVEX_AGENT_BUNDLE_ID variable that `agent_bundle_id` overrides. xcodebuild
+# accepts and silently ignores an assignment to a variable the project does not
+# define, so a stale project would make that override a no-op.
+echo "Generating QorvexAgent.xcodeproj..."
+make -C "$AGENT_SOURCE_DIR" generate
+
 # Build agent for simulator (generic destination, no specific UDID needed)
 echo "Building qorvex-agent for simulator..."
 xcodebuild build-for-testing \
@@ -67,15 +75,11 @@ xcodebuild build-for-testing \
     -quiet
 echo "qorvex-agent built (simulator)."
 
-# Build agent for physical devices
-echo "Building qorvex-agent for physical devices..."
-xcodebuild build-for-testing \
-    -project "$AGENT_SOURCE_DIR/QorvexAgent.xcodeproj" \
-    -scheme QorvexAgentUITests \
-    -destination "generic/platform=iOS" \
-    -derivedDataPath "$AGENT_SOURCE_DIR/.build" \
-    -quiet
-echo "qorvex-agent built (physical)."
+# The physical-device (iphoneos) runner is deliberately NOT pre-built here: it
+# must be code-signed for the developer's own Apple Team, which is not known at
+# install time. A pre-built unsigned runner would also be picked up as "already
+# built", suppressing the signing-aware rebuild at session start. qorvex builds
+# it on first use from `development_team` in ~/.qorvex/config.json.
 
 # Pre-build the Android agent APKs (best-effort: needs a JDK + Android SDK).
 # Unlike Xcode, the Android SDK is not a guaranteed dependency, so a missing

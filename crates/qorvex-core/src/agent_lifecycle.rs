@@ -49,6 +49,10 @@ const SCHEME: &str = "QorvexAgentUITests";
 const TEST_CLASS: &str = "QorvexAgentUITests/QorvexAgentTests/testRunAgent";
 const DERIVED_DATA_DIR: &str = ".build";
 const AGENT_BUNDLE_ID: &str = "com.qorvex.agent";
+/// Build setting the agent project derives both target bundle IDs from
+/// (see `qorvex-agent/project.yml`). Overriding this one variable renames the
+/// app and its UI-test runner together, keeping them distinct.
+const AGENT_BUNDLE_ID_VAR: &str = "QORVEX_AGENT_BUNDLE_ID";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -77,9 +81,12 @@ pub struct AgentLifecycleConfig {
     /// instead of going through usbmuxd or the CoreDevice tunnel.
     pub direct_host: Option<String>,
     /// Apple Development Team ID for code-signing on physical devices.
-    /// When set, xcodebuild overrides `DEVELOPMENT_TEAM`, `CODE_SIGN_IDENTITY`,
-    /// and `CODE_SIGN_STYLE` so the agent can be deployed without modifying
-    /// `project.yml` (important for open-source repos).
+    /// Required when `is_physical` is set: xcodebuild overrides
+    /// `DEVELOPMENT_TEAM`, `CODE_SIGN_IDENTITY`, and `CODE_SIGN_STYLE` so the
+    /// agent can be deployed without modifying `project.yml` (important for
+    /// open-source repos). Absent, the build would produce a runner signed with
+    /// whatever identity the packaged project resolves to — not the user's — so
+    /// [`AgentLifecycle::build_agent`] fails fast instead.
     pub development_team: Option<String>,
     /// Override bundle ID for the agent when the default is claimed by another team.
     pub agent_bundle_id: Option<String>,
@@ -116,6 +123,17 @@ pub enum AgentLifecycleError {
     /// `xcodebuild build-for-testing` failed.
     #[error("Failed to build agent: {0}")]
     BuildFailed(String),
+
+    /// A physical-device build was requested but no Apple Development Team is
+    /// configured, so the agent cannot be signed for the user's team.
+    #[error(
+        "no Apple Development Team configured — the agent cannot be code-signed for this device. \
+         Set `development_team` in ~/.qorvex/config.json to your 10-character Team ID (Xcode ▸ \
+         Settings ▸ Accounts, or https://developer.apple.com/account under Membership details). \
+         If `com.qorvex.agent` is already registered to another team, also set `agent_bundle_id` \
+         to an identifier your team owns (e.g. \"com.example.qorvex.agent\")."
+    )]
+    SigningNotConfigured,
 
     /// `xcodebuild test-without-building` failed to spawn.
     #[error("Failed to launch agent: {0}")]
@@ -202,29 +220,17 @@ impl AgentLifecycle {
     // Synchronous xcodebuild operations
     // -----------------------------------------------------------------------
 
-    /// Build the XCTest bundle via `xcodebuild build-for-testing`.
+    /// Build the argv for `xcodebuild build-for-testing`.
     ///
-    /// Verifies the project directory and `.xcodeproj` exist, then runs the
-    /// build. Stdout is suppressed and stderr is captured for error reporting.
+    /// Split out from [`build_agent`](Self::build_agent) so the signing
+    /// overrides — the part that decides which team the physical-device runner
+    /// is signed for — are testable without invoking xcodebuild.
     ///
     /// # Errors
     ///
-    /// - [`AgentLifecycleError::ProjectNotFound`] if the project dir or xcodeproj does not exist
-    /// - [`AgentLifecycleError::BuildFailed`] if xcodebuild returns a non-zero exit code
-    /// - [`AgentLifecycleError::Io`] if the command fails to execute
-    #[instrument(skip(self))]
-    pub fn build_agent(&self) -> Result<(), AgentLifecycleError> {
-        if !self.config.project_dir.exists() {
-            return Err(AgentLifecycleError::ProjectNotFound(
-                self.config.project_dir.clone(),
-            ));
-        }
-
-        let xcodeproj = self.config.project_dir.join(XCODEPROJ);
-        if !xcodeproj.exists() {
-            return Err(AgentLifecycleError::ProjectNotFound(xcodeproj));
-        }
-
+    /// - [`AgentLifecycleError::SigningNotConfigured`] when building for a
+    ///   physical device with no `development_team`
+    fn build_args(&self, xcodeproj: &std::path::Path) -> Result<Vec<String>, AgentLifecycleError> {
         let destination = if self.config.is_physical {
             "generic/platform=iOS"
         } else {
@@ -247,20 +253,60 @@ impl AgentLifecycle {
                 .to_string(),
         ];
 
-        // Override code-signing for physical devices when a team is configured.
+        // Physical devices must be signed for the user's own team. The packaged
+        // project builds unsigned (`CODE_SIGNING_ALLOWED = NO`), so without an
+        // explicit team the runner is not signed for the caller at all —
+        // refuse rather than deploy someone else's identity.
         if self.config.is_physical {
-            if let Some(ref team) = self.config.development_team {
-                args.push(format!("DEVELOPMENT_TEAM={}", team));
-                args.push("CODE_SIGN_STYLE=Automatic".to_string());
-                args.push("CODE_SIGN_IDENTITY=Apple Development".to_string());
-                args.push("CODE_SIGNING_ALLOWED=YES".to_string());
-                args.push("CODE_SIGNING_REQUIRED=YES".to_string());
-                args.push("-allowProvisioningUpdates".to_string());
-                if let Some(ref bid) = self.config.agent_bundle_id {
-                    args.push(format!("PRODUCT_BUNDLE_IDENTIFIER={}", bid));
-                }
+            let team = self
+                .config
+                .development_team
+                .as_ref()
+                .ok_or(AgentLifecycleError::SigningNotConfigured)?;
+            args.push(format!("DEVELOPMENT_TEAM={}", team));
+            args.push("CODE_SIGN_STYLE=Automatic".to_string());
+            args.push("CODE_SIGN_IDENTITY=Apple Development".to_string());
+            args.push("CODE_SIGNING_ALLOWED=YES".to_string());
+            args.push("CODE_SIGNING_REQUIRED=YES".to_string());
+            args.push("-allowProvisioningUpdates".to_string());
+            if let Some(ref bid) = self.config.agent_bundle_id {
+                // Override the project's `QORVEX_AGENT_BUNDLE_ID` variable, not
+                // `PRODUCT_BUNDLE_IDENTIFIER` directly: a command-line build
+                // setting applies to every target, which would give the app and
+                // the UI-test bundle the same identifier. The project derives
+                // both ids from this variable so they stay distinct.
+                args.push(format!("{}={}", AGENT_BUNDLE_ID_VAR, bid));
             }
         }
+
+        Ok(args)
+    }
+
+    /// Build the XCTest bundle via `xcodebuild build-for-testing`.
+    ///
+    /// Verifies the project directory and `.xcodeproj` exist, then runs the
+    /// build. Stdout is suppressed and stderr is captured for error reporting.
+    ///
+    /// # Errors
+    ///
+    /// - [`AgentLifecycleError::ProjectNotFound`] if the project dir or xcodeproj does not exist
+    /// - [`AgentLifecycleError::SigningNotConfigured`] if a physical-device build has no team
+    /// - [`AgentLifecycleError::BuildFailed`] if xcodebuild returns a non-zero exit code
+    /// - [`AgentLifecycleError::Io`] if the command fails to execute
+    #[instrument(skip(self))]
+    pub fn build_agent(&self) -> Result<(), AgentLifecycleError> {
+        if !self.config.project_dir.exists() {
+            return Err(AgentLifecycleError::ProjectNotFound(
+                self.config.project_dir.clone(),
+            ));
+        }
+
+        let xcodeproj = self.config.project_dir.join(XCODEPROJ);
+        if !xcodeproj.exists() {
+            return Err(AgentLifecycleError::ProjectNotFound(xcodeproj));
+        }
+
+        let args = self.build_args(&xcodeproj)?;
 
         let output = Command::new("xcodebuild")
             .args(&args)
@@ -469,7 +515,8 @@ impl AgentLifecycle {
     /// Looks for a `.xctestrun` file in the derived-data `Build/Products`
     /// directory. Returns `true` when pre-built products exist (e.g. from
     /// `install.sh`), allowing [`ensure_running`](Self::ensure_running) to
-    /// skip the build step.
+    /// skip the build step. Only consulted for simulators: physical-device
+    /// products must be rebuilt so they carry the caller's signing identity.
     fn is_agent_built(&self) -> bool {
         let products_dir = self
             .config
@@ -502,8 +549,9 @@ impl AgentLifecycle {
 
     /// Orchestrate the full agent startup: build (if needed), spawn, and wait for ready.
     ///
-    /// Skips the build step when pre-built products are detected (see
-    /// [`is_agent_built`](Self::is_agent_built)). If [`wait_for_ready`](Self::wait_for_ready)
+    /// On simulators the build step is skipped when pre-built products are
+    /// detected (see [`is_agent_built`](Self::is_agent_built)). Physical devices
+    /// always rebuild — see below. If [`wait_for_ready`](Self::wait_for_ready)
     /// fails, the agent is terminated and respawned up to
     /// [`AgentLifecycleConfig::max_retries`] times.
     ///
@@ -514,10 +562,16 @@ impl AgentLifecycle {
     /// - [`AgentLifecycleError::StartupTimeout`] if all retries are exhausted
     #[instrument(skip(self))]
     pub async fn ensure_running(&self) -> Result<(), AgentLifecycleError> {
-        if self.is_agent_built() {
+        // Pre-built `iphoneos` products carry whatever signing identity the
+        // build that produced them resolved — typically none, since they come
+        // from a packaging step that never saw the user's team. Reusing them
+        // deploys a runner that is not signed for this device's developer, so
+        // physical devices always run the signing-aware build. `build-for-testing`
+        // is incremental: when the products already match, this is a no-op.
+        if !self.config.is_physical && self.is_agent_built() {
             info!("using pre-built agent");
         } else {
-            info!("agent not pre-built, building now");
+            info!("building agent");
             self.build_agent()?;
         }
         self.spawn_agent()?;
@@ -688,6 +742,68 @@ mod tests {
         assert_eq!(config.agent_port, 12345);
         assert_eq!(config.startup_timeout, Duration::from_secs(10));
         assert_eq!(config.max_retries, 5);
+    }
+
+    // -- Build argument tests -----------------------------------------------
+
+    /// Build a lifecycle for a physical device with the given signing config.
+    fn physical(team: Option<&str>, bundle_id: Option<&str>) -> AgentLifecycle {
+        let mut config = AgentLifecycleConfig::new(PathBuf::from("/tmp/agent"));
+        config.is_physical = true;
+        config.development_team = team.map(str::to_string);
+        config.agent_bundle_id = bundle_id.map(str::to_string);
+        AgentLifecycle::new("DEVICE-UDID".to_string(), config)
+    }
+
+    fn args_of(lifecycle: &AgentLifecycle) -> Vec<String> {
+        lifecycle
+            .build_args(&PathBuf::from("/tmp/agent/QorvexAgent.xcodeproj"))
+            .expect("build args")
+    }
+
+    #[test]
+    fn physical_build_signs_for_the_configured_team() {
+        let args = args_of(&physical(Some("ABCDE12345"), None));
+
+        assert!(args.contains(&"DEVELOPMENT_TEAM=ABCDE12345".to_string()));
+        assert!(args.contains(&"CODE_SIGNING_REQUIRED=YES".to_string()));
+        assert!(args.contains(&"-allowProvisioningUpdates".to_string()));
+        assert!(args.contains(&"generic/platform=iOS".to_string()));
+    }
+
+    #[test]
+    fn physical_build_without_a_team_is_refused() {
+        // Regression: the build used to silently omit the signing settings,
+        // producing a runner signed for whatever identity the packaged project
+        // resolved to rather than the user's development team.
+        let err = physical(None, None)
+            .build_args(&PathBuf::from("/tmp/agent/QorvexAgent.xcodeproj"))
+            .expect_err("a physical build with no team must fail");
+        assert!(matches!(err, AgentLifecycleError::SigningNotConfigured));
+        assert!(err.to_string().contains("development_team"));
+    }
+
+    #[test]
+    fn bundle_id_override_renames_both_targets_via_one_variable() {
+        // Overriding PRODUCT_BUNDLE_IDENTIFIER on the command line would apply
+        // to every target and collide the app with its UI-test runner; the
+        // project derives both ids from QORVEX_AGENT_BUNDLE_ID instead.
+        let args = args_of(&physical(Some("ABCDE12345"), Some("com.example.agent")));
+
+        assert!(args.contains(&"QORVEX_AGENT_BUNDLE_ID=com.example.agent".to_string()));
+        assert!(!args
+            .iter()
+            .any(|a| a.starts_with("PRODUCT_BUNDLE_IDENTIFIER=")));
+    }
+
+    #[test]
+    fn simulator_build_is_unsigned_and_needs_no_team() {
+        let config = AgentLifecycleConfig::new(PathBuf::from("/tmp/agent"));
+        let lifecycle = AgentLifecycle::new("SIM-UDID".to_string(), config);
+        let args = args_of(&lifecycle);
+
+        assert!(args.contains(&"generic/platform=iOS Simulator".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("DEVELOPMENT_TEAM=")));
     }
 
     // -- Error display tests ------------------------------------------------
