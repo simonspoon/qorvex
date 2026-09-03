@@ -1076,6 +1076,14 @@ impl ServerState {
 
         let (response, action_result) = match launch_result {
             Ok((was_running, pid)) => {
+                // The agent's app handle is bound to the process that was
+                // running when the target was last set. A relaunch leaves it
+                // pointing at a dead process: reads still work (they resolve
+                // from a fresh snapshot) but element queries find nothing, so
+                // every tap fails until the user restarts the session. Pushing
+                // the bundle id again rebuilds the handle against the new
+                // process.
+                self.refresh_agent_target(bundle_id).await;
                 let (message, data) = start_target_report(bundle_id, was_running, pid, force);
                 (
                     IpcResponse::ActionResult {
@@ -1429,6 +1437,24 @@ impl ServerState {
         if let Some(bundle_id) = self.target_bundle_id.clone() {
             if let Err(e) = driver.set_target(&bundle_id).await {
                 warn!(bundle_id = %bundle_id, error = %e, "failed to apply recorded target to agent");
+            }
+        }
+    }
+
+    /// Re-pushes the recorded target to the agent so its app handle points at
+    /// the currently running process.
+    ///
+    /// Unlike [`Self::record_target`] this changes no server state and never
+    /// fails the caller: the launch itself succeeded, and an unreachable agent
+    /// is the connection's problem, not the launch's.
+    async fn refresh_agent_target(&self, bundle_id: &str) {
+        let driver = match self.shared_driver.lock().await.clone() {
+            Some(driver) => Some(driver),
+            None => self.executor.as_ref().map(|e| e.driver().clone()),
+        };
+        if let Some(driver) = driver {
+            if let Err(e) = driver.set_target(bundle_id).await {
+                warn!(bundle_id = %bundle_id, error = %e, "failed to refresh agent target after launch");
             }
         }
     }

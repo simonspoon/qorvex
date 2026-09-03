@@ -56,7 +56,7 @@ use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
 use qorvex_core::adb_device::Adb;
 use qorvex_core::element::{ElementFrame, UIElement};
-use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcRequest, IpcResponse, Platform};
+use qorvex_core::ipc::{qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
 use qorvex_core::simctl::Simctl;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -443,6 +443,32 @@ fn discover_sessions() -> Vec<String> {
         .collect()
 }
 
+/// Connects to a session's IPC server, reporting the resolved socket path when
+/// there is nothing to connect to.
+///
+/// The socket lives under `$QORVEX_HOME` (else `~/.qorvex`), so a script that
+/// exports its own `HOME` looks in an empty directory and sees only "no such
+/// file". Naming the path it tried turns that into a one-line diagnosis.
+async fn connect_to_session(session: &str) -> Result<IpcClient, CliError> {
+    let path = socket_path(session);
+    IpcClient::connect(session).await.map_err(|e| {
+        if !path.exists() {
+            CliError::Connection(format!(
+                "no qorvex session '{}' (socket not found at {}); run `qorvex start`",
+                session,
+                path.display()
+            ))
+        } else {
+            CliError::Connection(format!(
+                "Failed to connect to session '{}' at {}: {}",
+                session,
+                path.display(),
+                e
+            ))
+        }
+    })
+}
+
 async fn run(cli: Cli) -> Result<(), CliError> {
     // Handle commands that don't need an IPC connection
     match cli.command {
@@ -538,12 +564,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Platform::Android => {
                     // Android boot routes through the server so the selected
                     // serial / lifecycle is tracked in session state.
-                    let mut client = IpcClient::connect(&cli.session).await.map_err(|e| {
-                        CliError::Connection(format!(
-                            "Failed to connect to session '{}': {}",
-                            cli.session, e
-                        ))
-                    })?;
+                    let mut client = connect_to_session(&cli.session).await?;
                     return send_command(
                         &mut client,
                         IpcRequest::BootDevice {
@@ -587,12 +608,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     }
 
     // Connect to the IPC server
-    let mut client = IpcClient::connect(&cli.session).await.map_err(|e| {
-        CliError::Connection(format!(
-            "Failed to connect to session '{}': {}",
-            cli.session, e
-        ))
-    })?;
+    let mut client = connect_to_session(&cli.session).await?;
 
     match cli.command {
         Command::Tap {

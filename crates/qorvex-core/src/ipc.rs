@@ -378,17 +378,25 @@ pub trait RequestHandler: Send + Sync + 'static {
     ) -> Result<(), IpcError>;
 }
 
-/// Returns the qorvex directory path (`~/.qorvex/`).
+/// Returns the qorvex directory path (`$QORVEX_HOME`, else `~/.qorvex/`).
+///
+/// Sockets, config and logs all hang off this directory, so a script that
+/// exports a scratch `HOME` would otherwise point every qorvex call at an
+/// empty state directory and lose the running session. `QORVEX_HOME` pins the
+/// directory independently of `HOME` for exactly that case.
 ///
 /// Creates the directory if it doesn't exist.
 ///
 /// # Panics
 ///
-/// Panics if the home directory cannot be determined.
+/// Panics if `QORVEX_HOME` is unset and the home directory cannot be determined.
 pub fn qorvex_dir() -> PathBuf {
-    let dir = dirs::home_dir()
-        .expect("Could not determine home directory")
-        .join(".qorvex");
+    let dir = match std::env::var_os("QORVEX_HOME") {
+        Some(path) if !path.is_empty() => PathBuf::from(path),
+        _ => dirs::home_dir()
+            .expect("Could not determine home directory; set QORVEX_HOME to the qorvex state directory")
+            .join(".qorvex"),
+    };
     std::fs::create_dir_all(&dir).ok();
     dir
 }

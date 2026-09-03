@@ -246,6 +246,7 @@ Environment:
 - `QORVEX_SESSION` — Default session name
 - `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not` (default: 5000); overridden by `-o`
 - `QORVEX_LOG_DIR` — Override log file directory (default: `~/.qorvex/logs/`)
+- `QORVEX_HOME` — Override the qorvex state directory (default: `~/.qorvex/`). Sockets, config, and logs all live here, so scripts that export their own `HOME` should set this to keep talking to the running session
 
 Command-specific options:
 - `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip retry, attempt once; `-o, --timeout <ms>` — Retry timeout (default: 5000); `--tag <text>` — Annotate the log entry
@@ -339,7 +340,7 @@ done
 
 ### Directory Structure
 
-Qorvex stores runtime files in `~/.qorvex/`:
+Qorvex stores runtime files in `~/.qorvex/`, or in `$QORVEX_HOME` when that is set:
 
 ```
 ~/.qorvex/

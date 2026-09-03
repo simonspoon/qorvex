@@ -33,7 +33,7 @@ use tracing_subscriber::EnvFilter;
 use qorvex_core::action::ActionLog;
 use qorvex_core::adb_device::Adb;
 use qorvex_core::ipc::Platform;
-use qorvex_core::ipc::{IpcClient, IpcResponse};
+use qorvex_core::ipc::{qorvex_dir, IpcClient, IpcResponse};
 use qorvex_core::session::SessionEvent;
 use qorvex_core::simctl::Simctl;
 
@@ -289,9 +289,7 @@ fn spawn_streamer_task(
     tx: mpsc::Sender<AppEvent>,
     cancel: CancellationToken,
 ) {
-    let socket_dir = dirs::home_dir().expect("home dir").join(".qorvex");
-    std::fs::create_dir_all(&socket_dir).ok();
-    let socket_path = socket_dir.join(format!("streamer_{}.sock", session_name));
+    let socket_path = qorvex_dir().join(format!("streamer_{}.sock", session_name));
 
     // Clean up stale socket
     let _ = std::fs::remove_file(&socket_path);
