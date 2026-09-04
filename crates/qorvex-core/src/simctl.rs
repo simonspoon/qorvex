@@ -40,6 +40,15 @@ pub enum SimctlError {
     #[error("No booted simulator found")]
     NoBootedSimulator,
 
+    /// More than one simulator is in the "Booted" state, so the target is ambiguous.
+    ///
+    /// Carries the `(name, udid)` pair of every booted simulator, in list order.
+    #[error(
+        "Multiple booted simulators found; pass one with --device <udid>: {}",
+        format_booted_devices(.0)
+    )]
+    MultipleBootedSimulators(Vec<(String, String)>),
+
     /// Failed to parse JSON output from simctl.
     #[error("JSON parse error: {0}")]
     JsonParse(#[from] serde_json::Error),
@@ -47,6 +56,15 @@ pub enum SimctlError {
     /// An I/O error occurred while executing the command.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Formats booted `(name, udid)` pairs as a comma-separated `name (udid)` list.
+fn format_booted_devices(devices: &[(String, String)]) -> String {
+    devices
+        .iter()
+        .map(|(name, udid)| format!("{} ({})", name, udid))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Represents an iOS Simulator device.
@@ -124,10 +142,10 @@ impl Simctl {
         Ok(devices)
     }
 
-    /// Returns the UDID of the first booted simulator.
+    /// Returns the UDID of the only booted simulator.
     ///
-    /// Searches through all available devices and returns the UDID of the
-    /// first one found with state "Booted".
+    /// Refuses to guess when more than one simulator is booted; the caller must
+    /// then name the device explicitly.
     ///
     /// # Returns
     ///
@@ -136,14 +154,45 @@ impl Simctl {
     /// # Errors
     ///
     /// - [`SimctlError::NoBootedSimulator`] if no simulator is currently booted
+    /// - [`SimctlError::MultipleBootedSimulators`] if more than one is booted
     /// - Any errors from [`Self::list_devices`]
     pub fn get_booted_udid() -> Result<String, SimctlError> {
-        let devices = Self::list_devices()?;
-        devices
-            .into_iter()
-            .find(|d| d.state == "Booted")
-            .map(|d| d.udid)
-            .ok_or(SimctlError::NoBootedSimulator)
+        Self::booted_udid_from(Self::list_devices()?)
+    }
+
+    /// Resolves the booted UDID from an already-fetched device list.
+    ///
+    /// Split out from [`Self::get_booted_udid`] so the ambiguity rule can be
+    /// tested without a running simulator.
+    ///
+    /// # Arguments
+    ///
+    /// * `devices` - All known simulators, in `simctl` list order
+    ///
+    /// # Returns
+    ///
+    /// The UDID string of the single booted simulator.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::NoBootedSimulator`] if no simulator is currently booted
+    /// - [`SimctlError::MultipleBootedSimulators`] if more than one is booted
+    pub fn booted_udid_from(devices: Vec<SimulatorDevice>) -> Result<String, SimctlError> {
+        let mut booted = devices.into_iter().filter(|d| d.state == "Booted");
+
+        let first = booted.next().ok_or(SimctlError::NoBootedSimulator)?;
+        let rest: Vec<SimulatorDevice> = booted.collect();
+
+        if rest.is_empty() {
+            return Ok(first.udid);
+        }
+
+        Err(SimctlError::MultipleBootedSimulators(
+            std::iter::once(first)
+                .chain(rest)
+                .map(|d| (d.name, d.udid))
+                .collect(),
+        ))
     }
 
     /// Takes a screenshot of the simulator screen.
@@ -585,6 +634,71 @@ mod tests {
         let booted = Simctl::find_booted_device(&devices);
 
         assert!(booted.is_none());
+    }
+
+    const TWO_BOOTED_DEVICES: &str = r#"{
+        "devices": {
+            "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+                {
+                    "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+                    "name": "iPhone 15 Pro",
+                    "state": "Booted"
+                },
+                {
+                    "udid": "35CB0000-1111-2222-3333-444455556666",
+                    "name": "iPhone SE",
+                    "state": "Booted"
+                }
+            ]
+        }
+    }"#;
+
+    #[test]
+    fn test_booted_udid_from_none_booted() {
+        let devices = Simctl::parse_device_list(NO_BOOTED_DEVICES.as_bytes()).unwrap();
+        let result = Simctl::booted_udid_from(devices);
+
+        match result {
+            Err(SimctlError::NoBootedSimulator) => {} // Expected
+            other => panic!("Expected NoBootedSimulator, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_booted_udid_from_single_booted() {
+        let devices = Simctl::parse_device_list(SAMPLE_DEVICE_LIST.as_bytes()).unwrap();
+        let udid = Simctl::booted_udid_from(devices).expect("Single booted device should resolve");
+
+        assert_eq!(udid, "A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
+    }
+
+    #[test]
+    fn test_booted_udid_from_multiple_booted() {
+        let devices = Simctl::parse_device_list(TWO_BOOTED_DEVICES.as_bytes()).unwrap();
+        let result = Simctl::booted_udid_from(devices);
+
+        match result {
+            Err(SimctlError::MultipleBootedSimulators(booted)) => {
+                assert_eq!(booted.len(), 2);
+                assert_eq!(booted[0].0, "iPhone 15 Pro");
+                assert_eq!(booted[1].0, "iPhone SE");
+            }
+            other => panic!("Expected MultipleBootedSimulators, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_booted_udid_from_multiple_booted_message() {
+        let devices = Simctl::parse_device_list(TWO_BOOTED_DEVICES.as_bytes()).unwrap();
+        let message = Simctl::booted_udid_from(devices)
+            .expect_err("Two booted devices should be an error")
+            .to_string();
+
+        assert!(message.contains("--device"));
+        assert!(message.contains("iPhone 15 Pro"));
+        assert!(message.contains("A1B2C3D4-E5F6-7890-ABCD-EF1234567890"));
+        assert!(message.contains("iPhone SE"));
+        assert!(message.contains("35CB0000-1111-2222-3333-444455556666"));
     }
 
     #[test]

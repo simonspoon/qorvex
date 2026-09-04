@@ -20,7 +20,7 @@ use qorvex_core::driver::{flatten_elements, AutomationDriver, DriverError};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{IpcRequest, IpcResponse, Platform};
 use qorvex_core::session::Session;
-use qorvex_core::simctl::{Simctl, SimulatorDevice};
+use qorvex_core::simctl::{Simctl, SimctlError, SimulatorDevice};
 
 /// Backend state for the automation server.
 ///
@@ -204,6 +204,17 @@ impl ServerState {
     // ── Session ─────────────────────────────────────────────────────────
 
     async fn handle_start_session(&mut self) -> IpcResponse {
+        // Refuse to start against an ambiguous boot state: with no device chosen
+        // and several simulators booted, the caller must name one.
+        if self.simulator_udid.is_none() && self.android_serial.is_none() {
+            if let Err(err @ SimctlError::MultipleBootedSimulators(_)) = Simctl::get_booted_udid() {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: err.to_string(),
+                };
+            }
+        }
+
         let session = Session::new(self.simulator_udid.clone(), &self.session_name);
         self.session = Some(session.clone());
         self.shared_driver = Arc::new(tokio::sync::Mutex::new(None));
