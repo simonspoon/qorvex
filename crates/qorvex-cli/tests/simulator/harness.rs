@@ -1,7 +1,24 @@
 use assert_cmd::Command;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
+/// Simulator the suite creates and drives when `QORVEX_TEST_SIM` is unset.
+const TEST_SIM_NAME: &str = "qorvex-test";
+const TESTAPP_BUNDLE_ID: &str = "com.qorvex.testapp";
+
 static HARNESS: OnceLock<SimulatorHarness> = OnceLock::new();
+
+/// Teardown state for the `atexit` hook below. `HARNESS` is a static and
+/// statics are never dropped, so a `Drop` impl would not run at exit.
+static TEARDOWN: OnceLock<Teardown> = OnceLock::new();
+
+struct Teardown {
+    session: String,
+    udid: String,
+    /// Whether this suite booted the simulator. A simulator that was already
+    /// booted belongs to someone else and must be left running.
+    booted_here: bool,
+}
 
 pub struct SimulatorHarness {
     pub session: String,
@@ -9,20 +26,36 @@ pub struct SimulatorHarness {
 
 impl SimulatorHarness {
     fn init() -> Self {
-        preflight_check();
-
         let session = format!("sim-test-{}", std::process::id());
+        let udid = resolve_device();
+        let booted_here = boot_device(&udid);
 
-        // Start server + session + agent
+        // Register teardown as soon as we hold the simulator, so a panic in the
+        // rest of setup — an unbuilt testapp, say — still stops the server and
+        // releases the simulator instead of leaking it.
+        let _ = TEARDOWN.set(Teardown {
+            session: session.clone(),
+            udid: udid.clone(),
+            booted_here,
+        });
+        unsafe {
+            libc::atexit(teardown);
+        }
+
+        install_testapp(&udid);
+        launch_testapp(&udid);
+
+        // Start server + session + agent, pinned to our own device so the
+        // server never has to guess which simulator is meant.
         qorvex_cmd()
-            .args(["-s", &session, "start"])
-            .timeout(std::time::Duration::from_secs(30))
+            .args(["-s", &session, "start", "--device", &udid])
+            .timeout(std::time::Duration::from_secs(120))
             .assert()
             .success();
 
         // Set target to testapp
         qorvex_cmd()
-            .args(["-s", &session, "set-target", "com.qorvex.testapp"])
+            .args(["-s", &session, "set-target", TESTAPP_BUNDLE_ID])
             .timeout(std::time::Duration::from_secs(10))
             .assert()
             .success();
@@ -34,42 +67,157 @@ impl SimulatorHarness {
     }
 }
 
-impl Drop for SimulatorHarness {
-    fn drop(&mut self) {
-        let _ = qorvex_cmd()
-            .args(["-s", &self.session, "stop"])
-            .timeout(std::time::Duration::from_secs(10))
-            .output();
+/// Stop the session and release the simulator. Runs at process exit.
+extern "C" fn teardown() {
+    let Some(state) = TEARDOWN.get() else {
+        return;
+    };
+    let _ = qorvex_cmd()
+        .args(["-s", &state.session, "stop"])
+        .timeout(std::time::Duration::from_secs(10))
+        .output();
+    if state.booted_here {
+        simctl(&["shutdown", &state.udid]);
     }
 }
 
-fn preflight_check() {
-    // Verify a simulator is booted
-    let output = qorvex_cmd()
-        .arg("list-devices")
-        .timeout(std::time::Duration::from_secs(10))
+/// Run `xcrun simctl` with `args` and return the raw output.
+fn simctl(args: &[&str]) -> std::process::Output {
+    std::process::Command::new("xcrun")
+        .arg("simctl")
+        .args(args)
         .output()
-        .expect("Failed to run qorvex list-devices");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Booted"),
-        "No booted simulator found. Boot one with: xcrun simctl boot <UDID>"
+        .unwrap_or_else(|e| panic!("Failed to run xcrun simctl {}: {e}", args.join(" ")))
+}
+
+/// UDID of the simulator this suite drives: `QORVEX_TEST_SIM` (a name or a
+/// UDID) if set, otherwise `qorvex-test`, created on first use. Resolving to a
+/// UDID keeps every later call off `booted`, which is ambiguous once more than
+/// one simulator is up.
+fn resolve_device() -> String {
+    let spec = std::env::var("QORVEX_TEST_SIM").unwrap_or_else(|_| TEST_SIM_NAME.to_string());
+    if let Some(udid) = find_device(&spec) {
+        return udid;
+    }
+    assert_eq!(
+        spec, TEST_SIM_NAME,
+        "QORVEX_TEST_SIM={spec} matches no available simulator"
     );
+    create_test_sim();
+    find_device(&spec).unwrap_or_else(|| panic!("Created {TEST_SIM_NAME} but cannot find it"))
+}
 
-    // Terminate any running instance to get a clean state (dismiss keyboard, etc.)
-    let _ = std::process::Command::new("xcrun")
-        .args(["simctl", "terminate", "booted", "com.qorvex.testapp"])
-        .output();
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    // Verify testapp is installed by launching it fresh
-    let status = std::process::Command::new("xcrun")
-        .args(["simctl", "launch", "booted", "com.qorvex.testapp"])
-        .output()
-        .expect("Failed to run xcrun simctl launch");
+/// Find an available simulator by UDID or by exact name. A name matching
+/// several simulators is refused rather than guessed — the same reason the
+/// server no longer guesses between several booted ones.
+fn find_device(spec: &str) -> Option<String> {
+    let output = simctl(&["list", "devices", "available", "-j"]);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Failed to parse simctl list devices JSON");
+    let devices = json["devices"].as_object()?;
+    let matches: Vec<&str> = devices
+        .values()
+        .filter_map(|v| v.as_array())
+        .flatten()
+        .filter(|d| d["udid"] == spec || d["name"] == spec)
+        .filter_map(|d| d["udid"].as_str())
+        .collect();
     assert!(
-        status.status.success(),
-        "qorvex-testapp not installed. Install with: make -C qorvex-testapp run"
+        matches.len() <= 1,
+        "{} simulators are named {spec}: {}. Set QORVEX_TEST_SIM to one of these UDIDs",
+        matches.len(),
+        matches.join(", ")
+    );
+    matches.first().map(|udid| udid.to_string())
+}
+
+/// Create the `qorvex-test` simulator on the newest available iOS runtime.
+fn create_test_sim() {
+    let output = simctl(&["list", "runtimes", "-j"]);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Failed to parse simctl list runtimes JSON");
+    let runtime = json["runtimes"]
+        .as_array()
+        .expect("simctl list runtimes returned no runtimes array")
+        .iter()
+        .filter(|r| r["isAvailable"] == true && r["platform"] == "iOS")
+        .max_by_key(|r| {
+            r["version"]
+                .as_str()
+                .unwrap_or_default()
+                .split('.')
+                .map(|p| p.parse::<u32>().unwrap_or(0))
+                .collect::<Vec<_>>()
+        })
+        .expect("No available iOS runtime. Install one via Xcode > Settings > Components");
+    // Take the device type from the runtime's own list so `create` cannot fail
+    // on an unsupported pairing; the list is newest first.
+    let device_type = runtime["supportedDeviceTypes"]
+        .as_array()
+        .expect("Runtime lists no supported device types")
+        .iter()
+        .find(|d| d["productFamily"] == "iPhone")
+        .and_then(|d| d["identifier"].as_str())
+        .expect("Runtime supports no iPhone device type");
+    let runtime_id = runtime["identifier"]
+        .as_str()
+        .expect("Runtime has no identifier");
+
+    let output = simctl(&["create", TEST_SIM_NAME, device_type, runtime_id]);
+    assert!(
+        output.status.success(),
+        "Failed to create {TEST_SIM_NAME} simulator: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Boot `udid` and wait for it to finish booting. Returns whether this call did
+/// the booting — an already-booted simulator must not be shut down afterwards.
+fn boot_device(udid: &str) -> bool {
+    let output = simctl(&["boot", udid]);
+    let booted_here = output.status.success();
+    if !booted_here {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("current state: Booted"),
+            "Failed to boot {udid}: {stderr}"
+        );
+    }
+    let output = simctl(&["bootstatus", udid, "-b"]);
+    assert!(
+        output.status.success(),
+        "Simulator {udid} did not finish booting: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    booted_here
+}
+
+/// Install the testapp build product on `udid`.
+fn install_testapp(udid: &str) {
+    let app = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../qorvex-testapp/.build/Build/Products/Debug-iphonesimulator/QorvexTestApp.app");
+    assert!(
+        app.is_dir(),
+        "qorvex-testapp is not built. Build it with: make -C qorvex-testapp build"
+    );
+    let output = simctl(&["install", udid, &app.to_string_lossy()]);
+    assert!(
+        output.status.success(),
+        "Failed to install qorvex-testapp on {udid}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Relaunch the testapp so each run starts from a clean UI state (no keyboard
+/// up, no leftover navigation).
+fn launch_testapp(udid: &str) {
+    simctl(&["terminate", udid, TESTAPP_BUNDLE_ID]);
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let output = simctl(&["launch", udid, TESTAPP_BUNDLE_ID]);
+    assert!(
+        output.status.success(),
+        "Failed to launch qorvex-testapp on {udid}: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     std::thread::sleep(std::time::Duration::from_secs(1));
 }

@@ -172,9 +172,10 @@ cargo test -p qorvex-cli  --test cli_integration       # CLI binary behavior
 
 `crates/qorvex-cli/tests/simulator_suite.rs` exercises the full stack against an actual iOS Simulator running `qorvex-testapp`. All 31 tests are `#[ignore]` by default.
 
+The suite owns its simulator: it creates one named `qorvex-test` on the newest available iOS runtime, boots it by UDID, installs the testapp on it, and pins the session to that UDID with `qorvex start --device <udid>`. It never uses `booted`, so other simulators can stay up while it runs. On exit it stops its session and shuts the simulator down again — but only if it booted it.
+
 **Prerequisites:**
-1. Boot a simulator: `xcrun simctl boot <UDID>`
-2. Install testapp: `make -C qorvex-testapp run`
+1. Build the testapp: `make -C qorvex-testapp build`
 
 **Run:**
 ```bash
@@ -182,6 +183,9 @@ cargo test -p qorvex-cli --test simulator_suite -- --ignored --test-threads=1
 ```
 
 `--test-threads=1` is required — all tests share one simulator and one session via `OnceLock`.
+
+**Environment:**
+- `QORVEX_TEST_SIM` — name or UDID of the simulator to use instead of `qorvex-test`. It must already exist; the suite boots it if needed and leaves it running if it was already booted.
 
 The suite covers all five testapp tabs: Controls, Text Input, Navigation, Gestures, and Dynamic.
 
