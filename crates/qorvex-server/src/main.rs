@@ -11,7 +11,7 @@ use tracing::{debug, info, info_span, Instrument};
 mod server;
 use server::ServerState;
 
-use qorvex_core::ipc::{socket_path, IpcError, IpcRequest, IpcResponse};
+use qorvex_core::ipc::{agent_port_path, socket_path, IpcError, IpcRequest, IpcResponse};
 
 #[derive(Parser)]
 #[command(name = "qorvex-server")]
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    cleanup(state, &sock_path).await;
+    cleanup(state, &sock_path, &agent_port_path(&args.session)).await;
 
     Ok(())
 }
@@ -96,7 +96,11 @@ async fn run_accept_loop(
     }
 }
 
-async fn cleanup(state: Arc<Mutex<ServerState>>, sock_path: &std::path::Path) {
+async fn cleanup(
+    state: Arc<Mutex<ServerState>>,
+    sock_path: &std::path::Path,
+    port_path: &std::path::Path,
+) {
     info!("Cleaning up");
     {
         let _s = state.lock().await;
@@ -105,6 +109,9 @@ async fn cleanup(state: Arc<Mutex<ServerState>>, sock_path: &std::path::Path) {
     // drop state so ServerState destructors run
     drop(state);
     let _ = std::fs::remove_file(sock_path);
+    // Drop the agent-port sidecar with the socket so a stopped session does
+    // not pin a port that nothing is listening on.
+    let _ = std::fs::remove_file(port_path);
     info!("Server stopped");
 }
 

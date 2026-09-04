@@ -417,6 +417,18 @@ pub fn socket_path(session_name: &str) -> PathBuf {
     qorvex_dir().join(format!("qorvex_{}.sock", session_name))
 }
 
+/// Returns the path of a session's agent-port sidecar file.
+///
+/// The file sits next to the session socket as `qorvex_{session_name}.port`
+/// and holds the TCP port that session's iOS agent listens on, in decimal.
+/// Each session picks its own port so that two sessions can drive two
+/// simulators at once (the simulators share the host network stack), and the
+/// sidecar is what lets a restarted server re-attach to an agent that is
+/// already running on that port. `list-sessions` reads it to report the port.
+pub fn agent_port_path(session_name: &str) -> PathBuf {
+    qorvex_dir().join(format!("qorvex_{}.port", session_name))
+}
+
 /// Unix socket server for IPC communication.
 ///
 /// The server accepts connections from clients

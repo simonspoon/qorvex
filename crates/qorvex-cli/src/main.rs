@@ -56,7 +56,9 @@ use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
 use qorvex_core::adb_device::Adb;
 use qorvex_core::element::{ElementFrame, UIElement};
-use qorvex_core::ipc::{qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
+use qorvex_core::ipc::{
+    agent_port_path, qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform,
+};
 use qorvex_core::simctl::Simctl;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -427,7 +429,10 @@ impl std::fmt::Display for CliError {
     }
 }
 
-fn discover_sessions() -> Vec<String> {
+/// Finds running sessions, pairing each with the agent port recorded in its
+/// `.port` sidecar. The port is `None` for a session started before sessions
+/// got their own ports, or one whose sidecar is unreadable.
+fn discover_sessions() -> Vec<(String, Option<u16>)> {
     let pattern = qorvex_dir().join("qorvex_*.sock");
     glob::glob(pattern.to_str().unwrap_or_default())
         .into_iter()
@@ -439,6 +444,12 @@ fn discover_sessions() -> Vec<String> {
                     .and_then(|s| s.strip_prefix("qorvex_"))
                     .map(String::from)
             })
+        })
+        .map(|name| {
+            let port = std::fs::read_to_string(agent_port_path(&name))
+                .ok()
+                .and_then(|s| s.trim().parse().ok());
+            (name, port)
         })
         .collect()
 }
@@ -475,13 +486,20 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::ListSessions => {
             let sessions = discover_sessions();
             if cli.format == OutputFormat::Json {
+                let sessions: Vec<_> = sessions
+                    .iter()
+                    .map(|(name, port)| serde_json::json!({ "name": name, "agent_port": port }))
+                    .collect();
                 println!("{}", serde_json::json!({ "sessions": sessions }));
             } else {
                 if sessions.is_empty() {
                     eprintln!("No running sessions found");
                 } else {
-                    for session in sessions {
-                        println!("{}", session);
+                    for (session, port) in sessions {
+                        match port {
+                            Some(port) => println!("{} (agent port {})", session, port),
+                            None => println!("{}", session),
+                        }
                     }
                 }
             }
@@ -1492,7 +1510,7 @@ mod tests {
         // Verify all test sessions are found
         for session_name in &test_sessions {
             assert!(
-                discovered.contains(&session_name.to_string()),
+                discovered.iter().any(|(name, _)| name == session_name),
                 "discover_sessions() should find session '{}', but got: {:?}",
                 session_name,
                 discovered
@@ -1503,6 +1521,49 @@ mod tests {
         for path in created_files {
             let _ = fs::remove_file(path);
         }
+    }
+
+    /// `list-sessions` reports each session's agent port, and tolerates a
+    /// session whose sidecar is missing (started before per-session ports).
+    #[test]
+    fn test_discover_sessions_reads_agent_port() {
+        let qorvex_dir = qorvex_dir();
+        fs::create_dir_all(&qorvex_dir).expect("Failed to create qorvex directory");
+
+        let with_port = "test_session_with_port";
+        let without_port = "test_session_without_port";
+        let sockets: Vec<_> = [with_port, without_port]
+            .iter()
+            .map(|name| {
+                let path = qorvex_dir.join(format!("qorvex_{}.sock", name));
+                File::create(&path).expect("Failed to create test socket file");
+                path
+            })
+            .collect();
+        let port_file = qorvex_dir.join(format!("qorvex_{}.port", with_port));
+        fs::write(&port_file, "51234\n").expect("Failed to write test port file");
+
+        let discovered = discover_sessions();
+        assert_eq!(
+            discovered
+                .iter()
+                .find(|(name, _)| name == with_port)
+                .map(|(_, port)| *port),
+            Some(Some(51234))
+        );
+        assert_eq!(
+            discovered
+                .iter()
+                .find(|(name, _)| name == without_port)
+                .map(|(_, port)| *port),
+            Some(None),
+            "a session with no sidecar is still listed"
+        );
+
+        for path in sockets {
+            let _ = fs::remove_file(path);
+        }
+        let _ = fs::remove_file(port_file);
     }
 
     fn sim(udid: &str) -> qorvex_core::simctl::SimulatorDevice {

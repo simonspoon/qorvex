@@ -3,7 +3,7 @@
 //! This module extracts the backend logic from qorvex-repl's App into a
 //! standalone `ServerState` that can be driven by an IPC socket server.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tracing::{debug, info, warn};
@@ -18,7 +18,7 @@ use qorvex_core::android_lifecycle::{AndroidLifecycle, AndroidLifecycleConfig};
 use qorvex_core::config::QorvexConfig;
 use qorvex_core::driver::{flatten_elements, AutomationDriver, DriverError};
 use qorvex_core::executor::ActionExecutor;
-use qorvex_core::ipc::{IpcRequest, IpcResponse, Platform};
+use qorvex_core::ipc::{agent_port_path, IpcRequest, IpcResponse, Platform};
 use qorvex_core::session::Session;
 use qorvex_core::simctl::{Simctl, SimctlError, SimulatorDevice};
 
@@ -40,7 +40,13 @@ pub struct ServerState {
     pub cached_android_devices: Vec<qorvex_core::adb_device::AndroidDevice>,
     pub target_bundle_id: Option<String>,
     pub default_timeout_ms: u64,
-    pub agent_port: u16,
+    /// Explicit `agent_port` from the user's config, if set. Overrides the
+    /// per-session port on every path, simulator and physical device alike.
+    pub agent_port_override: Option<u16>,
+    /// The TCP port this session's simulator agent uses, persisted in the
+    /// session's `.port` sidecar. Distinct per session so two sessions can
+    /// drive two simulators at once.
+    pub session_agent_port: u16,
     pub is_physical_device: bool,
     /// The tunnel address for CoreDevice devices (from tunneld), if available.
     pub tunnel_address: Option<String>,
@@ -82,18 +88,25 @@ impl ServerState {
     /// Create a new `ServerState`, pre-fetching devices and detecting a booted simulator.
     pub fn new(session_name: String) -> Self {
         let config = QorvexConfig::load();
-        let agent_port = config.agent_port();
+        let agent_port_override = config.agent_port;
+        let session_agent_port =
+            resolve_session_agent_port(&agent_port_path(&session_name), agent_port_override);
         let cached_devices = Simctl::list_devices().unwrap_or_default();
         let cached_android_devices = Adb::list_devices().unwrap_or_default();
         let simulator_udid = Simctl::get_booted_udid().ok();
-        let executor = simulator_udid
-            .as_ref()
-            .map(|_| ActionExecutor::with_agent("localhost".to_string(), agent_port));
+        let executor = simulator_udid.as_ref().map(|_| {
+            ActionExecutor::with_agent(
+                "localhost".to_string(),
+                // No device is selected yet, so this is the simulator port.
+                effective_agent_port(agent_port_override, false, session_agent_port),
+            )
+        });
 
         info!(
             session = %session_name,
             device = ?simulator_udid,
             devices = cached_devices.len(),
+            agent_port = session_agent_port,
             "ServerState initialised"
         );
 
@@ -108,7 +121,8 @@ impl ServerState {
             cached_android_devices,
             target_bundle_id: None,
             default_timeout_ms: 5000,
-            agent_port,
+            agent_port_override,
+            session_agent_port,
             is_physical_device: false,
             tunnel_address: None,
             use_core_device: false,
@@ -117,6 +131,19 @@ impl ServerState {
             android_lifecycle: None,
             android_forward: None,
         }
+    }
+
+    /// The TCP port to talk to the iOS agent on.
+    ///
+    /// Every dial site and every `AgentLifecycleConfig::agent_port` goes
+    /// through here, because the port depends on state (`is_physical_device`)
+    /// that is only known once a device has been selected.
+    fn effective_agent_port(&self) -> u16 {
+        effective_agent_port(
+            self.agent_port_override,
+            self.is_physical_device,
+            self.session_agent_port,
+        )
     }
 
     /// Handle a single IPC request and return a response.
@@ -257,7 +284,7 @@ impl ServerState {
 
         info!("Auto-starting agent");
         let mut lc_config = AgentLifecycleConfig::new(agent_source_dir);
-        lc_config.agent_port = self.agent_port;
+        lc_config.agent_port = self.effective_agent_port();
         if self.is_physical_device {
             lc_config.is_physical = true;
             lc_config.startup_timeout = std::time::Duration::from_secs(120);
@@ -272,20 +299,20 @@ impl ServerState {
             Ok(()) => {
                 let mut driver = if self.is_physical_device {
                     if let Some(ref addr) = self.tunnel_address {
-                        AgentDriver::tunneld(addr.clone(), self.agent_port)
+                        AgentDriver::tunneld(addr.clone(), self.effective_agent_port())
                             .with_lifecycle(lifecycle.clone())
                     } else if let Some(ref host) = self.direct_host {
-                        AgentDriver::direct(host.clone(), self.agent_port)
+                        AgentDriver::direct(host.clone(), self.effective_agent_port())
                             .with_lifecycle(lifecycle.clone())
                     } else if self.use_core_device {
-                        AgentDriver::core_device(udid.clone(), self.agent_port)
+                        AgentDriver::core_device(udid.clone(), self.effective_agent_port())
                             .with_lifecycle(lifecycle.clone())
                     } else {
-                        AgentDriver::usb_device(udid.clone(), self.agent_port)
+                        AgentDriver::usb_device(udid.clone(), self.effective_agent_port())
                             .with_lifecycle(lifecycle.clone())
                     }
                 } else {
-                    AgentDriver::direct("127.0.0.1", self.agent_port)
+                    AgentDriver::direct("127.0.0.1", self.effective_agent_port())
                         .with_lifecycle(lifecycle.clone())
                 };
                 self.agent_lifecycle = Some(lifecycle);
@@ -453,7 +480,7 @@ impl ServerState {
             self.simulator_udid = Some(udid.to_string());
             self.executor = Some(ActionExecutor::with_agent(
                 "localhost".to_string(),
-                self.agent_port,
+                self.effective_agent_port(),
             ));
             return IpcResponse::CommandResult {
                 success: true,
@@ -559,7 +586,7 @@ impl ServerState {
                 self.simulator_udid = Some(udid.to_string());
                 self.executor = Some(ActionExecutor::with_agent(
                     "localhost".to_string(),
-                    self.agent_port,
+                    self.effective_agent_port(),
                 ));
                 // Switching to iOS retires any active Android selection so
                 // device/agent selection is mutually exclusive. Terminate the
@@ -807,7 +834,7 @@ impl ServerState {
             // With path: build, spawn, wait, store lifecycle
             let project_dir = PathBuf::from(strip_quotes(&project_dir_str));
             let mut lc_config = AgentLifecycleConfig::new(project_dir);
-            lc_config.agent_port = self.agent_port;
+            lc_config.agent_port = self.effective_agent_port();
             if self.is_physical_device {
                 lc_config.is_physical = true;
                 lc_config.startup_timeout = std::time::Duration::from_secs(120);
@@ -822,20 +849,20 @@ impl ServerState {
                 Ok(()) => {
                     let mut driver = if self.is_physical_device {
                         if let Some(ref addr) = self.tunnel_address {
-                            AgentDriver::tunneld(addr.clone(), self.agent_port)
+                            AgentDriver::tunneld(addr.clone(), self.effective_agent_port())
                                 .with_lifecycle(lifecycle.clone())
                         } else if let Some(ref host) = self.direct_host {
-                            AgentDriver::direct(host.clone(), self.agent_port)
+                            AgentDriver::direct(host.clone(), self.effective_agent_port())
                                 .with_lifecycle(lifecycle.clone())
                         } else if self.use_core_device {
-                            AgentDriver::core_device(udid.clone(), self.agent_port)
+                            AgentDriver::core_device(udid.clone(), self.effective_agent_port())
                                 .with_lifecycle(lifecycle.clone())
                         } else {
-                            AgentDriver::usb_device(udid.clone(), self.agent_port)
+                            AgentDriver::usb_device(udid.clone(), self.effective_agent_port())
                                 .with_lifecycle(lifecycle.clone())
                         }
                     } else {
-                        AgentDriver::direct("127.0.0.1", self.agent_port)
+                        AgentDriver::direct("127.0.0.1", self.effective_agent_port())
                             .with_lifecycle(lifecycle.clone())
                     };
                     self.agent_lifecycle = Some(lifecycle);
@@ -863,7 +890,7 @@ impl ServerState {
             let config = QorvexConfig::load();
             if let Some(project_dir) = config.effective_agent_source_dir() {
                 let mut lc_config = AgentLifecycleConfig::new(project_dir);
-                lc_config.agent_port = self.agent_port;
+                lc_config.agent_port = self.effective_agent_port();
                 if self.is_physical_device {
                     lc_config.is_physical = true;
                     lc_config.startup_timeout = std::time::Duration::from_secs(120);
@@ -878,20 +905,20 @@ impl ServerState {
                     Ok(()) => {
                         let mut driver = if self.is_physical_device {
                             if let Some(ref addr) = self.tunnel_address {
-                                AgentDriver::tunneld(addr.clone(), self.agent_port)
+                                AgentDriver::tunneld(addr.clone(), self.effective_agent_port())
                                     .with_lifecycle(lifecycle.clone())
                             } else if let Some(ref host) = self.direct_host {
-                                AgentDriver::direct(host.clone(), self.agent_port)
+                                AgentDriver::direct(host.clone(), self.effective_agent_port())
                                     .with_lifecycle(lifecycle.clone())
                             } else if self.use_core_device {
-                                AgentDriver::core_device(udid.clone(), self.agent_port)
+                                AgentDriver::core_device(udid.clone(), self.effective_agent_port())
                                     .with_lifecycle(lifecycle.clone())
                             } else {
-                                AgentDriver::usb_device(udid.clone(), self.agent_port)
+                                AgentDriver::usb_device(udid.clone(), self.effective_agent_port())
                                     .with_lifecycle(lifecycle.clone())
                             }
                         } else {
-                            AgentDriver::direct("127.0.0.1", self.agent_port)
+                            AgentDriver::direct("127.0.0.1", self.effective_agent_port())
                                 .with_lifecycle(lifecycle.clone())
                         };
                         self.agent_lifecycle = Some(lifecycle);
@@ -917,7 +944,7 @@ impl ServerState {
             } else {
                 // No config: connect to externally-started agent
                 let mut lc_config = AgentLifecycleConfig::new(PathBuf::new());
-                lc_config.agent_port = self.agent_port;
+                lc_config.agent_port = self.effective_agent_port();
                 if self.is_physical_device {
                     lc_config.is_physical = true;
                     lc_config.startup_timeout = std::time::Duration::from_secs(120);
@@ -930,16 +957,16 @@ impl ServerState {
                     Ok(()) => {
                         let mut driver = if self.is_physical_device {
                             if let Some(ref addr) = self.tunnel_address {
-                                AgentDriver::tunneld(addr.clone(), self.agent_port)
+                                AgentDriver::tunneld(addr.clone(), self.effective_agent_port())
                             } else if let Some(ref host) = self.direct_host {
-                                AgentDriver::direct(host.clone(), self.agent_port)
+                                AgentDriver::direct(host.clone(), self.effective_agent_port())
                             } else if self.use_core_device {
-                                AgentDriver::core_device(udid.clone(), self.agent_port)
+                                AgentDriver::core_device(udid.clone(), self.effective_agent_port())
                             } else {
-                                AgentDriver::usb_device(udid.clone(), self.agent_port)
+                                AgentDriver::usb_device(udid.clone(), self.effective_agent_port())
                             }
                         } else {
-                            AgentDriver::direct("127.0.0.1", self.agent_port)
+                            AgentDriver::direct("127.0.0.1", self.effective_agent_port())
                         };
                         match driver.connect().await {
                             Ok(()) => {
@@ -1589,6 +1616,54 @@ fn strip_quotes(s: &str) -> &str {
     }
 }
 
+/// Picks the agent port for the given device kind.
+///
+/// An explicit `agent_port` in the user's config wins everywhere — it is the
+/// documented override. Physical devices keep the historical default port:
+/// they are reached through a per-device tunnel, so there is no host-port
+/// collision to avoid. Only simulators, which all share the host network
+/// stack, need a per-session port.
+fn effective_agent_port(
+    config_override: Option<u16>,
+    is_physical_device: bool,
+    session_agent_port: u16,
+) -> u16 {
+    match config_override {
+        Some(port) => port,
+        None if is_physical_device => QorvexConfig::default().agent_port(),
+        None => session_agent_port,
+    }
+}
+
+/// Resolves this session's simulator agent port, persisting it in `port_file`.
+///
+/// A previously recorded port is reused so that a restarted server re-attaches
+/// to the agent already running on it; otherwise the kernel picks a free port
+/// and it is written out for the next start and for `list-sessions`.
+fn resolve_session_agent_port(port_file: &Path, config_override: Option<u16>) -> u16 {
+    let port = config_override
+        .or_else(|| {
+            std::fs::read_to_string(port_file)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+        })
+        .or_else(allocate_free_port)
+        .unwrap_or_else(|| QorvexConfig::default().agent_port());
+    if let Err(e) = std::fs::write(port_file, port.to_string()) {
+        warn!(path = %port_file.display(), error = %e, "Could not record agent port");
+    }
+    port
+}
+
+/// Asks the kernel for a free loopback port by binding and immediately
+/// releasing it. Racy in principle, but the agent binds it moments later.
+fn allocate_free_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|addr| addr.port())
+        .ok()
+}
+
 /// Builds `start-target`'s human message and structured payload from the
 /// launch outcome.
 ///
@@ -1628,6 +1703,71 @@ fn start_target_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- agent port resolution ---
+
+    /// A unique scratch sidecar path; the port file is never left behind.
+    fn scratch_port_file(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("qorvex-port-test-{}-{}", std::process::id(), tag))
+    }
+
+    #[test]
+    fn explicit_config_port_wins_over_the_session_port() {
+        assert_eq!(effective_agent_port(Some(9999), false, 51234), 9999);
+        assert_eq!(effective_agent_port(Some(9999), true, 51234), 9999);
+    }
+
+    #[test]
+    fn physical_devices_keep_the_default_port() {
+        // Physical devices are reached over a per-device tunnel, so they do
+        // not need — and must not get — the per-session simulator port.
+        assert_eq!(effective_agent_port(None, true, 51234), 8080);
+    }
+
+    #[test]
+    fn simulators_use_the_session_port() {
+        assert_eq!(effective_agent_port(None, false, 51234), 51234);
+    }
+
+    #[test]
+    fn a_recorded_port_is_reused() {
+        let path = scratch_port_file("reuse");
+        std::fs::write(&path, "51234\n").expect("write sidecar");
+        assert_eq!(resolve_session_agent_port(&path, None), 51234);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_fresh_session_allocates_and_records_a_port() {
+        let path = scratch_port_file("fresh");
+        std::fs::remove_file(&path).ok();
+        let port = resolve_session_agent_port(&path, None);
+        assert_ne!(port, 0, "the kernel should hand out a real port");
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("sidecar written")
+                .trim(),
+            port.to_string(),
+            "the chosen port is recorded for the next start"
+        );
+        // Resolving again reuses what was just written.
+        assert_eq!(resolve_session_agent_port(&path, None), port);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn an_explicit_override_is_recorded_verbatim() {
+        let path = scratch_port_file("override");
+        std::fs::write(&path, "51234").expect("write sidecar");
+        assert_eq!(resolve_session_agent_port(&path, Some(8080)), 8080);
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("sidecar written")
+                .trim(),
+            "8080"
+        );
+        std::fs::remove_file(&path).ok();
+    }
 
     // --- start-target outcome reporting ---
 
