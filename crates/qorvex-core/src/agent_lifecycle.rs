@@ -12,7 +12,9 @@
 //! 1. **Build** the XCTest bundle via `xcodebuild build-for-testing`
 //! 2. **Spawn** the agent via `xcodebuild test-without-building`
 //! 3. **Wait for ready** by polling the TCP port with heartbeat requests
-//! 4. **Retry** on failure (terminate + respawn) up to a configurable limit
+//! 4. **Retry** up to a configurable limit: respawn if the runner died, keep
+//!    waiting on it if it is merely slow to come up, and restart it once in the
+//!    last window if waiting has not paid off
 //!
 //! # Example
 //!
@@ -98,7 +100,18 @@ impl AgentLifecycleConfig {
         Self {
             project_dir,
             agent_port: 8080,
-            startup_timeout: Duration::from_secs(30),
+            // Sized from measurement, not intuition. Across 26 sides of
+            // simultaneous cold starts, healthy ones reached ready in 101-131s,
+            // drifting with machine load. `ensure_running` spends the first
+            // `max_retries` windows waiting on one progressing launch, so
+            // patience runs to 3 x 60s = 180s — clear of the top of that range,
+            // which matters because the rescue respawn at the end of that
+            // stretch would otherwise kill a healthy, nearly-ready runner. The
+            // final window is then 60s against the 22-28s a warm relaunch
+            // needs. A runner that *dies* is still caught by `try_wait` on the
+            // next 500ms poll, so the longer window costs nothing there.
+            // Physical devices override this to 120s.
+            startup_timeout: Duration::from_secs(60),
             max_retries: 3,
             is_physical: false,
             tunnel_address: None,
@@ -552,8 +565,11 @@ impl AgentLifecycle {
     /// On simulators the build step is skipped when pre-built products are
     /// detected (see [`is_agent_built`](Self::is_agent_built)). Physical devices
     /// always rebuild — see below. If [`wait_for_ready`](Self::wait_for_ready)
-    /// fails, the agent is terminated and respawned up to
-    /// [`AgentLifecycleConfig::max_retries`] times.
+    /// reports the runner died, the agent is terminated and respawned up to
+    /// [`AgentLifecycleConfig::max_retries`] times. If it merely timed out while
+    /// the runner is still alive, the same launch is waited on again — except in
+    /// the last window, where the runner is restarted once in case it is wedged
+    /// rather than slow.
     ///
     /// # Errors
     ///
@@ -582,12 +598,47 @@ impl AgentLifecycle {
                     info!("agent running after attempt {}", attempt);
                     return Ok(());
                 }
-                Err(AgentLifecycleError::StartupTimeout | AgentLifecycleError::SpawnFailed(_))
-                    if attempt < self.config.max_retries =>
-                {
-                    // Terminate and respawn for the next attempt.
+                Err(AgentLifecycleError::SpawnFailed(_)) if attempt < self.config.max_retries => {
+                    // The runner process exited: whatever it was doing is over,
+                    // so terminate (to clear the dead child and any stray app)
+                    // and respawn for the next attempt.
                     let _ = self.terminate_agent();
                     self.spawn_agent()?;
+                }
+                Err(AgentLifecycleError::StartupTimeout) if attempt < self.config.max_retries => {
+                    // The deadline passed but the runner is *still alive* —
+                    // `wait_for_ready` would have reported `SpawnFailed` had the
+                    // child exited. It is slow, not dead: a cold xcodebuild plus
+                    // a booting simulator regularly needs longer than one
+                    // `startup_timeout` when two sessions contend for the CPU.
+                    // Killing it would throw away that progress and start the
+                    // same slow launch from zero — that impatience was the
+                    // original bug, where a launch never got more than one
+                    // window and two contending sessions never converged.
+                    // So: wait on the launch we already have, and only give up
+                    // on it once. `attempt + 1 == max_retries` is the last
+                    // window in which a respawn can still be waited on, so a
+                    // slow launch has had every earlier window to itself (three
+                    // of the four at the defaults — 180s, clear of the 101-131s
+                    // a healthy contended start needs) before anything is
+                    // killed. A runner that is not slow but *wedged* — alive,
+                    // never binding the port — has by then demonstrated that
+                    // patience will not pay off, and the alternative to
+                    // restarting it is certain failure, so spend the final
+                    // window on a fresh launch.
+                    if attempt + 1 == self.config.max_retries {
+                        info!(
+                            "agent still not ready after attempt {}; restarting it once for the final window",
+                            attempt
+                        );
+                        let _ = self.terminate_agent();
+                        self.spawn_agent()?;
+                    } else {
+                        debug!(
+                            "agent still starting after attempt {}; waiting again",
+                            attempt
+                        );
+                    }
                 }
                 Err(e) => return Err(e),
             }
@@ -719,7 +770,7 @@ mod tests {
 
         assert_eq!(config.project_dir, PathBuf::from("/tmp/agent"));
         assert_eq!(config.agent_port, 8080);
-        assert_eq!(config.startup_timeout, Duration::from_secs(30));
+        assert_eq!(config.startup_timeout, Duration::from_secs(60));
         assert_eq!(config.max_retries, 3);
         assert!(!config.is_physical);
     }
