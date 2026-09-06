@@ -20,7 +20,7 @@ use qorvex_core::driver::{flatten_elements, AutomationDriver, DriverError};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{agent_port_path, IpcRequest, IpcResponse, Platform};
 use qorvex_core::session::Session;
-use qorvex_core::simctl::{Simctl, SimctlError, SimulatorDevice};
+use qorvex_core::simctl::{QuietOutcome, Simctl, SimctlError, SimulatorDevice};
 
 /// Backend state for the automation server.
 ///
@@ -433,6 +433,26 @@ impl ServerState {
         }
     }
 
+    /// Quiets the simulator runtime's `mediaanalysisd`, which can otherwise run
+    /// away to hundreds of percent CPU and starve xcodebuild and UI automation.
+    ///
+    /// Simulators only: call this from simulator paths and nowhere else.
+    /// `simctl spawn` has no runtime to enter on a physical device, and that
+    /// phone's own `mediaanalysisd` is not ours to touch.
+    ///
+    /// Never fails device selection or boot: a user picking a device must not
+    /// be blocked because a daemon could not be quieted. Only the case that
+    /// actually stopped a running instance is worth a line.
+    fn quiet_simulator(udid: &str) {
+        match Simctl::quiet(udid) {
+            Ok(QuietOutcome::Unloaded) => {
+                info!(device = %udid, "Quieted mediaanalysisd")
+            }
+            Ok(outcome) => debug!(device = %udid, ?outcome, "mediaanalysisd needed no action"),
+            Err(e) => warn!(device = %udid, error = %e, "Could not quiet mediaanalysisd"),
+        }
+    }
+
     async fn handle_use_device(&mut self, udid: &str) -> IpcResponse {
         let udid = strip_quotes(udid);
         if udid.is_empty() {
@@ -478,6 +498,7 @@ impl ServerState {
             self.use_core_device = false;
             self.direct_host = None;
             self.simulator_udid = Some(udid.to_string());
+            Self::quiet_simulator(udid);
             self.executor = Some(ActionExecutor::with_agent(
                 "localhost".to_string(),
                 self.effective_agent_port(),
@@ -584,6 +605,7 @@ impl ServerState {
         match Simctl::boot(udid) {
             Ok(_) => {
                 self.simulator_udid = Some(udid.to_string());
+                Self::quiet_simulator(udid);
                 self.executor = Some(ActionExecutor::with_agent(
                     "localhost".to_string(),
                     self.effective_agent_port(),

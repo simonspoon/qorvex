@@ -59,7 +59,7 @@ use qorvex_core::element::{ElementFrame, UIElement};
 use qorvex_core::ipc::{
     agent_port_path, qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform,
 };
-use qorvex_core::simctl::Simctl;
+use qorvex_core::simctl::{QuietOutcome, Simctl};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
@@ -310,6 +310,13 @@ enum Command {
     #[command(name = "use-device")]
     UseDevice {
         /// Device UDID
+        udid: String,
+    },
+
+    /// Stop a simulator's runaway `mediaanalysisd` daemon
+    #[command(name = "quiet-device")]
+    QuietDevice {
+        /// Simulator UDID
         udid: String,
     },
 
@@ -596,6 +603,43 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
             return Ok(());
         }
+        Command::QuietDevice { ref udid } => {
+            // Called directly rather than over IPC: the path this serves — a
+            // plain `simctl boot` in a build script — has no qorvex server.
+            match Simctl::quiet(udid) {
+                Ok(outcome) => {
+                    if cli.format == OutputFormat::Json {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "success": true,
+                                "udid": udid,
+                                "outcome": format!("{:?}", outcome),
+                            })
+                        );
+                    } else {
+                        match outcome {
+                            QuietOutcome::Unloaded => {
+                                eprintln!("Quieted mediaanalysisd on {}", udid)
+                            }
+                            QuietOutcome::AlreadyQuiet => {
+                                eprintln!("mediaanalysisd already quiet on {}", udid)
+                            }
+                            QuietOutcome::NotBooted => {
+                                eprintln!("Device {} is not booted; nothing to quiet", udid)
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(CliError::ActionFailed(format!(
+                        "Failed to quiet device: {}",
+                        e
+                    )))
+                }
+            }
+            return Ok(());
+        }
         Command::Convert { ref log } => {
             let result = match log {
                 Some(path) => converter::LogConverter::convert_file(path)
@@ -833,6 +877,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         | Command::ListDevices { .. }
         | Command::BootDevice { .. }
         | Command::Convert { .. }
+        | Command::QuietDevice { .. }
         | Command::Start { .. }
         | Command::Completions { .. } => unreachable!(),
     }

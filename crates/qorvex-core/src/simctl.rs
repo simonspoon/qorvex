@@ -67,6 +67,24 @@ fn format_booted_devices(devices: &[(String, String)]) -> String {
         .join(", ")
 }
 
+/// The launchd target of the simulator runtime's media analysis daemon, which
+/// can run away to hundreds of percent CPU on a long-lived simulator and starve
+/// xcodebuild and UI automation.
+const MEDIAANALYSISD_TARGET: &str = "system/com.apple.mediaanalysisd";
+
+/// What [`Simctl::quiet`] found when it quieted a simulator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuietOutcome {
+    /// A loaded instance of the daemon was unloaded.
+    Unloaded,
+
+    /// The daemon was not loaded; nothing to do.
+    AlreadyQuiet,
+
+    /// The device is not booted, so there is no runtime to quiet.
+    NotBooted,
+}
+
 /// Represents an iOS Simulator device.
 ///
 /// This struct contains information about a simulator device as reported
@@ -258,6 +276,82 @@ impl Simctl {
             }
         }
         Ok(())
+    }
+
+    /// Stops the simulator runtime's `mediaanalysisd`.
+    ///
+    /// The daemon indexes simulator media in the background and has been
+    /// measured at over 700% CPU on a simulator left up for a few hours, which
+    /// makes xcodebuild and UI automation crawl. Quieting it takes two steps,
+    /// in this order:
+    ///
+    /// 1. `launchctl disable` gates *loading* the job, which only happens at
+    ///    boot. On an already-running device the job is loaded, so on-demand
+    ///    activation relaunches it regardless.
+    /// 2. `launchctl bootout` unloads the job, so there is nothing left to
+    ///    activate.
+    ///
+    /// `disable` must come first, or the unloaded job is simply re-loaded.
+    ///
+    /// Only the parent label is touched; the sibling services measured
+    /// alongside it were never observed consuming CPU.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if the label could not be booted out
+    ///   for a reason other than it already being unloaded or the device not
+    ///   being booted
+    pub fn quiet(udid: &str) -> Result<QuietOutcome, SimctlError> {
+        // `disable` is advisory here — `bootout` below is what stops a running
+        // instance, and its exit code is the one worth classifying.
+        Command::new("xcrun")
+            .args([
+                "simctl",
+                "spawn",
+                udid,
+                "launchctl",
+                "disable",
+                MEDIAANALYSISD_TARGET,
+            ])
+            .output()?;
+
+        let output = Command::new("xcrun")
+            .args([
+                "simctl",
+                "spawn",
+                udid,
+                "launchctl",
+                "bootout",
+                MEDIAANALYSISD_TARGET,
+            ])
+            .output()?;
+
+        Self::classify_bootout(
+            output.status.code(),
+            &String::from_utf8_lossy(&output.stderr),
+        )
+    }
+
+    /// Classifies a `launchctl bootout` exit code.
+    ///
+    /// Split out from [`Self::quiet`] so the exit codes can be tested without a
+    /// simulator. Classification is on the exit code alone: every successful
+    /// invocation also writes an `rdar://78126471` deprecation warning to
+    /// stderr, so non-empty stderr says nothing about success.
+    fn classify_bootout(code: Option<i32>, stderr: &str) -> Result<QuietOutcome, SimctlError> {
+        match code {
+            Some(0) => Ok(QuietOutcome::Unloaded),
+            // "Boot-out failed: 3: No such process" — already unloaded.
+            Some(3) => Ok(QuietOutcome::AlreadyQuiet),
+            // "Process spawn via launchd failed because device is not booted".
+            Some(149) => Ok(QuietOutcome::NotBooted),
+            _ => Err(SimctlError::CommandFailed(stderr.trim().to_string())),
+        }
     }
 
     /// Launches an app on a simulator device, returning its process id.
@@ -891,5 +985,53 @@ mod tests {
     fn test_parse_launchctl_pid_no_prefix_collision() {
         let list = "1234\t0\tUIKitApplication:com.example.AppTwo[aaaa][rb-legacy]\n";
         assert_eq!(Simctl::parse_launchctl_pid(list, "com.example.App"), None);
+    }
+
+    // --- quieting mediaanalysisd ---
+
+    // Every invocation, successful or not, writes this to stderr, so success is
+    // classified on the exit code alone.
+    const BOOTOUT_DEPRECATION_WARNING: &str =
+        "Boot-out is a deprecated command. See rdar://78126471 for more info.";
+
+    #[test]
+    fn test_classify_bootout_unloaded() {
+        assert_eq!(
+            Simctl::classify_bootout(Some(0), BOOTOUT_DEPRECATION_WARNING).unwrap(),
+            QuietOutcome::Unloaded
+        );
+    }
+
+    #[test]
+    fn test_classify_bootout_already_quiet() {
+        assert_eq!(
+            Simctl::classify_bootout(Some(3), "Boot-out failed: 3: No such process").unwrap(),
+            QuietOutcome::AlreadyQuiet
+        );
+    }
+
+    #[test]
+    fn test_classify_bootout_device_not_booted() {
+        assert_eq!(
+            Simctl::classify_bootout(
+                Some(149),
+                "Process spawn via launchd failed because device is not booted"
+            )
+            .unwrap(),
+            QuietOutcome::NotBooted
+        );
+    }
+
+    // A label launchd does not know is a genuine error and must surface.
+    #[test]
+    fn test_classify_bootout_unknown_label() {
+        let message = Simctl::classify_bootout(
+            Some(113),
+            "Could not find service \"com.apple.nope\" in domain for system",
+        )
+        .expect_err("Exit 113 should be an error")
+        .to_string();
+
+        assert!(message.contains("com.apple.nope"));
     }
 }
