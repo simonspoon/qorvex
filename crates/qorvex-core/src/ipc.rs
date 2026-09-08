@@ -394,7 +394,9 @@ pub fn qorvex_dir() -> PathBuf {
     let dir = match std::env::var_os("QORVEX_HOME") {
         Some(path) if !path.is_empty() => PathBuf::from(path),
         _ => dirs::home_dir()
-            .expect("Could not determine home directory; set QORVEX_HOME to the qorvex state directory")
+            .expect(
+                "Could not determine home directory; set QORVEX_HOME to the qorvex state directory",
+            )
             .join(".qorvex"),
     };
     std::fs::create_dir_all(&dir).ok();
