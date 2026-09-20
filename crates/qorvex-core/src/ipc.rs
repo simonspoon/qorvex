@@ -221,6 +221,12 @@ pub enum IpcRequest {
     /// Get metadata about the currently targeted application.
     GetTargetInfo,
 
+    /// Get the target app's memory footprint and the device's memory state.
+    ///
+    /// Gathered host-side via `simctl`/`ps`/`vm_stat` (iOS simulator) or `adb`
+    /// (Android), so it needs no agent — only a device and a target.
+    GetMemoryInfo,
+
     // --- Configuration ---
     /// Set the target app bundle ID.
     SetTarget { bundle_id: String },

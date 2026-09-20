@@ -25,6 +25,7 @@
 //! }
 //! ```
 
+use crate::memory::{AppMemory, DeviceMemory, MemoryInfo, MemoryPressure};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use thiserror::Error;
@@ -446,6 +447,171 @@ impl Simctl {
             .find(|line| line.contains(&needle))
             .and_then(|line| line.split_whitespace().next())
             .and_then(|pid| pid.parse().ok())
+    }
+
+    /// Returns the target app's memory footprint and the host Mac's memory
+    /// state, or `None` when the app is not running.
+    ///
+    /// A simulator app is a plain Mac process, so its footprint is the
+    /// `phys_footprint` of the pid [`Self::app_pid`] resolves, and the
+    /// "device" it runs on is the Mac itself. Physical iOS devices are not
+    /// covered here — nothing in this path can reach them.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if a command fails to execute
+    /// - [`SimctlError::CommandFailed`] if a command fails or its output
+    ///   cannot be parsed
+    pub fn memory_info(udid: &str, bundle_id: &str) -> Result<Option<MemoryInfo>, SimctlError> {
+        let Some(pid) = Self::app_pid(udid, bundle_id)? else {
+            return Ok(None);
+        };
+
+        // `footprint`'s `phys_footprint` is the kernel figure jetsam charges,
+        // and the one `vmmap --summary`, Instruments and Xcode's memory gauge
+        // display. Host RSS is not a substitute: a simulator app has the whole
+        // iOS runtime's read-only framework pages resident (gigabytes, shared
+        // by every simulated app at once), so RSS charges one app a large
+        // near-constant offset and is not comparable to Android's
+        // proportional-share TOTAL PSS. RSS stays as a fallback so a missing
+        // or unparseable `footprint` degrades the figure rather than failing
+        // the command — `source` records which one the number came from.
+        let footprint = Command::new("footprint")
+            .args(["--pid", &pid.to_string(), "-f", "bytes", "--noCategories"])
+            .output()
+            .ok();
+        let phys_footprint = footprint
+            .as_ref()
+            .and_then(|out| Self::parse_footprint(&String::from_utf8_lossy(&out.stdout)));
+        let (footprint_bytes, app_source) = match phys_footprint {
+            Some(bytes) => (bytes, "footprint phys_footprint"),
+            None => {
+                let ps = Command::new("ps")
+                    .args(["-o", "rss=", "-p", &pid.to_string()])
+                    .output()?;
+                let rss =
+                    Self::parse_ps_rss(&String::from_utf8_lossy(&ps.stdout)).ok_or_else(|| {
+                        SimctlError::CommandFailed(format!("could not read RSS for pid {}", pid))
+                    })?;
+                (rss, "ps -o rss= (footprint unavailable)")
+            }
+        };
+
+        let total_bytes = Self::sysctl("hw.memsize")?
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| {
+                SimctlError::CommandFailed(format!("could not parse hw.memsize: {}", e))
+            })?;
+
+        let vm_stat = Command::new("vm_stat").output()?;
+        let free_bytes = Self::parse_vm_stat(&String::from_utf8_lossy(&vm_stat.stdout))
+            .ok_or_else(|| {
+                SimctlError::CommandFailed("could not parse vm_stat output".to_string())
+            })?;
+
+        let pressure =
+            Self::parse_pressure_level(&Self::sysctl("kern.memorystatus_vm_pressure_level")?);
+
+        Ok(Some(MemoryInfo {
+            app: AppMemory {
+                pid,
+                footprint_bytes,
+                source: app_source.to_string(),
+            },
+            device: DeviceMemory {
+                total_bytes,
+                free_bytes,
+                pressure,
+                source: "sysctl hw.memsize + vm_stat".to_string(),
+            },
+        }))
+    }
+
+    /// Reads a single scalar sysctl via `sysctl -n <name>`.
+    fn sysctl(name: &str) -> Result<String, SimctlError> {
+        let output = Command::new("sysctl").args(["-n", name]).output()?;
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Extracts `phys_footprint` from `footprint --pid <pid> -f bytes
+    /// --noCategories` output, in bytes.
+    ///
+    /// Read from the `Auxiliary data:` section rather than the `Footprint:`
+    /// figure on the header line: the two differ slightly, and
+    /// `phys_footprint` is the authoritative `task_vm_info` value that `vmmap
+    /// --summary` also prints. That section carries other keys
+    /// (`phys_footprint_peak`, and `neural_peak` on some processes) in no
+    /// fixed order, so the line is matched by label. The flag is spelled
+    /// `--pid` and not `-p`, which is ambiguous with `--proc <name>`.
+    ///
+    /// Returns `None` when the label is absent or its value is not a number;
+    /// the caller then falls back to RSS.
+    fn parse_footprint(stdout: &str) -> Option<u64> {
+        stdout.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("phys_footprint:")?
+                .split_whitespace()
+                .next()?
+                .parse()
+                .ok()
+        })
+    }
+
+    /// Converts `ps -o rss=` output — a single whitespace-padded figure — to
+    /// bytes. `ps` reports RSS in kilobytes, hence the × 1024.
+    fn parse_ps_rss(stdout: &str) -> Option<u64> {
+        stdout.trim().parse::<u64>().ok().map(|kb| kb * 1024)
+    }
+
+    /// Sums the pages `vm_stat` reports as reclaimable — free, inactive and
+    /// speculative — and converts them to bytes.
+    ///
+    /// The page size comes from vm_stat's own header line (`Mach Virtual
+    /// Memory Statistics: (page size of N bytes)`), never a hardcoded 4096:
+    /// Apple silicon pages are 16384 bytes. Returns `None` if the header or
+    /// the free page count is missing. Inactive and speculative default to
+    /// zero rather than failing the whole read.
+    fn parse_vm_stat(stdout: &str) -> Option<u64> {
+        let page_size: u64 = stdout
+            .split_once("page size of")?
+            .1
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()?;
+        let pages = |label: &str| -> Option<u64> {
+            stdout.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix(label)?
+                    .trim()
+                    .trim_end_matches('.')
+                    .parse()
+                    .ok()
+            })
+        };
+        let free = pages("Pages free:")?;
+        let inactive = pages("Pages inactive:").unwrap_or(0);
+        let speculative = pages("Pages speculative:").unwrap_or(0);
+        Some((free + inactive + speculative) * page_size)
+    }
+
+    /// Maps `kern.memorystatus_vm_pressure_level` onto [`MemoryPressure`].
+    ///
+    /// The sysctl reports 1 = normal, 2 = warn, 4 = critical. Any other value,
+    /// including unparseable output, reads as normal — an unrecognised level
+    /// is not evidence of pressure.
+    fn parse_pressure_level(stdout: &str) -> MemoryPressure {
+        match stdout.trim().parse::<u32>() {
+            Ok(2) => MemoryPressure::Warn,
+            Ok(4) => MemoryPressure::Critical,
+            _ => MemoryPressure::Normal,
+        }
     }
 
     /// Terminates an app on a simulator device.
@@ -1033,5 +1199,123 @@ mod tests {
         .to_string();
 
         assert!(message.contains("com.apple.nope"));
+    }
+
+    // Real-shaped `vm_stat` output, Apple silicon (16384-byte pages).
+    const SAMPLE_VM_STAT_16K: &str = "\
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                              105442.
+Pages active:                           1237981.
+Pages inactive:                          198375.
+Pages speculative:                        12043.
+Pages throttled:                              0.
+Pages wired down:                        402118.
+";
+
+    // Intel Mac output, 4096-byte pages.
+    const SAMPLE_VM_STAT_4K: &str = "\
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                1000.
+Pages active:                             50000.
+Pages inactive:                             500.
+Pages speculative:                          100.
+";
+
+    #[test]
+    fn test_parse_vm_stat_uses_header_page_size() {
+        let free = Simctl::parse_vm_stat(SAMPLE_VM_STAT_16K).unwrap();
+        assert_eq!(free, (105442 + 198375 + 12043) * 16384);
+    }
+
+    #[test]
+    fn test_parse_vm_stat_non_4096_page_size_differs() {
+        let free = Simctl::parse_vm_stat(SAMPLE_VM_STAT_4K).unwrap();
+        assert_eq!(free, (1000 + 500 + 100) * 4096);
+    }
+
+    #[test]
+    fn test_parse_vm_stat_missing_header_or_free() {
+        // No `page size of N bytes` header.
+        assert!(Simctl::parse_vm_stat("Pages free: 1000.\n").is_none());
+        // Header but no free line.
+        assert!(Simctl::parse_vm_stat(
+            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n"
+        )
+        .is_none());
+        assert!(Simctl::parse_vm_stat("").is_none());
+    }
+
+    #[test]
+    fn test_parse_vm_stat_inactive_and_speculative_optional() {
+        let stdout = "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n\
+Pages free:                                1000.\n";
+        assert_eq!(Simctl::parse_vm_stat(stdout).unwrap(), 1000 * 4096);
+    }
+
+    // Literal `footprint --pid <pid> -f bytes --noCategories` output captured
+    // on this machine, for a process whose Auxiliary data also carries
+    // `neural_peak` — the keys are not in a fixed order or set.
+    const SAMPLE_FOOTPRINT: &str = "\
+======================================================================
+mediaanalysisd [1049]: 64-bit    Footprint: 36407696 B (16384 bytes per page)
+======================================================================
+
+Auxiliary data:
+    neural_peak: 315441152 B
+    phys_footprint: 36407696 B
+    phys_footprint_peak: 702631056 B
+";
+
+    #[test]
+    fn test_parse_footprint_phys_footprint() {
+        assert_eq!(Simctl::parse_footprint(SAMPLE_FOOTPRINT), Some(36407696));
+    }
+
+    #[test]
+    fn test_parse_footprint_prefers_phys_footprint_over_peak() {
+        // `phys_footprint_peak` must not be mistaken for `phys_footprint`,
+        // even when it is listed first.
+        let stdout = "Auxiliary data:\n\
+    phys_footprint_peak: 702631056 B\n\
+    phys_footprint: 36407696 B\n";
+        assert_eq!(Simctl::parse_footprint(stdout), Some(36407696));
+    }
+
+    #[test]
+    fn test_parse_footprint_absent() {
+        // `footprint` refusing the pid prints no Auxiliary data at all.
+        assert!(Simctl::parse_footprint("").is_none());
+        assert!(Simctl::parse_footprint("footprint: no process found\n").is_none());
+        // Header `Footprint:` alone is not the figure we want.
+        let header_only = "zsh [87582]: 64-bit    Footprint: 2130352 B (16384 bytes per page)\n";
+        assert!(Simctl::parse_footprint(header_only).is_none());
+    }
+
+    #[test]
+    fn test_parse_footprint_malformed_number() {
+        let stdout = "Auxiliary data:\n    phys_footprint: not-a-number B\n";
+        assert!(Simctl::parse_footprint(stdout).is_none());
+        assert!(Simctl::parse_footprint("    phys_footprint:\n").is_none());
+    }
+
+    #[test]
+    fn test_parse_ps_rss_kilobytes_to_bytes() {
+        // `ps -o rss=` pads its single figure with leading spaces.
+        assert_eq!(Simctl::parse_ps_rss("  120456\n").unwrap(), 120456 * 1024);
+        assert!(Simctl::parse_ps_rss("").is_none());
+        assert!(Simctl::parse_ps_rss("not-a-number").is_none());
+    }
+
+    #[test]
+    fn test_parse_pressure_level_thresholds() {
+        assert_eq!(Simctl::parse_pressure_level("1\n"), MemoryPressure::Normal);
+        assert_eq!(Simctl::parse_pressure_level("2\n"), MemoryPressure::Warn);
+        assert_eq!(
+            Simctl::parse_pressure_level("4\n"),
+            MemoryPressure::Critical
+        );
+        // 3 is not a level macOS reports, and neither is empty output.
+        assert_eq!(Simctl::parse_pressure_level("3"), MemoryPressure::Normal);
+        assert_eq!(Simctl::parse_pressure_level(""), MemoryPressure::Normal);
     }
 }

@@ -59,6 +59,7 @@ use qorvex_core::element::{ElementFrame, UIElement};
 use qorvex_core::ipc::{
     agent_port_path, qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform,
 };
+use qorvex_core::memory::MemoryInfo;
 use qorvex_core::simctl::{QuietOutcome, Simctl};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -285,6 +286,11 @@ enum Command {
 
     /// Get metadata about the target application
     TargetInfo,
+
+    /// Report the target app's memory footprint and the device's memory state
+    ///
+    /// iOS simulator and Android only; physical iOS devices are not supported.
+    MemoryInfo,
 
     /// Boot a device (simulator UDID for iOS, AVD name / adb serial for Android)
     BootDevice {
@@ -843,6 +849,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::StartTarget { force } => execute_start_target(&mut client, &cli, force).await,
         Command::StopTarget => send_command(&mut client, IpcRequest::StopTarget, &cli).await,
         Command::TargetInfo => execute_target_info(&mut client, &cli).await,
+        Command::MemoryInfo => execute_memory_info(&mut client, &cli).await,
         Command::StartSession => send_command(&mut client, IpcRequest::StartSession, &cli).await,
         Command::StartAgent {
             ref project_dir,
@@ -1268,6 +1275,74 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
+}
+
+async fn execute_memory_info(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::GetMemoryInfo)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::ActionResult {
+            success,
+            message,
+            data,
+            ..
+        } => {
+            if !success {
+                return Err(CliError::ActionFailed(message));
+            }
+            let Some(ref d) = data else {
+                return Ok(());
+            };
+            if cli.format == OutputFormat::Json {
+                println!("{}", d);
+            } else {
+                match serde_json::from_str::<MemoryInfo>(d) {
+                    Ok(info) => print_memory_info(&info),
+                    Err(_) => println!("{}", d),
+                }
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { success, message } => {
+            if success {
+                Ok(())
+            } else {
+                Err(CliError::ActionFailed(message))
+            }
+        }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Human-readable rendering of a [`MemoryInfo`] report. Byte counts are shown
+/// in MiB as well, because a bare nine-digit figure is unreadable.
+fn print_memory_info(info: &MemoryInfo) {
+    let mib = |bytes: u64| format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0));
+    println!("App");
+    println!("  PID:        {}", info.app.pid);
+    println!(
+        "  Footprint:  {} ({} bytes)",
+        mib(info.app.footprint_bytes),
+        info.app.footprint_bytes
+    );
+    println!("  Source:     {}", info.app.source);
+    println!("Device");
+    println!(
+        "  Total:      {} ({} bytes)",
+        mib(info.device.total_bytes),
+        info.device.total_bytes
+    );
+    println!(
+        "  Free:       {} ({} bytes)",
+        mib(info.device.free_bytes),
+        info.device.free_bytes
+    );
+    println!("  Pressure:   {:?}", info.device.pressure);
+    println!("  Source:     {}", info.device.source);
 }
 
 async fn send_command(

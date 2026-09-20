@@ -18,7 +18,9 @@ use crate::completion::commands::ArgCompletion;
 use crate::completion::{
     parse_completion_context, CandidateKind, CompletionContext, CompletionState,
 };
-use crate::format::{format_command, format_device, format_element, format_result};
+use crate::format::{
+    format_command, format_device, format_element, format_memory_info, format_result,
+};
 
 /// Maximum number of lines to keep in output history.
 const MAX_OUTPUT_HISTORY: usize = 1000;
@@ -711,6 +713,7 @@ impl App {
             "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
+            "memory-info" => IpcRequest::GetMemoryInfo,
             "set-timeout" => {
                 let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
@@ -1173,6 +1176,7 @@ impl App {
             "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
+            "memory-info" => IpcRequest::GetMemoryInfo,
             "set-timeout" => {
                 let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
@@ -1487,6 +1491,15 @@ impl App {
                         self.add_output(format_result(false, &message));
                     }
                 }
+                "memory-info" => match (success, data.as_ref().map(|d| serde_json::from_str(d))) {
+                    (true, Some(Ok(info))) => {
+                        for line in format_memory_info(&info) {
+                            self.add_output(line);
+                        }
+                    }
+                    (true, _) => self.add_output(format_result(true, &message)),
+                    (false, _) => self.add_output(format_result(false, &message)),
+                },
                 _ => {
                     self.add_output(format_result(success, &message));
                 }
@@ -1583,6 +1596,7 @@ impl App {
             "  stop-agent               Stop managed agent process",
             "  set-target <bundle_id>   Set target app for automation",
             "  get-target-info          Get target app metadata",
+            "  memory-info              Report target app and device memory",
             "  start-target             Launch the target application",
             "  stop-target              Terminate the target application",
             "  set-timeout [ms]         Set/get default wait timeout",

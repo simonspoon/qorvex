@@ -145,6 +145,12 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[],
     },
     CommandDef {
+        name: "memory-info",
+        description: "Report target app and device memory",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
         name: "start-target",
         description: "Launch the target application",
         args: &[],

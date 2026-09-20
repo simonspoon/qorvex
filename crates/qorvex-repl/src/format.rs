@@ -1,6 +1,7 @@
 //! Pretty formatters for output display.
 
 use qorvex_core::element::UIElement;
+use qorvex_core::memory::MemoryInfo;
 use qorvex_core::simctl::SimulatorDevice;
 use ratatui::text::{Line, Span};
 
@@ -96,4 +97,35 @@ pub fn format_command(cmd: &str) -> Line<'static> {
         Span::styled("> ", Theme::prompt()),
         Span::raw(cmd.to_string()),
     ])
+}
+
+/// Format a [`MemoryInfo`] report as output lines.
+///
+/// Byte counts are shown in MiB as well as raw bytes, because a bare
+/// nine-digit figure is unreadable at a glance.
+pub fn format_memory_info(info: &MemoryInfo) -> Vec<Line<'static>> {
+    let mib = |bytes: u64| format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0));
+    vec![
+        Line::from("  App".to_string()),
+        Line::from(format!("    PID:        {}", info.app.pid)),
+        Line::from(format!(
+            "    Footprint:  {} ({} bytes)",
+            mib(info.app.footprint_bytes),
+            info.app.footprint_bytes
+        )),
+        Line::from(format!("    Source:     {}", info.app.source)),
+        Line::from("  Device".to_string()),
+        Line::from(format!(
+            "    Total:      {} ({} bytes)",
+            mib(info.device.total_bytes),
+            info.device.total_bytes
+        )),
+        Line::from(format!(
+            "    Free:       {} ({} bytes)",
+            mib(info.device.free_bytes),
+            info.device.free_bytes
+        )),
+        Line::from(format!("    Pressure:   {:?}", info.device.pressure)),
+        Line::from(format!("    Source:     {}", info.device.source)),
+    ]
 }

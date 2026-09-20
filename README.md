@@ -124,6 +124,7 @@ Available commands:
 - `set-target <bundle_id>` — Set target app bundle ID
 - `start-target` — Launch the target app. An already-running app is left alone and reported as `already running (pid N)` rather than relaunched; add `--force` to terminate it first and restart from scratch.
 - `stop-target` — Terminate the target app
+- `memory-info` — Report the target app's memory footprint and the device's memory state (iOS simulator and Android only; physical iOS devices are not supported)
 - `set-timeout <ms>` — Set default timeout for tap/wait operations (default: 5000ms); no arg prints current value
 - `start-session` — Begin a new session (auto-starts agent if configured)
 - `end-session` — End the current session

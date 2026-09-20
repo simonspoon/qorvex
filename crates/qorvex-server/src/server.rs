@@ -182,6 +182,7 @@ impl ServerState {
 
             // ── Target Info ─────────────────────────────────────────────
             IpcRequest::GetTargetInfo => self.handle_get_target_info().await,
+            IpcRequest::GetMemoryInfo => self.handle_memory_info().await,
 
             // ── Configuration ───────────────────────────────────────────
             IpcRequest::SetTarget { bundle_id } => self.handle_set_target(&bundle_id).await,
@@ -1276,6 +1277,75 @@ impl ServerState {
             Err(e) => IpcResponse::CommandResult {
                 success: false,
                 message: format!("get-target-info failed: {}", e),
+            },
+        }
+    }
+
+    /// Report the target app's memory footprint and the device's memory
+    /// state.
+    ///
+    /// Host-side like `stop-target`: everything comes from `adb` or from
+    /// `simctl`/`ps`/`vm_stat` on this Mac, so no agent need be running. The
+    /// platform branch mirrors `handle_stop_target` — an active
+    /// `android_serial` means Android (device selection is mutually
+    /// exclusive), otherwise iOS. A physical iOS device also sets
+    /// `simulator_udid`, so `is_physical_device` is what separates it from a
+    /// simulator; it is checked first so such a device is never measured as
+    /// though it were one.
+    async fn handle_memory_info(&self) -> IpcResponse {
+        let Some(bundle_id) = self.target_bundle_id.clone() else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No target set. Use set-target first.".to_string(),
+            };
+        };
+        let result = if let Some(serial) = self.android_serial.clone() {
+            let package = bundle_id.clone();
+            tokio::task::spawn_blocking(move || {
+                Adb::memory_info(&serial, &package).map_err(|e| e.to_string())
+            })
+            .await
+        } else if self.is_physical_device {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "memory-info is not supported on physical iOS devices. \
+                          Use an iOS simulator or an Android device."
+                    .to_string(),
+            };
+        } else if let Some(udid) = self.simulator_udid.clone() {
+            let bid = bundle_id.clone();
+            tokio::task::spawn_blocking(move || {
+                Simctl::memory_info(&udid, &bid).map_err(|e| e.to_string())
+            })
+            .await
+        } else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No device selected.".to_string(),
+            };
+        };
+
+        match result {
+            Ok(Ok(Some(info))) => IpcResponse::ActionResult {
+                success: true,
+                message: format!(
+                    "{} using {} bytes (pid {})",
+                    bundle_id, info.app.footprint_bytes, info.app.pid
+                ),
+                screenshot: None,
+                data: Some(serde_json::to_string(&info).unwrap_or_default()),
+            },
+            Ok(Ok(None)) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("{} is not running. Use start-target first.", bundle_id),
+            },
+            Ok(Err(e)) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("memory-info failed: {}", e),
+            },
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("memory-info failed: {}", e),
             },
         }
     }

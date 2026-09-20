@@ -33,6 +33,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Get target app info | `get-target-info` | `qorvex target-info` |
 | Launch target app | `start-target [--force]` | `qorvex start-target [--force]` |
 | Terminate target app | `stop-target` | `qorvex stop-target` |
+| Target/device memory | `memory-info` | `qorvex memory-info` |
 
 > **No agent needed to choose an app:** `set-target`, `start-target` and
 > `stop-target` all work with only a device selected — launching and terminating

@@ -28,6 +28,7 @@
 //! - [`adb_forward`] - Single `adb forward` TCP tunnel to the on-device Android agent
 //! - [`session`] - Session state management with event broadcasting
 //! - [`ipc`] - Unix socket-based IPC for REPL and watcher communication
+//! - [`memory`] - Shared `MemoryInfo` report types for `memory-info`
 //! - [`action`] - Action types and logging for automation operations
 //!
 //! ## External Dependencies
@@ -59,6 +60,7 @@ pub mod driver;
 pub mod element;
 pub mod executor;
 pub mod ipc;
+pub mod memory;
 pub mod protocol;
 pub mod session;
 pub mod simctl;

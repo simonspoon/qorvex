@@ -30,6 +30,7 @@
 //! }
 //! ```
 
+use crate::memory::{AppMemory, DeviceMemory, MemoryInfo, MemoryPressure};
 use crate::simctl::InstalledApp;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -515,6 +516,156 @@ impl Adb {
         Ok(())
     }
 
+    /// Fraction of `MemAvailable`/`MemTotal` above which memory is considered
+    /// comfortable. Only used when the kernel exposes no PSI file.
+    const AVAILABLE_RATIO_NORMAL: f64 = 0.20;
+
+    /// Fraction of `MemAvailable`/`MemTotal` below which the device is
+    /// considered critically short. Only used when there is no PSI file.
+    const AVAILABLE_RATIO_CRITICAL: f64 = 0.10;
+
+    /// `full avg10` percentage above which some task was stalled on memory
+    /// often enough to call it warning-level pressure.
+    const PSI_FULL_AVG10_WARN: f64 = 1.0;
+
+    /// `full avg10` percentage above which every task was stalled on memory
+    /// for a tenth of the last ten seconds — the device is thrashing.
+    const PSI_FULL_AVG10_CRITICAL: f64 = 10.0;
+
+    /// Returns the target app's memory footprint and the device's memory
+    /// state, or `None` when the app is not running.
+    ///
+    /// Works the same for an emulator and a physical device — everything here
+    /// goes over `adb`. The iOS analogue is
+    /// [`crate::simctl::Simctl::memory_info`].
+    ///
+    /// # Errors
+    ///
+    /// - [`AdbError::Io`] if adb cannot be executed
+    /// - [`AdbError::CommandFailed`] if a command fails or its output cannot
+    ///   be parsed
+    pub fn memory_info(serial: &str, package: &str) -> Result<Option<MemoryInfo>, AdbError> {
+        let Some(pid) = Self::app_pid(serial, package)? else {
+            return Ok(None);
+        };
+
+        let meminfo = Command::new("adb")
+            .args(["-s", serial, "shell", "dumpsys", "meminfo", package])
+            .output()?;
+        let footprint_bytes =
+            Self::parse_dumpsys_meminfo(&String::from_utf8_lossy(&meminfo.stdout)).ok_or_else(
+                || AdbError::CommandFailed(format!("no TOTAL PSS in dumpsys meminfo {}", package)),
+            )?;
+
+        let proc_meminfo = Command::new("adb")
+            .args(["-s", serial, "shell", "cat", "/proc/meminfo"])
+            .output()?;
+        let (total_bytes, free_bytes) =
+            Self::parse_proc_meminfo(&String::from_utf8_lossy(&proc_meminfo.stdout)).ok_or_else(
+                || AdbError::CommandFailed("no MemTotal/MemAvailable in /proc/meminfo".to_string()),
+            )?;
+
+        // PSI is the better signal but is absent on older kernels and on some
+        // vendor builds, where `cat` simply fails; fall back to the headroom
+        // ratio rather than failing the whole report.
+        let psi = Command::new("adb")
+            .args(["-s", serial, "shell", "cat", "/proc/pressure/memory"])
+            .output()?;
+        let (pressure, pressure_source) =
+            Self::parse_psi_pressure(&String::from_utf8_lossy(&psi.stdout))
+                .map(|p| (p, "/proc/pressure/memory"))
+                .unwrap_or_else(|| {
+                    (
+                        Self::pressure_from_available(total_bytes, free_bytes),
+                        "MemAvailable/MemTotal",
+                    )
+                });
+
+        Ok(Some(MemoryInfo {
+            app: AppMemory {
+                pid,
+                footprint_bytes,
+                source: "dumpsys meminfo (TOTAL PSS)".to_string(),
+            },
+            device: DeviceMemory {
+                total_bytes,
+                free_bytes,
+                pressure,
+                source: format!("/proc/meminfo + {}", pressure_source),
+            },
+        }))
+    }
+
+    /// Extracts the `TOTAL PSS` figure from `dumpsys meminfo <package>` output
+    /// and converts it to bytes. dumpsys reports kilobytes, hence the × 1024.
+    ///
+    /// Returns `None` when the label is absent — which is what an empty or
+    /// error-shaped output looks like.
+    fn parse_dumpsys_meminfo(stdout: &str) -> Option<u64> {
+        stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("TOTAL PSS:"))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|kb| kb.parse::<u64>().ok())
+            .map(|kb| kb * 1024)
+    }
+
+    /// Extracts `(MemTotal, MemAvailable)` from `/proc/meminfo`, in bytes.
+    ///
+    /// Both lines are `MemTotal:  <n> kB`, hence the × 1024. Returns `None`
+    /// if either is missing: `MemAvailable` is absent on pre-3.14 kernels, and
+    /// guessing a substitute would be worse than saying so.
+    fn parse_proc_meminfo(stdout: &str) -> Option<(u64, u64)> {
+        let field = |label: &str| -> Option<u64> {
+            stdout
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(label)?.split_whitespace().next())
+                .and_then(|kb| kb.parse::<u64>().ok())
+                .map(|kb| kb * 1024)
+        };
+        Some((field("MemTotal:")?, field("MemAvailable:")?))
+    }
+
+    /// Derives pressure from `/proc/pressure/memory`'s `full avg10` value, the
+    /// percentage of the last ten seconds in which *every* runnable task was
+    /// stalled waiting on memory. Returns `None` when the file is missing or
+    /// unparseable, which is how callers know to fall back.
+    fn parse_psi_pressure(stdout: &str) -> Option<MemoryPressure> {
+        let avg10: f64 = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("full "))?
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("avg10="))?
+            .parse()
+            .ok()?;
+        Some(if avg10 >= Self::PSI_FULL_AVG10_CRITICAL {
+            MemoryPressure::Critical
+        } else if avg10 >= Self::PSI_FULL_AVG10_WARN {
+            MemoryPressure::Warn
+        } else {
+            MemoryPressure::Normal
+        })
+    }
+
+    /// Derives pressure from the share of memory still available: more than
+    /// [`Self::AVAILABLE_RATIO_NORMAL`] is normal, down to
+    /// [`Self::AVAILABLE_RATIO_CRITICAL`] is a warning, and below that is
+    /// critical. A zero `total` (an unparseable device) reads as normal —
+    /// absence of data is not evidence of pressure.
+    fn pressure_from_available(total_bytes: u64, free_bytes: u64) -> MemoryPressure {
+        if total_bytes == 0 {
+            return MemoryPressure::Normal;
+        }
+        let ratio = free_bytes as f64 / total_bytes as f64;
+        if ratio > Self::AVAILABLE_RATIO_NORMAL {
+            MemoryPressure::Normal
+        } else if ratio >= Self::AVAILABLE_RATIO_CRITICAL {
+            MemoryPressure::Warn
+        } else {
+            MemoryPressure::Critical
+        }
+    }
+
     /// Captures a screenshot of the device screen, independent of the agent.
     ///
     /// Runs `adb -s <serial> exec-out screencap -p` and returns the PNG bytes
@@ -855,5 +1006,121 @@ emulator-5554 device\n";
     fn test_parse_pidof_multiprocess_takes_first() {
         // A multi-process app prints every pid; the first is the main process.
         assert_eq!(Adb::parse_pidof("4321 4400 4501\n"), Some(4321));
+    }
+
+    // Real-shaped `dumpsys meminfo <package>` output, trimmed to the rows that
+    // matter for the TOTAL PSS read.
+    const SAMPLE_MEMINFO: &str = "\
+Applications Memory Usage (in Kilobytes):
+Uptime: 88412319 Realtime: 88412319
+
+** MEMINFO in pid 8421 [com.example.app] **
+                   Pss  Private  Private  SwapPss      Rss     Heap     Heap     Heap
+                 Total    Dirty    Clean    Dirty    Total     Size    Alloc     Free
+                ------   ------   ------   ------   ------   ------   ------   ------
+  Native Heap    38112    38044        0        0    41220    65536    44011    21524
+  Dalvik Heap    12904    12800        0        0    16384    24576    15012     9564
+        TOTAL   184320   150220     8192        0   210944    90112    59023    31088
+
+ App Summary
+                       Pss(KB)                        Rss(KB)
+                        ------                         ------
+           Java Heap:    12800                          16384
+         Native Heap:    38044                          41220
+
+         TOTAL PSS:   184320            TOTAL RSS:   210944       TOTAL SWAP PSS:        0
+";
+
+    const SAMPLE_PROC_MEMINFO: &str = "\
+MemTotal:        8123456 kB
+MemFree:          412000 kB
+MemAvailable:    2048000 kB
+Buffers:           12000 kB
+Cached:          1500000 kB
+";
+
+    const SAMPLE_PSI: &str = "\
+some avg10=4.21 avg60=1.02 avg300=0.33 total=98213
+full avg10=2.50 avg60=0.61 avg300=0.19 total=41002
+";
+
+    #[test]
+    fn test_parse_dumpsys_meminfo_total_pss() {
+        let bytes = Adb::parse_dumpsys_meminfo(SAMPLE_MEMINFO).unwrap();
+        // dumpsys reports kilobytes.
+        assert_eq!(bytes, 184320 * 1024);
+    }
+
+    #[test]
+    fn test_parse_dumpsys_meminfo_malformed() {
+        assert!(Adb::parse_dumpsys_meminfo("").is_none());
+        // What adb prints when the package has no running process.
+        assert!(Adb::parse_dumpsys_meminfo("No process found for: com.example.app\n").is_none());
+        assert!(Adb::parse_dumpsys_meminfo("         TOTAL PSS:   not-a-number\n").is_none());
+    }
+
+    #[test]
+    fn test_parse_proc_meminfo_total_and_available() {
+        let (total, available) = Adb::parse_proc_meminfo(SAMPLE_PROC_MEMINFO).unwrap();
+        assert_eq!(total, 8123456 * 1024);
+        assert_eq!(available, 2048000 * 1024);
+    }
+
+    #[test]
+    fn test_parse_proc_meminfo_without_mem_available() {
+        // Pre-3.14 kernels have no MemAvailable line.
+        let stdout = "MemTotal:        8123456 kB\nMemFree:          412000 kB\n";
+        assert!(Adb::parse_proc_meminfo(stdout).is_none());
+        assert!(Adb::parse_proc_meminfo("").is_none());
+    }
+
+    #[test]
+    fn test_parse_psi_pressure() {
+        assert_eq!(
+            Adb::parse_psi_pressure(SAMPLE_PSI),
+            Some(MemoryPressure::Warn)
+        );
+        assert_eq!(
+            Adb::parse_psi_pressure(
+                "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n\
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+            ),
+            Some(MemoryPressure::Normal)
+        );
+        assert_eq!(
+            Adb::parse_psi_pressure("full avg10=10.00 avg60=3.00 avg300=1.00 total=9\n"),
+            Some(MemoryPressure::Critical)
+        );
+        // No such file, or a kernel without PSI.
+        assert_eq!(Adb::parse_psi_pressure(""), None);
+        assert_eq!(
+            Adb::parse_psi_pressure("cat: /proc/pressure/memory: No such file or directory\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_pressure_from_available_thresholds() {
+        let total = 1000u64;
+        // > 20% available is normal; exactly 20% is already a warning.
+        assert_eq!(
+            Adb::pressure_from_available(total, 201),
+            MemoryPressure::Normal
+        );
+        assert_eq!(
+            Adb::pressure_from_available(total, 200),
+            MemoryPressure::Warn
+        );
+        // 10%-20% warns; just under 10% is critical.
+        assert_eq!(
+            Adb::pressure_from_available(total, 100),
+            MemoryPressure::Warn
+        );
+        assert_eq!(
+            Adb::pressure_from_available(total, 99),
+            MemoryPressure::Critical
+        );
+        // An unparseable device reads as normal rather than critical.
+        assert_eq!(Adb::pressure_from_available(0, 0), MemoryPressure::Normal);
     }
 }
