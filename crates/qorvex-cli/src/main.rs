@@ -111,6 +111,28 @@ impl From<PlatformArg> for Platform {
     }
 }
 
+/// Which container `app-container` reports, matching the optional third
+/// argument of `simctl get_app_container`.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ContainerArg {
+    /// The installed `.app` bundle (simctl's default).
+    App,
+    /// The app's data container.
+    Data,
+    /// The app's shared app-group containers.
+    Groups,
+}
+
+impl ContainerArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            ContainerArg::App => "app",
+            ContainerArg::Data => "data",
+            ContainerArg::Groups => "groups",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Tap an element by ID or label
@@ -318,6 +340,49 @@ enum Command {
         /// Device UDID
         udid: String,
     },
+
+    /// Shut down the session's selected simulator
+    ///
+    /// Acts only on the device this session selected with use-device or
+    /// boot-device; it takes no UDID, so it can never stop another session's
+    /// simulator.
+    #[command(name = "shutdown-device")]
+    ShutdownDevice,
+
+    /// Delete the session's selected simulator
+    ///
+    /// Acts only on the device this session selected, and on exactly one
+    /// device. The selection is dropped once the simulator is gone.
+    #[command(name = "delete-device")]
+    DeleteDevice,
+
+    /// Install an app bundle on the session's selected simulator
+    #[command(name = "install-app")]
+    InstallApp {
+        /// Path to the .app bundle
+        path: String,
+    },
+
+    /// Uninstall an app from the session's selected simulator
+    #[command(name = "uninstall-app")]
+    UninstallApp {
+        /// Bundle identifier (e.g., com.example.MyApp)
+        bundle_id: String,
+    },
+
+    /// Print the path of an app's container on the selected simulator
+    #[command(name = "app-container")]
+    AppContainer {
+        /// Bundle identifier (e.g., com.example.MyApp)
+        bundle_id: String,
+        /// Which container to report (default: app)
+        #[arg(value_enum)]
+        container: Option<ContainerArg>,
+    },
+
+    /// List apps installed on the session's selected simulator
+    #[command(name = "list-apps")]
+    ListApps,
 
     /// Stop a simulator's runaway `mediaanalysisd` daemon
     #[command(name = "quiet-device")]
@@ -879,6 +944,48 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             .await
         }
         Command::ListPhysicalDevices => list_physical_devices(&mut client, &cli).await,
+        Command::ShutdownDevice => {
+            send_command(&mut client, IpcRequest::ShutdownDevice, &cli).await
+        }
+        Command::DeleteDevice => send_command(&mut client, IpcRequest::DeleteDevice, &cli).await,
+        Command::InstallApp { ref path } => {
+            // The server is a long-lived daemon with its own working
+            // directory, so a relative path has to be resolved here, in the
+            // shell the user typed it in.
+            let resolved = std::fs::canonicalize(path)
+                .map_err(|e| CliError::ActionFailed(format!("{}: {}", path, e)))?;
+            send_command(
+                &mut client,
+                IpcRequest::InstallApp {
+                    path: resolved.to_string_lossy().to_string(),
+                },
+                &cli,
+            )
+            .await
+        }
+        Command::UninstallApp { ref bundle_id } => {
+            send_command(
+                &mut client,
+                IpcRequest::UninstallApp {
+                    bundle_id: bundle_id.clone(),
+                },
+                &cli,
+            )
+            .await
+        }
+        Command::AppContainer {
+            ref bundle_id,
+            container,
+        } => {
+            app_container(
+                &mut client,
+                &cli,
+                bundle_id.clone(),
+                container.map(|c| c.as_str().to_string()),
+            )
+            .await
+        }
+        Command::ListApps => list_apps(&mut client, &cli).await,
         // These commands are handled before IPC connection above
         Command::ListSessions
         | Command::ListDevices { .. }
@@ -1577,6 +1684,69 @@ async fn list_physical_devices(client: &mut IpcClient, cli: &Cli) -> Result<(), 
             }
             Ok(())
         }
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Print the path of an app container on the selected simulator.
+async fn app_container(
+    client: &mut IpcClient,
+    cli: &Cli,
+    bundle_id: String,
+    container: Option<String>,
+) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::AppContainer {
+            bundle_id,
+            container,
+        })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::AppContainer { path } => {
+            if cli.format == OutputFormat::Json {
+                println!("{}", serde_json::json!({ "path": path }));
+            } else {
+                println!("{}", path);
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { message, .. } => Err(CliError::ActionFailed(message)),
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// List the apps installed on the selected simulator.
+async fn list_apps(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::ListApps)
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::AppList { apps } => {
+            if cli.format == OutputFormat::Json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&apps)
+                        .map_err(|e| CliError::Protocol(e.to_string()))?
+                );
+            } else if apps.is_empty() {
+                eprintln!("No apps installed");
+            } else {
+                for app in &apps {
+                    println!(
+                        "{} -- {} ({})",
+                        app.bundle_id, app.display_name, app.app_type
+                    );
+                }
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { message, .. } => Err(CliError::ActionFailed(message)),
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }

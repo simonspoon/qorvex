@@ -646,6 +646,17 @@ impl ActionExecutor {
             | ActionType::GetTargetInfo => ExecutionResult::failure(
                 "Session management actions must be handled by the session manager",
             ),
+
+            // Device and app management actions run host-side through simctl
+            // on the server, never through the automation driver.
+            ActionType::ShutdownDevice
+            | ActionType::DeleteDevice
+            | ActionType::InstallApp { .. }
+            | ActionType::UninstallApp { .. }
+            | ActionType::AppContainer { .. }
+            | ActionType::ListApps => {
+                ExecutionResult::failure("Device management actions must be handled by the server")
+            }
         }
     }
 }

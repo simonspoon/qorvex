@@ -133,6 +133,25 @@ impl LogConverter {
             }),
             ActionType::StopTarget => Some("qorvex stop-target".to_string()),
             ActionType::GetTargetInfo => Some("qorvex get-target-info".to_string()),
+            ActionType::ShutdownDevice => Some("qorvex shutdown-device".to_string()),
+            ActionType::DeleteDevice => Some("qorvex delete-device".to_string()),
+            ActionType::InstallApp { path } => {
+                Some(format!("qorvex install-app {}", shell_escape(path)))
+            }
+            ActionType::UninstallApp { bundle_id } => {
+                Some(format!("qorvex uninstall-app {}", shell_escape(bundle_id)))
+            }
+            ActionType::AppContainer {
+                bundle_id,
+                container,
+            } => {
+                let mut cmd = format!("qorvex app-container {}", shell_escape(bundle_id));
+                if let Some(kind) = container {
+                    cmd.push_str(&format!(" {}", shell_escape(kind)));
+                }
+                Some(cmd)
+            }
+            ActionType::ListApps => Some("qorvex list-apps".to_string()),
             ActionType::LogComment { message } => Some(format!("# {}", message)),
             // Skip session management actions
             ActionType::StartSession | ActionType::EndSession | ActionType::Quit => None,

@@ -163,6 +163,8 @@ impl ServerState {
             IpcRequest::BootDevice { udid, platform } => {
                 self.handle_boot_device(&udid, platform).await
             }
+            IpcRequest::ShutdownDevice => self.handle_shutdown_device().await,
+            IpcRequest::DeleteDevice => self.handle_delete_device().await,
 
             // ── Agent Management ────────────────────────────────────────
             IpcRequest::StartAgent {
@@ -183,6 +185,18 @@ impl ServerState {
             // ── Target Info ─────────────────────────────────────────────
             IpcRequest::GetTargetInfo => self.handle_get_target_info().await,
             IpcRequest::GetMemoryInfo => self.handle_memory_info().await,
+
+            // ── App Management ──────────────────────────────────────────
+            IpcRequest::InstallApp { path } => self.handle_install_app(&path).await,
+            IpcRequest::UninstallApp { bundle_id } => self.handle_uninstall_app(&bundle_id).await,
+            IpcRequest::AppContainer {
+                bundle_id,
+                container,
+            } => {
+                self.handle_app_container(&bundle_id, container.as_deref())
+                    .await
+            }
+            IpcRequest::ListApps => self.handle_list_apps().await,
 
             // ── Configuration ───────────────────────────────────────────
             IpcRequest::SetTarget { bundle_id } => self.handle_set_target(&bundle_id).await,
@@ -1348,6 +1362,276 @@ impl ServerState {
                 message: format!("memory-info failed: {}", e),
             },
         }
+    }
+
+    // ── Simulator Device / App Management ───────────────────────────────
+
+    /// The simulator this session selected, or the message to fail with when
+    /// there is none.
+    ///
+    /// Every `simctl` wrapper below routes through here, which is what keeps
+    /// them session-scoped: they take no UDID from the caller, so a session can
+    /// only ever act on the device its own `use-device`/`boot-device` chose,
+    /// and never on `booted` or `all`. A physical iOS device also sets
+    /// `simulator_udid`, so — as in [`Self::handle_memory_info`] — it is
+    /// rejected first rather than handed to simctl.
+    fn selected_simulator(&self) -> Result<String, String> {
+        if self.is_physical_device {
+            return Err(
+                "Selected device is a physical device; this command is simulator-only.".to_string(),
+            );
+        }
+        match self.simulator_udid {
+            Some(ref udid) => Ok(udid.clone()),
+            None => Err("No device selected.".to_string()),
+        }
+    }
+
+    /// Run a blocking `simctl` call off the async runtime, flattening the join
+    /// error into the same `String` channel as a simctl failure.
+    async fn run_simctl<T, F>(op: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, SimctlError> + Send + 'static,
+        T: Send + 'static,
+    {
+        match tokio::task::spawn_blocking(op).await {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    async fn handle_shutdown_device(&self) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let shutdown_udid = udid.clone();
+        let result = Self::run_simctl(move || Simctl::shutdown(&shutdown_udid)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Shut down {}", udid),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to shut down device: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::ShutdownDevice, action_result, None, None)
+            .await;
+        response
+    }
+
+    /// Delete the selected simulator and drop the selection.
+    ///
+    /// The UDID does not exist once the device is gone, so leaving it selected
+    /// would point every later command at a device simctl cannot resolve.
+    async fn handle_delete_device(&mut self) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let delete_udid = udid.clone();
+        let result = Self::run_simctl(move || Simctl::delete(&delete_udid)).await;
+        let (response, action_result) = match result {
+            Ok(()) => {
+                self.simulator_udid = None;
+                (
+                    IpcResponse::CommandResult {
+                        success: true,
+                        message: format!("Deleted {}", udid),
+                    },
+                    ActionResult::Success,
+                )
+            }
+            Err(e) => {
+                let msg = format!("Failed to delete device: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::DeleteDevice, action_result, None, None)
+            .await;
+        response
+    }
+
+    async fn handle_install_app(&self, path: &str) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let app_path = path.to_string();
+        let result = Self::run_simctl(move || Simctl::install_app(&udid, &app_path)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Installed {}", path),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to install app: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::InstallApp {
+                path: path.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_uninstall_app(&self, bundle_id: &str) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let bid = bundle_id.to_string();
+        let result = Self::run_simctl(move || Simctl::uninstall_app(&udid, &bid)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Uninstalled {}", bundle_id),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to uninstall app: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::UninstallApp {
+                bundle_id: bundle_id.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_app_container(&self, bundle_id: &str, container: Option<&str>) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let bid = bundle_id.to_string();
+        let kind = container.map(|c| c.to_string());
+        let result =
+            Self::run_simctl(move || Simctl::app_container(&udid, &bid, kind.as_deref())).await;
+        let (response, action_result) = match result {
+            Ok(path) => (IpcResponse::AppContainer { path }, ActionResult::Success),
+            Err(e) => {
+                let msg = format!("Failed to get app container: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::AppContainer {
+                bundle_id: bundle_id.to_string(),
+                container: container.map(|c| c.to_string()),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_list_apps(&self) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let result = Self::run_simctl(move || Simctl::list_apps(&udid)).await;
+        let (response, action_result) = match result {
+            Ok(apps) => (IpcResponse::AppList { apps }, ActionResult::Success),
+            Err(e) => {
+                let msg = format!("Failed to list apps: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::ListApps, action_result, None, None)
+            .await;
+        response
     }
 
     // ── On-Demand Fetching ──────────────────────────────────────────────

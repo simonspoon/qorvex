@@ -279,6 +279,63 @@ impl Simctl {
         Ok(())
     }
 
+    /// Shuts down a simulator.
+    ///
+    /// Stops the specified simulator. If the simulator is already shut down,
+    /// this method returns successfully (the "already shutdown" state is not
+    /// treated as an error), mirroring [`Simctl::boot`].
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the simulator to shut down
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error (except for "already shutdown")
+    pub fn shutdown(udid: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "shutdown", udid])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Already shut down is not an error
+            if !stderr.contains("current state: Shutdown") {
+                return Err(SimctlError::CommandFailed(stderr.to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Deletes a simulator, erasing its data and removing it from the device
+    /// list.
+    ///
+    /// Takes a single UDID: `simctl delete` accepts several devices (and the
+    /// `all` keyword) at once, which is deliberately not exposed — a caller
+    /// can only ever delete the one device it names.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the simulator to delete
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn delete(udid: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "delete", udid])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Stops the simulator runtime's `mediaanalysisd`.
     ///
     /// The daemon indexes simulator media in the background and has been
@@ -643,6 +700,92 @@ impl Simctl {
             }
         }
         Ok(())
+    }
+
+    /// Installs an app bundle on a simulator.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `app_path` - Path to the `.app` bundle to install
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn install_app(udid: &str, app_path: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "install", udid, app_path])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Uninstalls an app from a simulator.
+    ///
+    /// Unlike [`Simctl::terminate_app`], an app that is not installed is
+    /// reported as a failure rather than swallowed — a typo'd bundle id should
+    /// not look like a successful uninstall.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `bundle_id` - The bundle identifier of the app to uninstall
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn uninstall_app(udid: &str, bundle_id: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "uninstall", udid, bundle_id])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns the filesystem path of one of an installed app's containers.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `bundle_id` - The bundle identifier of the installed app
+    /// * `container` - Which container to report: `"app"` (the installed
+    ///   bundle), `"data"`, or `"groups"`. `None` leaves the choice to simctl,
+    ///   whose own default is `app`.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error (including
+    ///   an app that is not installed)
+    pub fn app_container(
+        udid: &str,
+        bundle_id: &str,
+        container: Option<&str>,
+    ) -> Result<String, SimctlError> {
+        let mut args = vec!["simctl", "get_app_container", udid, bundle_id];
+        if let Some(kind) = container {
+            args.push(kind);
+        }
+        let output = Command::new("xcrun").args(&args).output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     /// Lists installed apps on a booted simulator.

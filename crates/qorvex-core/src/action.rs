@@ -186,6 +186,36 @@ pub enum ActionType {
     /// Get metadata about the currently targeted application.
     GetTargetInfo,
 
+    /// Shut down the session's selected simulator.
+    ShutdownDevice,
+
+    /// Delete the session's selected simulator.
+    DeleteDevice,
+
+    /// Install an app bundle on the session's selected simulator.
+    InstallApp {
+        /// Absolute path to the `.app` bundle that was installed.
+        path: String,
+    },
+
+    /// Uninstall an app from the session's selected simulator.
+    UninstallApp {
+        /// The bundle identifier of the app to uninstall.
+        bundle_id: String,
+    },
+
+    /// Look up the path of one of an app's containers on the selected simulator.
+    AppContainer {
+        /// The bundle identifier of the installed app.
+        bundle_id: String,
+        /// Which container was asked for: `app`, `data` or `groups`. `None`
+        /// means simctl's default (`app`).
+        container: Option<String>,
+    },
+
+    /// List the apps installed on the session's selected simulator.
+    ListApps,
+
     /// Quit the REPL entirely.
     Quit,
 }
@@ -210,6 +240,12 @@ impl ActionType {
             ActionType::StartTarget { .. } => "start_target",
             ActionType::StopTarget => "stop_target",
             ActionType::GetTargetInfo => "get_target_info",
+            ActionType::ShutdownDevice => "shutdown_device",
+            ActionType::DeleteDevice => "delete_device",
+            ActionType::InstallApp { .. } => "install_app",
+            ActionType::UninstallApp { .. } => "uninstall_app",
+            ActionType::AppContainer { .. } => "app_container",
+            ActionType::ListApps => "list_apps",
             ActionType::StartSession => "start_session",
             ActionType::EndSession => "end_session",
             ActionType::Quit => "quit",
@@ -233,6 +269,12 @@ impl ActionType {
             ActionType::StartTarget { .. } => "StartTarget",
             ActionType::StopTarget => "StopTarget",
             ActionType::GetTargetInfo => "TargetInfo",
+            ActionType::ShutdownDevice => "ShutdownDevice",
+            ActionType::DeleteDevice => "DeleteDevice",
+            ActionType::InstallApp { .. } => "InstallApp",
+            ActionType::UninstallApp { .. } => "UninstallApp",
+            ActionType::AppContainer { .. } => "AppContainer",
+            ActionType::ListApps => "ListApps",
             ActionType::StartSession => "Start",
             ActionType::EndSession => "End",
             ActionType::Quit => "Quit",
@@ -272,9 +314,16 @@ impl ActionType {
             }
             ActionType::LogComment { message } => message.clone(),
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
-            ActionType::StartTarget { .. } | ActionType::StopTarget | ActionType::GetTargetInfo => {
-                String::new()
+            ActionType::InstallApp { path } => path.clone(),
+            ActionType::UninstallApp { bundle_id } | ActionType::AppContainer { bundle_id, .. } => {
+                bundle_id.clone()
             }
+            ActionType::StartTarget { .. }
+            | ActionType::StopTarget
+            | ActionType::GetTargetInfo
+            | ActionType::ShutdownDevice
+            | ActionType::DeleteDevice
+            | ActionType::ListApps => String::new(),
             _ => String::new(),
         }
     }

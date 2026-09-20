@@ -118,6 +118,12 @@ Available commands:
 - `list-physical-devices` — List physical iOS devices connected via USB or network
 - `use-device <udid>` — Select a simulator or physical device by UDID
 - `boot-device <udid>` — Boot and select a simulator. With `--platform android <avd-or-serial>`, boots an Android emulator by AVD name (or selects a running adb serial).
+- `shutdown-device` — Shut down the simulator this session selected. Takes no UDID, so it can never stop another session's simulator.
+- `delete-device` — Delete the simulator this session selected, and drop the selection. Takes no UDID and deletes exactly one device.
+- `install-app <path.app>` — Install an app bundle on the selected simulator (relative paths are resolved client-side)
+- `uninstall-app <bundle_id>` — Uninstall an app from the selected simulator
+- `app-container <bundle_id> [app|data|groups]` — Print the path of one of an app's containers on the selected simulator (default: `app`)
+- `list-apps` — List the apps installed on the selected simulator
 - `start-agent` — Start agent using configured source dir, or connect to external agent. Add `--platform android` to build/launch the Kotlin agent (requires `android_agent_source_dir` in config).
 - `start-agent <path>` — Build and launch the agent from a project directory (Swift for iOS; pass `--platform android` for the Gradle/Kotlin agent project)
 - `stop-agent` — Stop a managed agent process

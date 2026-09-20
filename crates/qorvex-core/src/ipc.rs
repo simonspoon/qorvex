@@ -182,6 +182,16 @@ pub enum IpcRequest {
         #[serde(default)]
         platform: Platform,
     },
+    /// Shut down the session's selected simulator.
+    ///
+    /// Takes no UDID: it acts on `simulator_udid` and nothing else, so a
+    /// session can never shut down a simulator another session booted.
+    ShutdownDevice,
+    /// Delete the session's selected simulator.
+    ///
+    /// Takes no UDID, for the same reason as [`IpcRequest::ShutdownDevice`],
+    /// and deliberately has no multi-device form.
+    DeleteDevice,
 
     // --- Agent Management ---
     /// Start or connect to the automation agent.
@@ -226,6 +236,27 @@ pub enum IpcRequest {
     /// Gathered host-side via `simctl`/`ps`/`vm_stat` (iOS simulator) or `adb`
     /// (Android), so it needs no agent — only a device and a target.
     GetMemoryInfo,
+
+    // --- App Management ---
+    /// Install an app bundle on the session's selected simulator.
+    ///
+    /// `path` must already be absolute: the server is a long-lived daemon with
+    /// its own working directory, so the client resolves the path.
+    InstallApp { path: String },
+    /// Uninstall an app from the session's selected simulator.
+    UninstallApp { bundle_id: String },
+    /// Get the filesystem path of one of an app's containers on the session's
+    /// selected simulator.
+    ///
+    /// `container` is `app`, `data` or `groups`; `None` uses simctl's default
+    /// (`app`).
+    AppContainer {
+        bundle_id: String,
+        #[serde(default)]
+        container: Option<String>,
+    },
+    /// List the apps installed on the session's selected simulator.
+    ListApps,
 
     // --- Configuration ---
     /// Set the target app bundle ID.
@@ -346,6 +377,12 @@ pub enum IpcResponse {
         devices: Vec<crate::simctl::SimulatorDevice>,
         /// Cached Android devices/emulators (adb serials) for completion.
         android_devices: Vec<crate::adb_device::AndroidDevice>,
+    },
+
+    /// Filesystem path of an app container on the active device.
+    AppContainer {
+        /// Absolute path reported by `simctl get_app_container`.
+        path: String,
     },
 
     /// Installed apps/packages on the active device for `set-target`

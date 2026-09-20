@@ -22,6 +22,45 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | List physical devices | `list-physical-devices` | `qorvex list-physical-devices` |
 | Select device | `use-device <udid>` | `qorvex use-device <udid>` |
 | Boot + select | `boot-device <udid>` | `qorvex boot-device <udid>` |
+| Shut down selected device | — | `qorvex shutdown-device` |
+| Delete selected device | — | `qorvex delete-device` |
+
+> **The device commands are session-scoped:** `shutdown-device` and
+> `delete-device` take no UDID. They act on the simulator this session selected
+> with `use-device` or `boot-device` and on nothing else, so one session can
+> never shut down or delete another session's simulator. There is no
+> multi-device form; to act on a different simulator, select it first.
+> ```bash
+> $ qorvex use-device <udid>
+> $ qorvex shutdown-device
+> Shut down <udid>
+> ```
+> With no device selected they fail with `No device selected.`
+
+## App Management
+
+| Command | REPL | CLI |
+|---------|------|-----|
+| Install an app bundle | — | `qorvex install-app <path.app>` |
+| Uninstall an app | — | `qorvex uninstall-app <bundle_id>` |
+| Get an app container path | — | `qorvex app-container <bundle_id> [app\|data\|groups]` |
+| List installed apps | — | `qorvex list-apps` |
+
+These wrap `simctl install`, `uninstall`, `get_app_container` and `listapps` on
+the session's selected simulator — no agent needed, and no UDID to pass:
+
+```bash
+$ qorvex install-app ./build/MyApp.app       # relative paths are resolved client-side
+$ qorvex app-container com.example.MyApp data
+/Users/me/Library/Developer/CoreSimulator/Devices/.../data/Containers/Data/Application/...
+$ qorvex list-apps
+com.example.MyApp -- MyApp (User)
+$ qorvex --format json list-apps
+[{"bundle_id":"com.example.MyApp","display_name":"MyApp","app_type":"User"}]
+```
+
+`app-container` defaults to the `app` container (the installed `.app` bundle),
+matching `simctl get_app_container`.
 
 ## Agent Management
 

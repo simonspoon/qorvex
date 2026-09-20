@@ -504,6 +504,18 @@ fn matrix_covers_every_action_type() {
     // construction — the executor handles them backend-agnostically).
     let session_control = ["start_session", "end_session", "quit"];
 
+    // Device/app management actions: host-side `simctl` on the server, with no
+    // agent protocol round-trip and no Android leg, so they are not part of the
+    // per-action driver matrix either.
+    let device_management = [
+        "shutdown_device",
+        "delete_device",
+        "install_app",
+        "uninstall_app",
+        "app_container",
+        "list_apps",
+    ];
+
     // Exhaustive match: adding a new ActionType variant fails to compile until
     // it is classified here, guaranteeing the matrix stays complete.
     fn classify(a: &ActionType) -> &'static str {
@@ -524,6 +536,12 @@ fn matrix_covers_every_action_type() {
             | ActionType::GetTargetInfo
             | ActionType::LogComment { .. } => "driver",
             ActionType::StartSession | ActionType::EndSession | ActionType::Quit => "session",
+            ActionType::ShutdownDevice
+            | ActionType::DeleteDevice
+            | ActionType::InstallApp { .. }
+            | ActionType::UninstallApp { .. }
+            | ActionType::AppContainer { .. }
+            | ActionType::ListApps => "device",
         }
     }
 
@@ -539,10 +557,16 @@ fn matrix_covers_every_action_type() {
         "quit must be a session-control action"
     );
 
-    // Total action count is the sum of the two disjoint classes.
     assert_eq!(
-        covered_via_driver.len() + session_control.len(),
-        18,
+        classify(&ActionType::ShutdownDevice),
+        "device",
+        "shutdown-device must be a device-management action"
+    );
+
+    // Total action count is the sum of the three disjoint classes.
+    assert_eq!(
+        covered_via_driver.len() + session_control.len() + device_management.len(),
+        24,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

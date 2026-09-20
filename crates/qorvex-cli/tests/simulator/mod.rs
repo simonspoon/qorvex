@@ -1,6 +1,7 @@
 pub mod harness;
 mod test_animation;
 mod test_controls;
+mod test_device_commands;
 mod test_dynamic;
 mod test_gestures;
 mod test_meta;
