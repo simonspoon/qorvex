@@ -1,4 +1,4 @@
-use super::harness::{harness, run, run_fail, run_json};
+use super::harness::{harness, run, run_fail, run_json, testapp_path};
 
 /// The testapp the harness installs, used as a known-present bundle id.
 const TESTAPP_BUNDLE_ID: &str = "com.qorvex.testapp";
@@ -75,18 +75,16 @@ fn test_app_container_unknown_bundle_fails() {
 #[ignore]
 fn test_uninstall_then_reinstall_testapp() {
     harness();
-    let app_path = run(&["app-container", TESTAPP_BUNDLE_ID, "app"])
-        .trim()
-        .to_string();
-
     run(&["uninstall-app", TESTAPP_BUNDLE_ID]);
     assert!(
         !run(&["list-apps"]).contains(TESTAPP_BUNDLE_ID),
         "testapp should be gone after uninstall-app"
     );
 
-    // Put it back: the rest of the suite drives this app.
-    run(&["install-app", &app_path]);
+    // Put it back from the host build product: uninstalling deletes the
+    // on-device bundle, so the container path is no longer installable.
+    let app_path = testapp_path();
+    run(&["install-app", &app_path.to_string_lossy()]);
     assert!(
         run(&["list-apps"]).contains(TESTAPP_BUNDLE_ID),
         "testapp should be back after install-app"

@@ -192,10 +192,15 @@ fn boot_device(udid: &str) -> bool {
     booted_here
 }
 
+/// Host path of the testapp build product.
+pub fn testapp_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../qorvex-testapp/.build/Build/Products/Debug-iphonesimulator/QorvexTestApp.app")
+}
+
 /// Install the testapp build product on `udid`.
 fn install_testapp(udid: &str) {
-    let app = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../qorvex-testapp/.build/Build/Products/Debug-iphonesimulator/QorvexTestApp.app");
+    let app = testapp_path();
     assert!(
         app.is_dir(),
         "qorvex-testapp is not built. Build it with: make -C qorvex-testapp build"
