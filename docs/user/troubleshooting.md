@@ -226,11 +226,11 @@ The element didn't appear within the timeout. Increase timeout with `set-timeout
 
 ## IPC Connection Issues
 
-**Symptoms:** qorvex-cli or qorvex-live can't connect
+**Symptoms:** qorvex-cli can't connect
 
 **Check:**
 
-1. Is a REPL session running? The CLI and Live TUI connect via IPC to the REPL
+1. Is a REPL session running? The CLI connects via IPC to the REPL
 2. Check socket file: `ls ~/.qorvex/qorvex_*.sock`
 3. Wrong session name? Use `-s session-name` to specify, or set `$QORVEX_SESSION`
 4. List active sessions: `qorvex list-sessions`

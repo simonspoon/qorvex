@@ -8,15 +8,13 @@ iOS Simulator and device automation toolkit for macOS.
 
 ## Overview
 
-Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with five crates and a Swift agent:
+Qorvex provides programmatic control over iOS Simulators and physical devices through a Rust workspace with four crates and a Swift agent:
 
 - **qorvex-core** — Core library with driver abstraction, protocol, session, IPC, and execution engine
 - **qorvex-server** — Standalone automation server daemon; manages sessions, agent lifecycle, and IPC
 - **qorvex-repl** — TUI REPL client for manual testing; auto-launches the server if needed
-- **qorvex-live** — TUI client with inline screenshot rendering and action log monitoring
 - **qorvex-cli** — Scriptable CLI client for automation pipelines, including JSONL log-to-script conversion
 - **qorvex-agent** — Swift XCTest agent for native iOS accessibility automation (not a Cargo crate)
-- **qorvex-streamer** — ScreenCaptureKit-based live video streamer for Simulator windows (Swift, macOS 13+)
 - **qorvex-testapp** — SwiftUI iOS test app covering all automation actions; use it to verify qorvex locally
 
 ### Automation backend
@@ -34,7 +32,6 @@ Qorvex uses a native Swift XCTest agent behind the `AutomationDriver` trait:
 - macOS with Xcode and iOS Simulators installed
 - Rust 1.70+
 - **For Swift agent**: [xcodegen](https://github.com/yonaskolb/XcodeGen) and Xcode (see `qorvex-agent/README.md`)
-- **For qorvex-streamer**: macOS 13+ and Screen Recording permission
 - **For physical devices**: iOS device with developer mode enabled; connected via USB or on the same WiFi network (iOS 17+); an Apple Development Team ID set as `development_team` in `~/.qorvex/config.json` (see [Directory Structure](#directory-structure)) — physical-device agent builds must be code signed
 
 ## Installation
@@ -51,7 +48,7 @@ Download the latest tarball from [Releases](https://github.com/simonspoon/qorvex
 
 ```bash
 tar xzf qorvex-macos-arm64.tar.gz
-mv qorvex-server qorvex-repl qorvex-live qorvex qorvex-streamer ~/.cargo/bin/
+mv qorvex-server qorvex-repl qorvex ~/.cargo/bin/
 ```
 
 The tarball includes the agent source in `agent/`. To build it manually:
@@ -68,14 +65,13 @@ xcodebuild build-for-testing \
 ### From source
 
 ```bash
-# Install everything: Rust binaries, Swift streamer, Swift agent (simulator only —
+# Install everything: Rust binaries, Swift agent (simulator only —
 # the physical-device runner is built on first use so it carries your signing team)
 ./install.sh
 
 # Or install Rust crates individually
 cargo install --path crates/qorvex-server
 cargo install --path crates/qorvex-repl
-cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
 ```
 
@@ -167,24 +163,6 @@ Available commands:
 - `log-comment <text>` — Add a comment to the action log
 - `help` — Show available commands
 - `quit` — Exit
-
-### Live TUI
-
-Monitor a session in real-time with a live video feed and action log:
-
-```bash
-qorvex-live            # live feed at 15 fps (default)
-qorvex-live --fps 30   # higher frame rate
-qorvex-live --no-streamer  # polling fallback (no Screen Recording permission needed)
-qorvex-live --batch --duration 10  # print session events as JSONL for 10 seconds
-```
-
-`qorvex-live` automatically launches `qorvex-streamer` to capture the Simulator window via ScreenCaptureKit — zero impact on the automation session. Falls back to polling if the streamer binary is not found or Screen Recording permission is denied.
-
-Controls:
-- `q` — Quit
-- `r` — Refresh screenshot (polling fallback only)
-- Arrow keys — Scroll action log
 
 ### CLI
 
@@ -333,25 +311,24 @@ done
 ```
 ┌──────────────┐   IPC    ┌─────────────────────────┐
 │ qorvex-repl  │─────────►│                         │
-└──────────────┘          │     qorvex-server        │
-┌──────────────┐   IPC    │  (manages sessions,      │
-│ qorvex-live  │─────────►│   agent lifecycle, IPC)  │
-│              │          │                         │
-│   spawns ▼   │          └───────────┬─────────────┘
-│ qorvex-      │  Unix sock             TCP 8080 │
-│  streamer ───┘──────────────┐          ▼
-└──────────────┘  JPEG frames │  ┌─────────────────┐
-┌──────────────┐   IPC        │  │  qorvex-agent   │
-│ qorvex-cli   │──────────────┘  │  (Swift/XCTest) │
-└──────────────┘             └────────┬────────┘
-                                       │ XCUIElement
-                                    simctl / USB
-                                    (usbmuxd)
-                                       │
-                              iOS Simulator / Device
+└──────────────┘          │     qorvex-server       │
+┌──────────────┐   IPC    │  (manages sessions,     │
+│ qorvex-cli   │─────────►│   agent lifecycle, IPC) │
+└──────────────┘          └───────────┬─────────────┘
+                                      │ TCP 8080
+                                      ▼
+                             ┌─────────────────┐
+                             │  qorvex-agent   │
+                             │  (Swift/XCTest) │
+                             └────────┬────────┘
+                                      │ XCUIElement
+                                   simctl / USB
+                                   (usbmuxd)
+                                      │
+                             iOS Simulator / Device
 ```
 
-`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL, Live TUI, and CLI are all IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it connects via Bonjour mDNS (`<Name>.local`), which works for both WiFi and USB-connected devices.
+`qorvex-server` runs the `IpcServer` and manages session state, agent lifecycle, and automation execution. The REPL and CLI are both IPC clients. `AgentDriver` communicates with the Swift agent over a binary TCP protocol; for physical devices it connects via Bonjour mDNS (`<Name>.local`), which works for both WiFi and USB-connected devices.
 
 ### Directory Structure
 
@@ -362,7 +339,6 @@ Qorvex stores runtime files in `~/.qorvex/`, or in `$QORVEX_HOME` when that is s
 ├── config.json                  # Persistent config (agent_source_dir, etc.)
 ├── qorvex_default.sock          # Unix socket for "default" session
 ├── qorvex_my-session.sock       # Unix socket for "my-session"
-├── streamer_default.sock        # Live video socket for "default" session (qorvex-live)
 └── logs/
     ├── default_20250101_120000.jsonl
     └── my-session_20250101_130000.jsonl
@@ -371,7 +347,7 @@ Qorvex stores runtime files in `~/.qorvex/`, or in `$QORVEX_HOME` when that is s
 - **Config** (`~/.qorvex/config.json`) — Persistent settings. Stores `agent_source_dir` so that `start-session` and `start-agent` can auto-build the Swift agent. Written by `install.sh`. When `agent_source_dir` is not set, the server automatically checks for a Homebrew-installed agent at `HOMEBREW_PREFIX/share/qorvex/agent`.
   - **iOS signing keys** (used for physical devices only — simulator builds are unsigned): `development_team` (your 10-character Apple Team ID — **required** for any physical iOS device; find it in Xcode ▸ Settings ▸ Accounts or at developer.apple.com/account under Membership details). Without it, qorvex fails fast with a clear error rather than building a runner signed with the wrong identity. `agent_bundle_id` (optional override, e.g. `"com.example.qorvex.agent"`) is needed when the default App ID `com.qorvex.agent` is already registered to another team, which blocks automatic signing for yours; qorvex renames the agent app and its UI-test runner together (they become `<id>` and `<id>.uitests`).
   - **Android keys** (used by `--platform android` commands): `android_agent_source_dir` (path to the Kotlin agent project containing `gradlew` — **required** to build/launch the Android agent), `android_sdk_root` (optional Android SDK path; only needed when `adb`/`emulator` are not on `PATH`), and `android_device_port` (the agent's device-side TCP port, defaults to `8080`). Missing or invalid Android config produces a clear validation error when `start-agent --platform android` runs, not a downstream Gradle/adb crash.
-- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI and Live TUI use these to communicate.
+- **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI uses these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.
 
 Use `qorvex list-sessions` to discover running sessions by scanning for active socket files.

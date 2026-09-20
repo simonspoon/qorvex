@@ -4,7 +4,6 @@ set -euo pipefail
 CRATES=(
     qorvex-server
     qorvex-repl
-    qorvex-live
     qorvex-cli
 )
 
@@ -14,19 +13,6 @@ for crate in "${CRATES[@]}"; do
 done
 
 echo "All crates installed."
-
-# Build and install Swift streamer (macOS only)
-if [[ "$(uname)" == "Darwin" ]]; then
-    echo "Building qorvex-streamer..."
-    make -C qorvex-streamer build
-    CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
-    if [ -d "$CARGO_BIN" ]; then
-        cp qorvex-streamer/.build/release/qorvex-streamer "$CARGO_BIN/"
-        echo "qorvex-streamer installed to $CARGO_BIN/"
-    else
-        echo "Warning: Could not find $CARGO_BIN — install qorvex-streamer manually"
-    fi
-fi
 
 # Record agent source directories in config (iOS + Android)
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"

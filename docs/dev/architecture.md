@@ -1,14 +1,12 @@
 # Architecture Guide
 
-This document describes the high-level architecture of the qorvex project: a Rust workspace with five crates, a Swift XCTest agent, and a Swift ScreenCaptureKit streamer for iOS Simulator and physical device automation on macOS.
+This document describes the high-level architecture of the qorvex project: a Rust workspace with four crates and a Swift XCTest agent for iOS Simulator and physical device automation on macOS.
 
 ## Crate Dependency Graph
 
 ```
 qorvex-server   ──► qorvex-core
 qorvex-repl     ──► qorvex-core (via IPC to qorvex-server)
-qorvex-live     ──► qorvex-core (via IPC to qorvex-server)
-qorvex-live     ──► qorvex-streamer (spawns, reads JPEG frames via Unix socket)
 qorvex-cli      ──► qorvex-core (via IPC to qorvex-server)
 qorvex-core     ──► qorvex-agent (TCP binary protocol)
 ```
@@ -18,10 +16,8 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 | `qorvex-core` | Core library -- driver abstraction, protocol, session, IPC, action types, executor |
 | `qorvex-server` | Standalone automation server daemon -- manages sessions, agent lifecycle, and IPC |
 | `qorvex-repl` | TUI REPL client with tab completion, connects to server via IPC; auto-launches server if needed; deferred startup keeps TUI responsive |
-| `qorvex-live` | TUI client with live video feed (via qorvex-streamer) and IPC reconnection |
 | `qorvex-cli` | Scriptable CLI client for automation pipelines, includes JSONL log-to-script converter |
 | `qorvex-agent` | Swift XCTest agent for native iOS accessibility (not a Cargo crate) |
-| `qorvex-streamer` | Swift standalone binary; captures Simulator window via ScreenCaptureKit and streams JPEG frames over a Unix socket (macOS 13+, not a Cargo crate) |
 | `qorvex-testapp` | SwiftUI iOS test app (bundle ID: `com.qorvex.testapp`) with 5 tabs covering all automation actions; built with XcodeGen, not a Cargo crate |
 
 ## Data Flow
@@ -30,11 +26,9 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 2. **REPL** renders its TUI immediately on launch (no blocking I/O). After the first frame is drawn, it spawns a background task (`startup()`) that launches the server if the socket is absent, connects as an IPC client, sends `StartSession`, and fetches initial completion data. A braille spinner in the input area animates while this is in progress. Subsequent commands (`execute_command`) also run non-blocking: the IPC send is dispatched to a tokio task, the spinner reappears, and results are polled via `check_command_result()` each event loop tick.
 3. **Server** executes actions via `ActionExecutor` (which delegates to `AutomationDriver`), logs to `Session`.
 4. **Session** broadcasts `SessionEvent`s to subscribers (broadcast channel, capacity 100).
-5. **Live TUI** connects via `IpcClient`, sends `Subscribe`, renders incoming `Event` responses in a TUI. Separately spawns `qorvex-streamer` and reads JPEG frames from a Unix socket for the live video feed.
-6. **Streamer** (`qorvex-streamer`) captures the Simulator window via ScreenCaptureKit on the macOS host, encodes frames as JPEG, and writes them length-prefixed to the Unix socket. Runs as a child process of `qorvex-live`; completely independent of the XCTest agent.
-7. **CLI** connects via `IpcClient`, sends `Execute` and management requests.
-8. **Screenshots** (from the agent path) are base64-encoded PNGs passed through the event system.
-9. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
+5. **CLI** connects via `IpcClient`, sends `Execute` and management requests.
+6. **Screenshots** (from the agent path) are base64-encoded PNGs passed through the event system.
+7. **Swift agent lifecycle:** build via `xcodebuild` -> install via `simctl` -> launch test -> TCP connect -> binary protocol commands -> terminate on drop.
 
 ```
 ┌────────────┐   IPC     ┌───────────────────────────────────┐
@@ -43,16 +37,11 @@ qorvex-core     ──► qorvex-agent (TCP binary protocol)
 └────────────┘           │  qorvex_{session_name}.sock       │
 ┌────────────┐   IPC     │                                   │    ┌─────────┐
 │ qorvex-    │──────────►│  ActionExecutor ──── TCP ────────►│───►│  Swift  │
-│   live     │           │  (qorvex-core)       (port 8080) │    │  Agent  │
-│  spawns ▼  │           │       │                           │    └─────────┘
-│ qorvex-    │◄──────────│  Session (broadcast)              │
-│ streamer   │  JPEG     │  SessionEvent ──► subscribers     │
-│ (SCKit)    │  frames   └───────────────────────────────────┘
-└────────────┘  Unix sock
-┌────────────┐   IPC
-│ qorvex-    │──────────►  (same server)
-│   cli      │
-└────────────┘
+│   cli      │           │  (qorvex-core)       (port 8080)  │    │  Agent  │
+└────────────┘           │       │                           │    └─────────┘
+                         │  Session (broadcast)              │
+                         │  SessionEvent ──► subscribers     │
+                         └───────────────────────────────────┘
 ```
 
 ## Key Abstractions
@@ -132,14 +121,12 @@ The `core_device_tunnel` module provides:
 ~/.qorvex/
 ├── config.json                  # Persistent config (agent_source_dir)
 ├── qorvex_<session>.sock        # Unix socket per session (IPC)
-├── streamer_<session>.sock      # Unix socket for live video frames (qorvex-live)
 └── logs/
     └── <session>_<timestamp>.jsonl
 ```
 
 - `config.json` stores `QorvexConfig` with the `agent_source_dir` field. `install.sh` records the agent project path so sessions can auto-build the agent. When `agent_source_dir` is not set, `QorvexConfig::effective_agent_source_dir()` falls back to probing `HOMEBREW_PREFIX/share/qorvex/agent` (checks `/opt/homebrew` and `/usr/local`).
 - IPC socket path convention: `~/.qorvex/qorvex_{session_name}.sock`
-- Streamer socket path convention: `~/.qorvex/streamer_{session_name}.sock` — created by `qorvex-live` on startup, deleted on quit.
 - JSONL log files follow the naming pattern `{session_name}_{%Y%m%d_%H%M%S}.jsonl`
 
 ## IPC Protocol
@@ -197,17 +184,6 @@ All IPC operations in the REPL are non-blocking — the crossterm event loop nev
 **Spinner:** `is_processing: bool` is set true before spawning and cleared on result. `spinner_frame()` computes the braille animation frame from `processing_start.elapsed()`. The event loop polls at 50ms while processing (vs 100ms idle) for smooth animation. New commands are blocked while `is_processing` is true.
 
 **Batch mode** cannot use this pattern (no event loop). Use `App::new_blocking()` which calls `ensure_server_running`, connects, and runs `StartSession` synchronously before returning.
-
-## Live TUI Image Pipeline (`qorvex-live`)
-
-The live image pipeline runs in `spawn_decode_task` (blocking thread) and feeds into `AppEvent::ImageReady`.
-
-**Implementation notes:**
-
-- `Picker::font_size()` is a method — not a public field. Accessing it as `.font_size` fails to compile.
-- `MAX_DECODE_WIDTH` / `MAX_DECODE_HEIGHT` in `main.rs` cap the image before it reaches `ratatui-image`. If these are too small (e.g., 600px), the image cannot render larger than that cap regardless of terminal size. Set them large enough for the largest expected terminal (1200×1800 covers typical fullscreen use).
-- `Event::Resize` must be explicitly matched in the event poll loop — it is not automatically handled by ratatui or crossterm. If omitted, the layout will not reflow when the terminal is resized until the next key press.
-- The left panel width is computed from `image_pixel_size` and `picker.font_size()` each frame. Formula: `inner_cols = img_w * inner_rows * cell_h / (img_h * cell_w)`. This makes the border hug the image's natural aspect ratio at the current terminal height.
 
 ## External Dependencies
 

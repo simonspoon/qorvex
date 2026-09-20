@@ -1,6 +1,6 @@
 # IPC Reference
 
-Inter-process communication in qorvex uses Unix domain sockets with a JSON-over-newlines protocol. `qorvex-server` runs an `IpcServer` that exposes session state and automation commands to clients like `qorvex-repl`, `qorvex-live`, and `qorvex-cli`.
+Inter-process communication in qorvex uses Unix domain sockets with a JSON-over-newlines protocol. `qorvex-server` runs an `IpcServer` that exposes session state and automation commands to clients like `qorvex-repl` and `qorvex-cli`.
 
 **Source:** `crates/qorvex-core/src/ipc.rs`
 
@@ -234,7 +234,7 @@ This function is used throughout the codebase for socket paths, log directories,
 
 ## Architecture Note
 
-The IPC server exists so that all clients — REPL, Live TUI, and CLI — can interact with any running session in real-time, regardless of how that session was started.
+The IPC server exists so that all clients — REPL and CLI — can interact with any running session in real-time, regardless of how that session was started.
 
 > **Pitfall — dual paths for `SetTarget`:** Configuration commands like `SetTarget` can arrive via two IPC paths: the direct `IpcRequest::SetTarget` variant (used by the REPL), or wrapped inside `IpcRequest::Execute { action: ActionType::SetTarget }` (used by the CLI). Both must land in `ServerState::target_bundle_id` — otherwise `StartTarget`/`StopTarget` return "No target set" even after a successful `set-target`. Both now converge on `ServerState::record_target`; `handle_execute` intercepts `SetTarget` before the executor lookup (as it already did for `LogComment`) rather than routing it through `ActionExecutor` and mirroring the result afterwards. Any configuration action that mutates server state needs the same treatment in `handle_execute` — and a matching arm in the CLI's `is_config_action` (`qorvex-cli/src/main.rs`), which prints the response `message` in text mode instead of the `|ts|Action|target|dur|` trace line. The trace line carries no note, so without that arm a reply like `Target set to X (recorded; no agent connected)` is visible only under `--format json`.
 >
@@ -245,10 +245,8 @@ The IPC server exists so that all clients — REPL, Live TUI, and CLI — can in
 - **`qorvex-server`** runs an `IpcServer` with a `RequestHandler` attached. It owns the `ActionExecutor`, `Session`, and agent lifecycle. After the agent connects, the server populates the IPC shared driver slot so `Execute` requests reuse the existing TCP connection.
 - **`qorvex-repl`** is an IPC client. It auto-launches `qorvex-server` if the session socket is absent, then connects and sends management and `Execute` requests.
 - **`qorvex-cli`** is an IPC client. It connects to a running session's socket and sends `Execute` and management requests.
-- **`qorvex-live`** is an IPC client. It connects, sends `Subscribe`, and renders incoming `Event` responses in a TUI.
 
 ```
 qorvex-server ── IpcServer (Unix socket) ──> qorvex-repl  (Execute, management)
-                                         ──> qorvex-live  (Subscribe)
                                          ──> qorvex-cli   (Execute, management)
 ```

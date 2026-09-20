@@ -12,9 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install system dependencies
-        run: brew install chafa
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -40,15 +37,6 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
-
-  swift:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Build qorvex-streamer
-        run: make -C qorvex-streamer build
 
   android:
     runs-on: ubuntu-latest

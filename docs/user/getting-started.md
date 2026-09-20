@@ -35,18 +35,16 @@ The physical-device runner is not pre-built, because it cannot be code signed co
 
 ```bash
 cargo install --path crates/qorvex-repl
-cargo install --path crates/qorvex-live
 cargo install --path crates/qorvex-cli
 ```
 
-### Build the Swift Agent and Streamer
+### Build the Swift Agent
 
 ```bash
 make -C qorvex-agent build      # XCTest automation agent
-make -C qorvex-streamer build   # Live video streamer (macOS 13+)
 ```
 
-`install.sh` builds both automatically (the agent is built for the simulator; the physical-device runner is built on first use against a device).
+`install.sh` builds it automatically (for the simulator; the physical-device runner is built on first use against a device).
 
 ## Physical Device Signing
 
@@ -127,17 +125,6 @@ wait-for loading-spinner --timeout 10000
 get-value status-label
 get-screenshot
 ```
-
-### 5. Monitor with Live TUI
-
-In another terminal:
-
-```bash
-qorvex-live           # live video feed at 15 fps (default)
-qorvex-live --fps 30  # higher frame rate
-```
-
-Shows a live video feed of the Simulator window and the action log from your REPL session. Requires Screen Recording permission (macOS will prompt on first use). Use `--no-streamer` to fall back to polling if permission is unavailable.
 
 ## Simulator vs Physical Device
 
