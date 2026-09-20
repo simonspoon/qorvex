@@ -714,6 +714,51 @@ impl App {
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
             "memory-info" => IpcRequest::GetMemoryInfo,
+            "shutdown-device" => IpcRequest::ShutdownDevice,
+            "delete-device" => IpcRequest::DeleteDevice,
+            "quiet-device" => IpcRequest::QuietDevice,
+            "wait-for-boot" => IpcRequest::WaitForBoot,
+            "install-app" => IpcRequest::InstallApp {
+                path: args
+                    .positional
+                    .first()
+                    .map(|p| absolute_arg(p))
+                    .unwrap_or_default(),
+            },
+            "uninstall-app" => IpcRequest::UninstallApp {
+                bundle_id: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "app-container" => IpcRequest::AppContainer {
+                bundle_id: args.positional.first().cloned().unwrap_or_default(),
+                container: args.positional.get(1).cloned(),
+            },
+            "list-apps" => IpcRequest::ListApps,
+            "create-device" => IpcRequest::CreateDevice {
+                name: args.positional.first().cloned().unwrap_or_default(),
+                device_type: args.positional.get(1).cloned().unwrap_or_default(),
+                runtime: args.positional.get(2).cloned().unwrap_or_default(),
+            },
+            "device-log" => IpcRequest::DeviceLog {
+                last: args.last.clone().unwrap_or_else(|| "5m".to_string()),
+                predicate: args.predicate.clone(),
+            },
+            "set-appearance" => IpcRequest::SetAppearance {
+                appearance: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "set-content-size" => IpcRequest::SetContentSize {
+                size: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "grant-permission" => IpcRequest::GrantPermission {
+                verb: args.positional.first().cloned().unwrap_or_default(),
+                service: args.positional.get(1).cloned().unwrap_or_default(),
+                bundle_id: args.positional.get(2).cloned().unwrap_or_default(),
+            },
+            "add-media" => IpcRequest::AddMedia {
+                paths: args.positional.iter().map(|p| absolute_arg(p)).collect(),
+            },
+            "open-url" => IpcRequest::OpenUrl {
+                url: args.positional.first().cloned().unwrap_or_default(),
+            },
             "set-timeout" => {
                 let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
@@ -1177,6 +1222,51 @@ impl App {
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
             "memory-info" => IpcRequest::GetMemoryInfo,
+            "shutdown-device" => IpcRequest::ShutdownDevice,
+            "delete-device" => IpcRequest::DeleteDevice,
+            "quiet-device" => IpcRequest::QuietDevice,
+            "wait-for-boot" => IpcRequest::WaitForBoot,
+            "install-app" => IpcRequest::InstallApp {
+                path: args
+                    .positional
+                    .first()
+                    .map(|p| absolute_arg(p))
+                    .unwrap_or_default(),
+            },
+            "uninstall-app" => IpcRequest::UninstallApp {
+                bundle_id: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "app-container" => IpcRequest::AppContainer {
+                bundle_id: args.positional.first().cloned().unwrap_or_default(),
+                container: args.positional.get(1).cloned(),
+            },
+            "list-apps" => IpcRequest::ListApps,
+            "create-device" => IpcRequest::CreateDevice {
+                name: args.positional.first().cloned().unwrap_or_default(),
+                device_type: args.positional.get(1).cloned().unwrap_or_default(),
+                runtime: args.positional.get(2).cloned().unwrap_or_default(),
+            },
+            "device-log" => IpcRequest::DeviceLog {
+                last: args.last.clone().unwrap_or_else(|| "5m".to_string()),
+                predicate: args.predicate.clone(),
+            },
+            "set-appearance" => IpcRequest::SetAppearance {
+                appearance: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "set-content-size" => IpcRequest::SetContentSize {
+                size: args.positional.first().cloned().unwrap_or_default(),
+            },
+            "grant-permission" => IpcRequest::GrantPermission {
+                verb: args.positional.first().cloned().unwrap_or_default(),
+                service: args.positional.get(1).cloned().unwrap_or_default(),
+                bundle_id: args.positional.get(2).cloned().unwrap_or_default(),
+            },
+            "add-media" => IpcRequest::AddMedia {
+                paths: args.positional.iter().map(|p| absolute_arg(p)).collect(),
+            },
+            "open-url" => IpcRequest::OpenUrl {
+                url: args.positional.first().cloned().unwrap_or_default(),
+            },
             "set-timeout" => {
                 let ms_str = args.positional.first().map(|s| s.as_str()).unwrap_or("");
                 if ms_str.is_empty() {
@@ -1572,6 +1662,29 @@ impl App {
                 // Refresh the completion cache from the freshly listed devices.
                 self.cached_android_devices = devices;
             }
+            IpcResponse::AppContainer { path } => {
+                self.add_output(Line::from(path));
+            }
+            IpcResponse::AppList { apps } => {
+                for app in &apps {
+                    self.add_output(Line::from(format!(
+                        "  {} — {} ({})",
+                        app.bundle_id, app.display_name, app.app_type
+                    )));
+                }
+                self.add_output(format_result(true, &format!("{} apps", apps.len())));
+            }
+            IpcResponse::CreatedDevice { udid } => {
+                self.add_output(format_result(
+                    true,
+                    &format!("Created and using device {}", udid),
+                ));
+            }
+            IpcResponse::DeviceLog { log } => {
+                for line in log.lines() {
+                    self.add_output(Line::from(line.to_string()));
+                }
+            }
             IpcResponse::Error { message } => {
                 self.add_output(format_result(false, &message));
             }
@@ -1600,6 +1713,23 @@ impl App {
             "  start-target             Launch the target application",
             "  stop-target              Terminate the target application",
             "  set-timeout [ms]         Set/get default wait timeout",
+            "",
+            "Device / App management (all act on the selected device):",
+            "  create-device <name> <type> <runtime>  Create a simulator and select it",
+            "  wait-for-boot            Wait until the selected device finishes booting",
+            "  shutdown-device          Shut down the selected device",
+            "  delete-device            Delete the selected device (drops the selection)",
+            "  quiet-device             Stop the selected device's runaway mediaanalysisd",
+            "  install-app <path.app>   Install an app bundle",
+            "  uninstall-app <bundle_id>  Uninstall an app",
+            "  app-container <bundle_id> [app|data|groups]  Print an app container path",
+            "  list-apps                List installed apps",
+            "  add-media <file>...      Add photos/videos to the device libraries",
+            "  open-url <url>           Open a URL on the device",
+            "  grant-permission <grant|revoke|reset> <service> <bundle_id>",
+            "  set-appearance <dark|light>            Switch light/dark mode",
+            "  set-content-size <size>  Set the Dynamic Type content size",
+            "  device-log [--last 5m] [--predicate expr]  Show recent unified-log output",
             "",
             "Screen:",
             "  get-screenshot           Capture a screenshot (base64 PNG)",
@@ -1643,6 +1773,22 @@ pub(crate) struct ParsedArgs {
     /// `--force` on `start-target`: relaunch instead of attaching to an
     /// already-running app.
     pub force: bool,
+    /// `--last <duration>` on `device-log`: how far back to read.
+    pub last: Option<String>,
+    /// `--predicate <expr>` on `device-log`: NSPredicate to filter with.
+    pub predicate: Option<String>,
+}
+
+/// Resolve a path argument against the REPL's working directory.
+///
+/// The server is a long-lived daemon with its own working directory, so a
+/// relative path has to be made absolute here — the same reason the CLI
+/// canonicalizes `install-app`. An unresolvable path is passed through so the
+/// server reports simctl's own error rather than a silently different one.
+fn absolute_arg(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string())
 }
 
 /// Tokenize input using shell-style rules: split on whitespace, respect double quotes.
@@ -1706,6 +1852,8 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         element_type: None,
         platform: None,
         force: false,
+        last: None,
+        predicate: None,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -1725,6 +1873,12 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
                 args.platform = iter.next();
             }
             "--force" => args.force = true,
+            "--last" => {
+                args.last = iter.next();
+            }
+            "--predicate" => {
+                args.predicate = iter.next();
+            }
             _ => args.positional.push(tok),
         }
     }

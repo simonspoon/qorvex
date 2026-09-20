@@ -654,7 +654,15 @@ impl ActionExecutor {
             | ActionType::InstallApp { .. }
             | ActionType::UninstallApp { .. }
             | ActionType::AppContainer { .. }
-            | ActionType::ListApps => {
+            | ActionType::ListApps
+            | ActionType::CreateDevice { .. }
+            | ActionType::WaitForBoot
+            | ActionType::DeviceLog { .. }
+            | ActionType::SetAppearance { .. }
+            | ActionType::SetContentSize { .. }
+            | ActionType::GrantPermission { .. }
+            | ActionType::AddMedia { .. }
+            | ActionType::OpenUrl { .. } => {
                 ExecutionResult::failure("Device management actions must be handled by the server")
             }
         }

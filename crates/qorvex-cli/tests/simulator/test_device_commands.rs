@@ -129,3 +129,175 @@ fn test_delete_device_rejects_udid_arguments() {
         "delete-device must reject a UDID argument: {output}"
     );
 }
+
+// --- wave 2: device state, logs and media -----------------------------------
+
+#[test]
+#[ignore]
+fn test_set_appearance_round_trip() {
+    harness();
+    run(&["set-appearance", "dark"]);
+    // Nothing reads the appearance back through simctl, so the assertion that
+    // matters is that both directions are accepted; leave the device light.
+    run(&["set-appearance", "light"]);
+}
+
+#[test]
+#[ignore]
+fn test_set_appearance_rejects_unknown_value() {
+    harness();
+    let output = run_fail(&["set-appearance", "sepia"]);
+    assert!(
+        output.contains("invalid value"),
+        "set-appearance must reject anything but dark/light: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_set_content_size_accepts_accessibility_range() {
+    harness();
+    run(&["set-content-size", "accessibility-extra-extra-extra-large"]);
+    run(&["set-content-size", "medium"]);
+}
+
+#[test]
+#[ignore]
+fn test_set_content_size_rejects_unknown_value() {
+    harness();
+    let output = run_fail(&["set-content-size", "enormous"]);
+    assert!(
+        output.contains("invalid value"),
+        "set-content-size must reject a size outside the Dynamic Type range: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_device_log_returns_output() {
+    harness();
+    let output = run(&["device-log", "--last", "30s"]);
+    assert!(
+        !output.trim().is_empty(),
+        "device-log should return recent log output"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_device_log_predicate_narrows_output() {
+    harness();
+    let all = run(&["device-log", "--last", "2m"]);
+    let filtered = run(&[
+        "device-log",
+        "--last",
+        "2m",
+        "--predicate",
+        "subsystem == \"com.qorvex.no-such-subsystem\"",
+    ]);
+    assert!(
+        filtered.len() < all.len(),
+        "a predicate matching nothing should return less than the unfiltered log"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_grant_permission_round_trip() {
+    harness();
+    run(&["grant-permission", "grant", "microphone", TESTAPP_BUNDLE_ID]);
+    run(&[
+        "grant-permission",
+        "revoke",
+        "microphone",
+        TESTAPP_BUNDLE_ID,
+    ]);
+    run(&["grant-permission", "reset", "microphone", TESTAPP_BUNDLE_ID]);
+}
+
+#[test]
+#[ignore]
+fn test_grant_permission_rejects_unknown_service() {
+    harness();
+    let output = run_fail(&["grant-permission", "grant", "telepathy", TESTAPP_BUNDLE_ID]);
+    assert!(
+        output.contains("invalid value"),
+        "grant-permission must reject a service simctl does not know: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_open_url_succeeds() {
+    harness();
+    run(&["open-url", "https://example.com"]);
+}
+
+#[test]
+#[ignore]
+fn test_add_media_missing_file_fails() {
+    harness();
+    let output = run_fail(&["add-media", "/nonexistent/no-such-image.png"]);
+    assert!(
+        !output.is_empty(),
+        "add-media on a missing file should produce error output"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_add_media_requires_a_file() {
+    harness();
+    let output = run_fail(&["add-media"]);
+    assert!(
+        output.contains("required"),
+        "add-media with no files must be a usage error: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_wait_for_boot_returns_on_a_booted_device() {
+    harness();
+    // The harness's device is already booted, so bootstatus should return
+    // immediately rather than block.
+    run(&["wait-for-boot"]);
+}
+
+/// `create-device` is the one device command that names a device, because no
+/// device exists yet. The success path is deliberately not exercised: it would
+/// leave a simulator behind on a machine other sessions share. What is checked
+/// is that the three arguments are all required — a partial invocation must be
+/// a usage error rather than a device created with defaults.
+#[test]
+#[ignore]
+fn test_create_device_requires_name_type_and_runtime() {
+    harness();
+    let output = run_fail(&["create-device", "Aperture-test"]);
+    assert!(
+        output.contains("required"),
+        "create-device must require a device type and runtime: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_wait_for_boot_rejects_a_udid_argument() {
+    harness();
+    let output = run_fail(&["wait-for-boot", "00000000-0000-0000-0000-000000000000"]);
+    assert!(
+        output.contains("unexpected argument"),
+        "wait-for-boot must reject a UDID argument: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_device_log_rejects_a_udid_argument() {
+    harness();
+    let output = run_fail(&["device-log", "00000000-0000-0000-0000-000000000000"]);
+    assert!(
+        output.contains("unexpected argument"),
+        "device-log must reject a UDID argument: {output}"
+    );
+}

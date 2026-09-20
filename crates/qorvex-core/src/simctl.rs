@@ -336,6 +336,233 @@ impl Simctl {
         Ok(())
     }
 
+    /// Creates a simulator and returns its UDID.
+    ///
+    /// The one wrapper here that names a device rather than taking a UDID:
+    /// there is no device to select until this call has made one.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name for the new simulator
+    /// * `device_type` - A device type identifier
+    ///   (`com.apple.CoreSimulator.SimDeviceType.iPhone-17`) or a display name
+    ///   (`iPhone SE (3rd generation)`)
+    /// * `runtime` - A runtime identifier
+    ///   (`com.apple.CoreSimulator.SimRuntime.iOS-26-5`)
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn create_device(
+        name: &str,
+        device_type: &str,
+        runtime: &str,
+    ) -> Result<String, SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "create", name, device_type, runtime])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Blocks until a simulator has finished booting.
+    ///
+    /// `simctl boot` returns as soon as the boot is *started*, so [`Simctl::boot`]
+    /// can hand back a device that is not yet usable. `simctl bootstatus -b`
+    /// waits for the boot to complete and is the supported way to close that gap.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the simulator to wait on
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error (including a
+    ///   device that is not booting at all)
+    pub fn wait_for_boot(udid: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "bootstatus", udid, "-b"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reads recent entries from a simulator's unified log.
+    ///
+    /// Runs the one-shot `log show` inside the simulator runtime. The streaming
+    /// `log stream` form is deliberately not wrapped: it never returns, which
+    /// does not fit the request/response shape this is called through.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `last` - How far back to read, in `log show --last` syntax (`5m`, `1h`)
+    /// * `predicate` - An optional NSPredicate to filter with, e.g.
+    ///   `subsystem == "com.example.MyApp"`
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl or `log` returns an error
+    pub fn device_log(
+        udid: &str,
+        last: &str,
+        predicate: Option<&str>,
+    ) -> Result<String, SimctlError> {
+        let mut args = vec![
+            "simctl", "spawn", udid, "log", "show", "--style", "compact", "--last", last,
+        ];
+        if let Some(p) = predicate {
+            args.push("--predicate");
+            args.push(p);
+        }
+        let output = Command::new("xcrun").args(&args).output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Sets a simulator's light/dark appearance.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `appearance` - `"dark"` or `"light"`
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn set_appearance(udid: &str, appearance: &str) -> Result<(), SimctlError> {
+        Self::simctl_ui(udid, "appearance", appearance)
+    }
+
+    /// Sets a simulator's Dynamic Type content size.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `size` - A content size in simctl's spelling, e.g. `"extra-small"` or
+    ///   `"accessibility-extra-extra-extra-large"`
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn set_content_size(udid: &str, size: &str) -> Result<(), SimctlError> {
+        Self::simctl_ui(udid, "content_size", size)
+    }
+
+    /// Shared body of the `simctl ui <udid> <setting> <value>` wrappers.
+    fn simctl_ui(udid: &str, setting: &str, value: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "ui", udid, setting, value])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Grants, revokes or resets an app's access to a privacy-protected service.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `verb` - `"grant"`, `"revoke"` or `"reset"`
+    /// * `service` - A simctl privacy service, e.g. `"microphone"` or `"all"`
+    /// * `bundle_id` - The bundle identifier of the app whose access changes
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn set_privacy(
+        udid: &str,
+        verb: &str,
+        service: &str,
+        bundle_id: &str,
+    ) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "privacy", udid, verb, service, bundle_id])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Adds photos, videos or contacts to a simulator's libraries.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `paths` - Absolute paths to the media files to add; `simctl addmedia`
+    ///   takes several at once
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn add_media(udid: &str, paths: &[String]) -> Result<(), SimctlError> {
+        let mut args = vec!["simctl", "addmedia", udid];
+        args.extend(paths.iter().map(|p| p.as_str()));
+        let output = Command::new("xcrun").args(&args).output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Opens a URL on a simulator, routing it to whichever app claims the scheme.
+    ///
+    /// # Arguments
+    ///
+    /// * `udid` - The unique device identifier of the target simulator
+    /// * `url` - The URL to open (a deep link, or an `https:` address)
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn open_url(udid: &str, url: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "openurl", udid, url])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Stops the simulator runtime's `mediaanalysisd`.
     ///
     /// The daemon indexes simulator media in the background and has been

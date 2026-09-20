@@ -216,6 +216,61 @@ pub enum ActionType {
     /// List the apps installed on the session's selected simulator.
     ListApps,
 
+    /// Create a simulator and make it this session's selected device.
+    CreateDevice {
+        /// Name given to the new simulator.
+        name: String,
+        /// Device type identifier or display name.
+        device_type: String,
+        /// Runtime identifier.
+        runtime: String,
+    },
+
+    /// Wait until the session's selected simulator has finished booting.
+    WaitForBoot,
+
+    /// Read recent entries from the selected simulator's unified log.
+    DeviceLog {
+        /// How far back the log was read, in `log show --last` syntax.
+        last: String,
+        /// The NSPredicate the log was filtered with, if any.
+        predicate: Option<String>,
+    },
+
+    /// Set the selected simulator's light/dark appearance.
+    SetAppearance {
+        /// `dark` or `light`.
+        appearance: String,
+    },
+
+    /// Set the selected simulator's Dynamic Type content size.
+    SetContentSize {
+        /// A content size in simctl's spelling, e.g. `extra-small`.
+        size: String,
+    },
+
+    /// Change an app's access to a privacy-protected service.
+    GrantPermission {
+        /// `grant`, `revoke` or `reset`.
+        verb: String,
+        /// The privacy service affected, e.g. `microphone`.
+        service: String,
+        /// The bundle identifier of the app whose access changed.
+        bundle_id: String,
+    },
+
+    /// Add media files to the selected simulator's libraries.
+    AddMedia {
+        /// Absolute paths of the media files that were added.
+        paths: Vec<String>,
+    },
+
+    /// Open a URL on the selected simulator.
+    OpenUrl {
+        /// The URL that was opened.
+        url: String,
+    },
+
     /// Quit the REPL entirely.
     Quit,
 }
@@ -246,6 +301,14 @@ impl ActionType {
             ActionType::UninstallApp { .. } => "uninstall_app",
             ActionType::AppContainer { .. } => "app_container",
             ActionType::ListApps => "list_apps",
+            ActionType::CreateDevice { .. } => "create_device",
+            ActionType::WaitForBoot => "wait_for_boot",
+            ActionType::DeviceLog { .. } => "device_log",
+            ActionType::SetAppearance { .. } => "set_appearance",
+            ActionType::SetContentSize { .. } => "set_content_size",
+            ActionType::GrantPermission { .. } => "grant_permission",
+            ActionType::AddMedia { .. } => "add_media",
+            ActionType::OpenUrl { .. } => "open_url",
             ActionType::StartSession => "start_session",
             ActionType::EndSession => "end_session",
             ActionType::Quit => "quit",
@@ -275,6 +338,14 @@ impl ActionType {
             ActionType::UninstallApp { .. } => "UninstallApp",
             ActionType::AppContainer { .. } => "AppContainer",
             ActionType::ListApps => "ListApps",
+            ActionType::CreateDevice { .. } => "CreateDevice",
+            ActionType::WaitForBoot => "WaitForBoot",
+            ActionType::DeviceLog { .. } => "DeviceLog",
+            ActionType::SetAppearance { .. } => "SetAppearance",
+            ActionType::SetContentSize { .. } => "SetContentSize",
+            ActionType::GrantPermission { .. } => "GrantPermission",
+            ActionType::AddMedia { .. } => "AddMedia",
+            ActionType::OpenUrl { .. } => "OpenUrl",
             ActionType::StartSession => "Start",
             ActionType::EndSession => "End",
             ActionType::Quit => "Quit",
@@ -315,15 +386,29 @@ impl ActionType {
             ActionType::LogComment { message } => message.clone(),
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
             ActionType::InstallApp { path } => path.clone(),
-            ActionType::UninstallApp { bundle_id } | ActionType::AppContainer { bundle_id, .. } => {
-                bundle_id.clone()
-            }
+            ActionType::UninstallApp { bundle_id } => bundle_id.clone(),
+            ActionType::AppContainer {
+                bundle_id,
+                container,
+            } => format!("{} {}", bundle_id, container.as_deref().unwrap_or("app")),
+            ActionType::CreateDevice { name, .. } => name.clone(),
+            ActionType::DeviceLog { last, .. } => last.clone(),
+            ActionType::SetAppearance { appearance } => appearance.clone(),
+            ActionType::SetContentSize { size } => size.clone(),
+            ActionType::GrantPermission {
+                verb,
+                service,
+                bundle_id,
+            } => format!("{} {} {}", verb, service, bundle_id),
+            ActionType::AddMedia { paths } => paths.join(" "),
+            ActionType::OpenUrl { url } => url.clone(),
             ActionType::StartTarget { .. }
             | ActionType::StopTarget
             | ActionType::GetTargetInfo
             | ActionType::ShutdownDevice
             | ActionType::DeleteDevice
-            | ActionType::ListApps => String::new(),
+            | ActionType::ListApps
+            | ActionType::WaitForBoot => String::new(),
             _ => String::new(),
         }
     }

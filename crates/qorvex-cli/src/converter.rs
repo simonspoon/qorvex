@@ -152,6 +152,50 @@ impl LogConverter {
                 Some(cmd)
             }
             ActionType::ListApps => Some("qorvex list-apps".to_string()),
+            ActionType::CreateDevice {
+                name,
+                device_type,
+                runtime,
+            } => Some(format!(
+                "qorvex create-device {} {} {}",
+                shell_escape(name),
+                shell_escape(device_type),
+                shell_escape(runtime)
+            )),
+            ActionType::WaitForBoot => Some("qorvex wait-for-boot".to_string()),
+            ActionType::DeviceLog { last, predicate } => {
+                let mut cmd = format!("qorvex device-log --last {}", shell_escape(last));
+                if let Some(p) = predicate {
+                    cmd.push_str(&format!(" --predicate {}", shell_escape(p)));
+                }
+                Some(cmd)
+            }
+            ActionType::SetAppearance { appearance } => Some(format!(
+                "qorvex set-appearance {}",
+                shell_escape(appearance)
+            )),
+            ActionType::SetContentSize { size } => {
+                Some(format!("qorvex set-content-size {}", shell_escape(size)))
+            }
+            ActionType::GrantPermission {
+                verb,
+                service,
+                bundle_id,
+            } => Some(format!(
+                "qorvex grant-permission {} {} {}",
+                shell_escape(verb),
+                shell_escape(service),
+                shell_escape(bundle_id)
+            )),
+            ActionType::AddMedia { paths } => Some(format!(
+                "qorvex add-media {}",
+                paths
+                    .iter()
+                    .map(|p| shell_escape(p))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )),
+            ActionType::OpenUrl { url } => Some(format!("qorvex open-url {}", shell_escape(url))),
             ActionType::LogComment { message } => Some(format!("# {}", message)),
             // Skip session management actions
             ActionType::StartSession | ActionType::EndSession | ActionType::Quit => None,

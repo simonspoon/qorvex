@@ -165,6 +165,33 @@ impl ServerState {
             }
             IpcRequest::ShutdownDevice => self.handle_shutdown_device().await,
             IpcRequest::DeleteDevice => self.handle_delete_device().await,
+            IpcRequest::CreateDevice {
+                name,
+                device_type,
+                runtime,
+            } => {
+                self.handle_create_device(&name, &device_type, &runtime)
+                    .await
+            }
+            IpcRequest::WaitForBoot => self.handle_wait_for_boot().await,
+            IpcRequest::QuietDevice => self.handle_quiet_device().await,
+            IpcRequest::DeviceLog { last, predicate } => {
+                self.handle_device_log(&last, predicate.as_deref()).await
+            }
+            IpcRequest::SetAppearance { appearance } => {
+                self.handle_set_appearance(&appearance).await
+            }
+            IpcRequest::SetContentSize { size } => self.handle_set_content_size(&size).await,
+            IpcRequest::GrantPermission {
+                verb,
+                service,
+                bundle_id,
+            } => {
+                self.handle_grant_permission(&verb, &service, &bundle_id)
+                    .await
+            }
+            IpcRequest::AddMedia { paths } => self.handle_add_media(paths).await,
+            IpcRequest::OpenUrl { url } => self.handle_open_url(&url).await,
 
             // ── Agent Management ────────────────────────────────────────
             IpcRequest::StartAgent {
@@ -1631,6 +1658,401 @@ impl ServerState {
         };
         self.log_action(ActionType::ListApps, action_result, None, None)
             .await;
+        response
+    }
+
+    /// Create a simulator and select it for this session.
+    ///
+    /// The one handler here that does not start at [`Self::selected_simulator`]:
+    /// there is no device to act on until simctl has made one. On success it
+    /// takes the selection, which is the mirror of
+    /// [`Self::handle_delete_device`] dropping it.
+    async fn handle_create_device(
+        &mut self,
+        name: &str,
+        device_type: &str,
+        runtime: &str,
+    ) -> IpcResponse {
+        let (n, t, r) = (
+            name.to_string(),
+            device_type.to_string(),
+            runtime.to_string(),
+        );
+        let result = Self::run_simctl(move || Simctl::create_device(&n, &t, &r)).await;
+        let (response, action_result) = match result {
+            Ok(udid) => {
+                // Select the new device exactly as `use-device` selects a
+                // simulator: iOS routing on, Android selection retired.
+                self.is_physical_device = false;
+                self.use_core_device = false;
+                self.direct_host = None;
+                self.android_serial = None;
+                self.simulator_udid = Some(udid.clone());
+                self.executor = Some(ActionExecutor::with_agent(
+                    "localhost".to_string(),
+                    self.effective_agent_port(),
+                ));
+                (IpcResponse::CreatedDevice { udid }, ActionResult::Success)
+            }
+            Err(e) => {
+                let msg = format!("Failed to create device: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::CreateDevice {
+                name: name.to_string(),
+                device_type: device_type.to_string(),
+                runtime: runtime.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    /// Wait until the selected simulator has finished booting.
+    ///
+    /// `boot-device` returns as soon as `simctl boot` returns, which is when
+    /// the boot has *started*; this closes that gap.
+    async fn handle_wait_for_boot(&self) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let wait_udid = udid.clone();
+        let result = Self::run_simctl(move || Simctl::wait_for_boot(&wait_udid)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("{} finished booting", udid),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to wait for boot: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::WaitForBoot, action_result, None, None)
+            .await;
+        response
+    }
+
+    /// Quiet the selected simulator's `mediaanalysisd`.
+    ///
+    /// Device selection already quiets it ([`Self::quiet_simulator`]); this is
+    /// for the daemon coming back on a long-lived session. Logs no action: like
+    /// `use-device`/`boot-device`, it changes the host, not the app under test.
+    async fn handle_quiet_device(&self) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let quiet_udid = udid.clone();
+        match Self::run_simctl(move || Simctl::quiet(&quiet_udid)).await {
+            Ok(outcome) => IpcResponse::CommandResult {
+                success: true,
+                message: match outcome {
+                    QuietOutcome::Unloaded => format!("Quieted mediaanalysisd on {}", udid),
+                    QuietOutcome::AlreadyQuiet => {
+                        format!("mediaanalysisd already quiet on {}", udid)
+                    }
+                    QuietOutcome::NotBooted => {
+                        format!("Device {} is not booted; nothing to quiet", udid)
+                    }
+                },
+            },
+            Err(e) => IpcResponse::CommandResult {
+                success: false,
+                message: format!("Failed to quiet device: {}", e),
+            },
+        }
+    }
+
+    async fn handle_device_log(&self, last: &str, predicate: Option<&str>) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let window = last.to_string();
+        let pred = predicate.map(|p| p.to_string());
+        let result =
+            Self::run_simctl(move || Simctl::device_log(&udid, &window, pred.as_deref())).await;
+        let (response, action_result) = match result {
+            Ok(log) => (IpcResponse::DeviceLog { log }, ActionResult::Success),
+            Err(e) => {
+                let msg = format!("Failed to read device log: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::DeviceLog {
+                last: last.to_string(),
+                predicate: predicate.map(|p| p.to_string()),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_set_appearance(&self, appearance: &str) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let value = appearance.to_string();
+        let result = Self::run_simctl(move || Simctl::set_appearance(&udid, &value)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Appearance set to {}", appearance),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to set appearance: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::SetAppearance {
+                appearance: appearance.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_set_content_size(&self, size: &str) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let value = size.to_string();
+        let result = Self::run_simctl(move || Simctl::set_content_size(&udid, &value)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Content size set to {}", size),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to set content size: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::SetContentSize {
+                size: size.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_grant_permission(
+        &self,
+        verb: &str,
+        service: &str,
+        bundle_id: &str,
+    ) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let (v, s, b) = (verb.to_string(), service.to_string(), bundle_id.to_string());
+        let result = Self::run_simctl(move || Simctl::set_privacy(&udid, &v, &s, &b)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("{} {} for {}", verb, service, bundle_id),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to change permission: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::GrantPermission {
+                verb: verb.to_string(),
+                service: service.to_string(),
+                bundle_id: bundle_id.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_add_media(&self, paths: Vec<String>) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        if paths.is_empty() {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "add_media requires at least one file".to_string(),
+            };
+        }
+        let files = paths.clone();
+        let result = Self::run_simctl(move || Simctl::add_media(&udid, &files)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Added {} file(s)", paths.len()),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to add media: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::AddMedia { paths }, action_result, None, None)
+            .await;
+        response
+    }
+
+    async fn handle_open_url(&self, url: &str) -> IpcResponse {
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let target = url.to_string();
+        let result = Self::run_simctl(move || Simctl::open_url(&udid, &target)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Opened {}", url),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to open URL: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::OpenUrl {
+                url: url.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
         response
     }
 

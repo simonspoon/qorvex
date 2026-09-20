@@ -514,6 +514,14 @@ fn matrix_covers_every_action_type() {
         "uninstall_app",
         "app_container",
         "list_apps",
+        "create_device",
+        "wait_for_boot",
+        "device_log",
+        "set_appearance",
+        "set_content_size",
+        "grant_permission",
+        "add_media",
+        "open_url",
     ];
 
     // Exhaustive match: adding a new ActionType variant fails to compile until
@@ -541,7 +549,15 @@ fn matrix_covers_every_action_type() {
             | ActionType::InstallApp { .. }
             | ActionType::UninstallApp { .. }
             | ActionType::AppContainer { .. }
-            | ActionType::ListApps => "device",
+            | ActionType::ListApps
+            | ActionType::CreateDevice { .. }
+            | ActionType::WaitForBoot
+            | ActionType::DeviceLog { .. }
+            | ActionType::SetAppearance { .. }
+            | ActionType::SetContentSize { .. }
+            | ActionType::GrantPermission { .. }
+            | ActionType::AddMedia { .. }
+            | ActionType::OpenUrl { .. } => "device",
         }
     }
 
@@ -566,7 +582,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        24,
+        32,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

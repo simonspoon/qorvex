@@ -175,6 +175,161 @@ pub static COMMANDS: &[CommandDef] = &[
         }],
         options: &[],
     },
+    // Device / app management commands (all act on the selected device)
+    CommandDef {
+        name: "create-device",
+        description: "Create a simulator and select it",
+        args: &[
+            ArgSpec {
+                name: "name",
+                completion: ArgCompletion::None,
+            },
+            ArgSpec {
+                name: "device_type",
+                completion: ArgCompletion::None,
+            },
+            ArgSpec {
+                name: "runtime",
+                completion: ArgCompletion::None,
+            },
+        ],
+        options: &[],
+    },
+    CommandDef {
+        name: "wait-for-boot",
+        description: "Wait until the selected device finishes booting",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
+        name: "shutdown-device",
+        description: "Shut down the selected device",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
+        name: "delete-device",
+        description: "Delete the selected device",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
+        name: "quiet-device",
+        description: "Quiet the selected device's mediaanalysisd",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
+        name: "install-app",
+        description: "Install an app bundle",
+        args: &[ArgSpec {
+            name: "path",
+            completion: ArgCompletion::None,
+        }],
+        options: &[],
+    },
+    CommandDef {
+        name: "uninstall-app",
+        description: "Uninstall an app",
+        args: &[ArgSpec {
+            name: "bundle_id",
+            completion: ArgCompletion::BundleId,
+        }],
+        options: &[],
+    },
+    CommandDef {
+        name: "app-container",
+        description: "Print an app container path",
+        args: &[
+            ArgSpec {
+                name: "bundle_id",
+                completion: ArgCompletion::BundleId,
+            },
+            ArgSpec {
+                name: "container",
+                completion: ArgCompletion::None,
+            },
+        ],
+        options: &[],
+    },
+    CommandDef {
+        name: "list-apps",
+        description: "List installed apps",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
+        name: "add-media",
+        description: "Add photos/videos to the device libraries",
+        args: &[ArgSpec {
+            name: "file",
+            completion: ArgCompletion::None,
+        }],
+        options: &[],
+    },
+    CommandDef {
+        name: "open-url",
+        description: "Open a URL on the device",
+        args: &[ArgSpec {
+            name: "url",
+            completion: ArgCompletion::None,
+        }],
+        options: &[],
+    },
+    CommandDef {
+        name: "grant-permission",
+        description: "Grant/revoke/reset an app's access to a service",
+        args: &[
+            ArgSpec {
+                name: "verb",
+                completion: ArgCompletion::None,
+            },
+            ArgSpec {
+                name: "service",
+                completion: ArgCompletion::None,
+            },
+            ArgSpec {
+                name: "bundle_id",
+                completion: ArgCompletion::BundleId,
+            },
+        ],
+        options: &[],
+    },
+    CommandDef {
+        name: "set-appearance",
+        description: "Switch the device between light and dark mode",
+        args: &[ArgSpec {
+            name: "appearance",
+            completion: ArgCompletion::None,
+        }],
+        options: &[],
+    },
+    CommandDef {
+        name: "set-content-size",
+        description: "Set the Dynamic Type content size",
+        args: &[ArgSpec {
+            name: "size",
+            completion: ArgCompletion::None,
+        }],
+        options: &[],
+    },
+    CommandDef {
+        name: "device-log",
+        description: "Show recent unified-log output",
+        args: &[],
+        options: &[
+            OptionSpec {
+                flag: "--last",
+                takes_value: true,
+                description: "How far back to read (e.g. 5m, 1h)",
+            },
+            OptionSpec {
+                flag: "--predicate",
+                takes_value: true,
+                description: "NSPredicate to filter log entries",
+            },
+        ],
+    },
     // Screen commands
     CommandDef {
         name: "get-screenshot",

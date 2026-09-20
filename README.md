@@ -124,6 +124,14 @@ Available commands:
 - `uninstall-app <bundle_id>` — Uninstall an app from the selected simulator
 - `app-container <bundle_id> [app|data|groups]` — Print the path of one of an app's containers on the selected simulator (default: `app`)
 - `list-apps` — List the apps installed on the selected simulator
+- `create-device <name> <type> <runtime>` — Create a simulator and select it. The one device command that names a device, since there is none to act on yet.
+- `wait-for-boot` — Block until the selected simulator has finished booting (`boot-device` returns when the boot *starts*)
+- `set-appearance <dark|light>` — Switch the selected simulator between light and dark mode
+- `set-content-size <size>` — Set the selected simulator's Dynamic Type content size (`extra-small` through `accessibility-extra-extra-extra-large`)
+- `grant-permission <grant|revoke|reset> <service> <bundle_id>` — Change an app's access to a privacy-protected service
+- `add-media <file>...` — Add photos or videos to the selected simulator's libraries
+- `open-url <url>` — Open a URL (deep link or https address) on the selected simulator
+- `device-log [--last 5m] [--predicate <expr>]` — Show recent unified-log output from the selected simulator. One-shot (`log show`); there is no streaming form.
 - `start-agent` — Start agent using configured source dir, or connect to external agent. Add `--platform android` to build/launch the Kotlin agent (requires `android_agent_source_dir` in config).
 - `start-agent <path>` — Build and launch the agent from a project directory (Swift for iOS; pass `--platform android` for the Gradle/Kotlin agent project)
 - `stop-agent` — Stop a managed agent process

@@ -133,6 +133,121 @@ impl ContainerArg {
     }
 }
 
+/// The appearances `simctl ui <udid> appearance` accepts.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum AppearanceArg {
+    /// Dark mode.
+    Dark,
+    /// Light mode.
+    Light,
+}
+
+impl AppearanceArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            AppearanceArg::Dark => "dark",
+            AppearanceArg::Light => "light",
+        }
+    }
+}
+
+/// The Dynamic Type sizes `simctl ui <udid> content_size` accepts.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ContentSizeArg {
+    ExtraSmall,
+    Small,
+    Medium,
+    Large,
+    ExtraLarge,
+    ExtraExtraLarge,
+    ExtraExtraExtraLarge,
+    AccessibilityMedium,
+    AccessibilityLarge,
+    AccessibilityExtraLarge,
+    AccessibilityExtraExtraLarge,
+    AccessibilityExtraExtraExtraLarge,
+}
+
+impl ContentSizeArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            ContentSizeArg::ExtraSmall => "extra-small",
+            ContentSizeArg::Small => "small",
+            ContentSizeArg::Medium => "medium",
+            ContentSizeArg::Large => "large",
+            ContentSizeArg::ExtraLarge => "extra-large",
+            ContentSizeArg::ExtraExtraLarge => "extra-extra-large",
+            ContentSizeArg::ExtraExtraExtraLarge => "extra-extra-extra-large",
+            ContentSizeArg::AccessibilityMedium => "accessibility-medium",
+            ContentSizeArg::AccessibilityLarge => "accessibility-large",
+            ContentSizeArg::AccessibilityExtraLarge => "accessibility-extra-large",
+            ContentSizeArg::AccessibilityExtraExtraLarge => "accessibility-extra-extra-large",
+            ContentSizeArg::AccessibilityExtraExtraExtraLarge => {
+                "accessibility-extra-extra-extra-large"
+            }
+        }
+    }
+}
+
+/// What `grant-permission` does to an app's access.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PrivacyVerbArg {
+    /// Allow access without prompting.
+    Grant,
+    /// Deny access without prompting.
+    Revoke,
+    /// Forget the decision, so the app prompts again.
+    Reset,
+}
+
+impl PrivacyVerbArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            PrivacyVerbArg::Grant => "grant",
+            PrivacyVerbArg::Revoke => "revoke",
+            PrivacyVerbArg::Reset => "reset",
+        }
+    }
+}
+
+/// The privacy-protected services `simctl privacy` knows about.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PrivacyServiceArg {
+    All,
+    Calendar,
+    ContactsLimited,
+    Contacts,
+    Location,
+    LocationAlways,
+    PhotosAdd,
+    Photos,
+    MediaLibrary,
+    Microphone,
+    Motion,
+    Reminders,
+    Siri,
+}
+
+impl PrivacyServiceArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            PrivacyServiceArg::All => "all",
+            PrivacyServiceArg::Calendar => "calendar",
+            PrivacyServiceArg::ContactsLimited => "contacts-limited",
+            PrivacyServiceArg::Contacts => "contacts",
+            PrivacyServiceArg::Location => "location",
+            PrivacyServiceArg::LocationAlways => "location-always",
+            PrivacyServiceArg::PhotosAdd => "photos-add",
+            PrivacyServiceArg::Photos => "photos",
+            PrivacyServiceArg::MediaLibrary => "media-library",
+            PrivacyServiceArg::Microphone => "microphone",
+            PrivacyServiceArg::Motion => "motion",
+            PrivacyServiceArg::Reminders => "reminders",
+            PrivacyServiceArg::Siri => "siri",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Tap an element by ID or label
@@ -383,6 +498,82 @@ enum Command {
     /// List apps installed on the session's selected simulator
     #[command(name = "list-apps")]
     ListApps,
+
+    /// Create a simulator and select it for this session
+    ///
+    /// The one device command that names a device: there is nothing to select
+    /// until it has run. Device type and runtime take simctl identifiers or
+    /// display names.
+    #[command(name = "create-device")]
+    CreateDevice {
+        /// Name for the new simulator
+        name: String,
+        /// Device type (e.g. com.apple.CoreSimulator.SimDeviceType.iPhone-17)
+        device_type: String,
+        /// Runtime (e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5)
+        runtime: String,
+    },
+
+    /// Wait until the session's selected simulator has finished booting
+    #[command(name = "wait-for-boot")]
+    WaitForBoot,
+
+    /// Read recent entries from the selected simulator's unified log
+    ///
+    /// One-shot only — this wraps `log show`, not `log stream`.
+    #[command(name = "device-log")]
+    DeviceLog {
+        /// How far back to read (log show --last syntax, e.g. 5m, 1h)
+        #[arg(long, default_value = "5m")]
+        last: String,
+        /// NSPredicate to filter with (e.g. 'subsystem == "com.example.App"')
+        #[arg(long)]
+        predicate: Option<String>,
+    },
+
+    /// Set the selected simulator's light/dark appearance
+    #[command(name = "set-appearance")]
+    SetAppearance {
+        /// Appearance to switch to
+        #[arg(value_enum)]
+        appearance: AppearanceArg,
+    },
+
+    /// Set the selected simulator's Dynamic Type content size
+    #[command(name = "set-content-size")]
+    SetContentSize {
+        /// Content size to switch to
+        #[arg(value_enum)]
+        size: ContentSizeArg,
+    },
+
+    /// Change an app's access to a privacy-protected service
+    #[command(name = "grant-permission")]
+    GrantPermission {
+        /// Whether to grant, revoke or reset access
+        #[arg(value_enum)]
+        verb: PrivacyVerbArg,
+        /// The service whose access changes
+        #[arg(value_enum)]
+        service: PrivacyServiceArg,
+        /// Bundle identifier (e.g., com.example.MyApp)
+        bundle_id: String,
+    },
+
+    /// Add media files to the selected simulator's libraries
+    #[command(name = "add-media")]
+    AddMedia {
+        /// Paths to the media files (relative paths are resolved client-side)
+        #[arg(required = true)]
+        files: Vec<String>,
+    },
+
+    /// Open a URL on the selected simulator
+    #[command(name = "open-url")]
+    OpenUrl {
+        /// The URL to open (deep link or https address)
+        url: String,
+    },
 
     /// Stop a simulator's runaway `mediaanalysisd` daemon
     #[command(name = "quiet-device")]
@@ -986,6 +1177,76 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             .await
         }
         Command::ListApps => list_apps(&mut client, &cli).await,
+        Command::CreateDevice {
+            ref name,
+            ref device_type,
+            ref runtime,
+        } => {
+            create_device(
+                &mut client,
+                &cli,
+                name.clone(),
+                device_type.clone(),
+                runtime.clone(),
+            )
+            .await
+        }
+        Command::WaitForBoot => send_command(&mut client, IpcRequest::WaitForBoot, &cli).await,
+        Command::DeviceLog {
+            ref last,
+            ref predicate,
+        } => device_log(&mut client, &cli, last.clone(), predicate.clone()).await,
+        Command::SetAppearance { appearance } => {
+            send_command(
+                &mut client,
+                IpcRequest::SetAppearance {
+                    appearance: appearance.as_str().to_string(),
+                },
+                &cli,
+            )
+            .await
+        }
+        Command::SetContentSize { size } => {
+            send_command(
+                &mut client,
+                IpcRequest::SetContentSize {
+                    size: size.as_str().to_string(),
+                },
+                &cli,
+            )
+            .await
+        }
+        Command::GrantPermission {
+            verb,
+            service,
+            ref bundle_id,
+        } => {
+            send_command(
+                &mut client,
+                IpcRequest::GrantPermission {
+                    verb: verb.as_str().to_string(),
+                    service: service.as_str().to_string(),
+                    bundle_id: bundle_id.clone(),
+                },
+                &cli,
+            )
+            .await
+        }
+        Command::AddMedia { ref files } => {
+            // Same reason as install-app: the server is a long-lived daemon
+            // with its own working directory, so relative paths are resolved
+            // in the shell the user typed them in.
+            let mut paths = Vec::with_capacity(files.len());
+            for file in files {
+                let resolved = std::fs::canonicalize(file)
+                    .map_err(|e| CliError::ActionFailed(format!("{}: {}", file, e)))?;
+                paths.push(resolved.to_string_lossy().to_string());
+            }
+            send_command(&mut client, IpcRequest::AddMedia { paths }, &cli).await
+        }
+        Command::OpenUrl { ref url } => {
+            send_command(&mut client, IpcRequest::OpenUrl { url: url.clone() }, &cli).await
+        }
         // These commands are handled before IPC connection above
         Command::ListSessions
         | Command::ListDevices { .. }
@@ -1743,6 +2004,65 @@ async fn list_apps(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
                         app.bundle_id, app.display_name, app.app_type
                     );
                 }
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { message, .. } => Err(CliError::ActionFailed(message)),
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Create a simulator and print the UDID it was given.
+async fn create_device(
+    client: &mut IpcClient,
+    cli: &Cli,
+    name: String,
+    device_type: String,
+    runtime: String,
+) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::CreateDevice {
+            name,
+            device_type,
+            runtime,
+        })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::CreatedDevice { udid } => {
+            if cli.format == OutputFormat::Json {
+                println!("{}", serde_json::json!({ "udid": udid }));
+            } else {
+                println!("{}", udid);
+            }
+            Ok(())
+        }
+        IpcResponse::CommandResult { message, .. } => Err(CliError::ActionFailed(message)),
+        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Print recent unified-log output from the selected simulator.
+async fn device_log(
+    client: &mut IpcClient,
+    cli: &Cli,
+    last: String,
+    predicate: Option<String>,
+) -> Result<(), CliError> {
+    let response = client
+        .send(&IpcRequest::DeviceLog { last, predicate })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+
+    match response {
+        IpcResponse::DeviceLog { log } => {
+            if cli.format == OutputFormat::Json {
+                println!("{}", serde_json::json!({ "log": log }));
+            } else {
+                print!("{}", log);
             }
             Ok(())
         }

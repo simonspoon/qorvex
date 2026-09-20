@@ -192,6 +192,55 @@ pub enum IpcRequest {
     /// Takes no UDID, for the same reason as [`IpcRequest::ShutdownDevice`],
     /// and deliberately has no multi-device form.
     DeleteDevice,
+    /// Create a simulator and select it for this session.
+    ///
+    /// The one device request that names a device: there is no selected
+    /// simulator to act on until this has made one. `device_type` and
+    /// `runtime` are simctl identifiers or display names.
+    CreateDevice {
+        name: String,
+        device_type: String,
+        runtime: String,
+    },
+    /// Block until the session's selected simulator has finished booting.
+    WaitForBoot,
+    /// Stop the runaway `mediaanalysisd` on the session's selected simulator.
+    ///
+    /// The CLI's `quiet-device` takes a UDID because it also serves build
+    /// scripts with no server; over IPC there is a session, so it uses the
+    /// session's device like every other request here.
+    QuietDevice,
+    /// Read recent entries from the selected simulator's unified log.
+    ///
+    /// One-shot (`log show`) only: `log stream` never returns, so it has no
+    /// request/response form.
+    DeviceLog {
+        /// How far back to read, in `log show --last` syntax (`5m`, `1h`).
+        last: String,
+        /// Optional NSPredicate to filter with.
+        #[serde(default)]
+        predicate: Option<String>,
+    },
+    /// Set the selected simulator's light/dark appearance (`dark` or `light`).
+    SetAppearance { appearance: String },
+    /// Set the selected simulator's Dynamic Type content size.
+    SetContentSize { size: String },
+    /// Grant, revoke or reset an app's access to a privacy-protected service
+    /// on the selected simulator.
+    GrantPermission {
+        /// `grant`, `revoke` or `reset`.
+        verb: String,
+        /// A simctl privacy service, e.g. `microphone` or `all`.
+        service: String,
+        bundle_id: String,
+    },
+    /// Add media files to the selected simulator's libraries.
+    ///
+    /// Paths must already be absolute: like [`IpcRequest::InstallApp`], the
+    /// client resolves them against the shell the user typed them in.
+    AddMedia { paths: Vec<String> },
+    /// Open a URL on the selected simulator.
+    OpenUrl { url: String },
 
     // --- Agent Management ---
     /// Start or connect to the automation agent.
@@ -383,6 +432,18 @@ pub enum IpcResponse {
     AppContainer {
         /// Absolute path reported by `simctl get_app_container`.
         path: String,
+    },
+
+    /// UDID of a simulator just created by `create-device`.
+    CreatedDevice {
+        /// UDID reported by `simctl create`, now this session's selection.
+        udid: String,
+    },
+
+    /// Recent unified-log output from the active device.
+    DeviceLog {
+        /// Raw `log show` output, newline-separated.
+        log: String,
     },
 
     /// Installed apps/packages on the active device for `set-target`

@@ -22,14 +22,20 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | List physical devices | `list-physical-devices` | `qorvex list-physical-devices` |
 | Select device | `use-device <udid>` | `qorvex use-device <udid>` |
 | Boot + select | `boot-device <udid>` | `qorvex boot-device <udid>` |
-| Shut down selected device | — | `qorvex shutdown-device` |
-| Delete selected device | — | `qorvex delete-device` |
+| Create + select | `create-device <name> <type> <runtime>` | `qorvex create-device <name> <type> <runtime>` |
+| Wait for boot | `wait-for-boot` | `qorvex wait-for-boot` |
+| Shut down selected device | `shutdown-device` | `qorvex shutdown-device` |
+| Delete selected device | `delete-device` | `qorvex delete-device` |
+| Quiet `mediaanalysisd` | `quiet-device` | `qorvex quiet-device <udid>` |
+| Set appearance | `set-appearance <dark\|light>` | `qorvex set-appearance <dark\|light>` |
+| Set content size | `set-content-size <size>` | `qorvex set-content-size <size>` |
+| Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>]` |
 
-> **The device commands are session-scoped:** `shutdown-device` and
-> `delete-device` take no UDID. They act on the simulator this session selected
-> with `use-device` or `boot-device` and on nothing else, so one session can
-> never shut down or delete another session's simulator. There is no
-> multi-device form; to act on a different simulator, select it first.
+> **The device commands are session-scoped:** none of them takes a UDID. They
+> act on the simulator this session selected with `use-device`, `boot-device`
+> or `create-device` and on nothing else, so one session can never shut down or
+> delete another session's simulator. There is no multi-device form; to act on
+> a different simulator, select it first.
 > ```bash
 > $ qorvex use-device <udid>
 > $ qorvex shutdown-device
@@ -37,14 +43,58 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 > ```
 > With no device selected they fail with `No device selected.`
 
+`create-device` is the one exception: there is no device to act on until it has
+made one, so it names the device — and on success it becomes this session's
+selection, the mirror of `delete-device` dropping it. It prints the new UDID.
+
+```bash
+$ qorvex create-device Aperture-5e9943ac \
+    com.apple.CoreSimulator.SimDeviceType.iPhone-17 \
+    com.apple.CoreSimulator.SimRuntime.iOS-26-5
+5E9943AC-...-...
+$ qorvex boot-device 5E9943AC-...-...
+$ qorvex wait-for-boot
+```
+
+`boot-device` returns as soon as `simctl boot` returns, which is when the boot
+has *started*. `wait-for-boot` (`simctl bootstatus -b`) blocks until it has
+finished, which is what a script should wait on before driving the UI.
+
+`quiet-device` is the one command whose CLI and REPL forms differ: the CLI takes
+a UDID because it also serves build scripts with no qorvex server running, while
+the REPL form uses the session's device like everything else here. Device
+selection already quiets `mediaanalysisd` once; this is for the daemon coming
+back on a long-lived session.
+
+### Appearance, Dynamic Type and logs
+
+```bash
+$ qorvex set-appearance dark
+$ qorvex set-content-size accessibility-extra-extra-extra-large
+$ qorvex device-log --last 2m --predicate 'subsystem == "com.example.MyApp"'
+```
+
+`set-content-size` takes the full Dynamic Type range: `extra-small`, `small`,
+`medium`, `large`, `extra-large`, `extra-extra-large`,
+`extra-extra-extra-large`, and the `accessibility-` variants from
+`accessibility-medium` through `accessibility-extra-extra-extra-large`.
+
+`device-log` is **one-shot**: it wraps `simctl spawn <udid> log show`, defaulting
+to the last 5 minutes. The streaming `log stream` form has no command, because a
+process that never returns does not fit qorvex's request/response protocol — run
+it directly if you need a live tail.
+
 ## App Management
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Install an app bundle | — | `qorvex install-app <path.app>` |
-| Uninstall an app | — | `qorvex uninstall-app <bundle_id>` |
-| Get an app container path | — | `qorvex app-container <bundle_id> [app\|data\|groups]` |
-| List installed apps | — | `qorvex list-apps` |
+| Install an app bundle | `install-app <path.app>` | `qorvex install-app <path.app>` |
+| Uninstall an app | `uninstall-app <bundle_id>` | `qorvex uninstall-app <bundle_id>` |
+| Get an app container path | `app-container <bundle_id> [app\|data\|groups]` | `qorvex app-container <bundle_id> [app\|data\|groups]` |
+| List installed apps | `list-apps` | `qorvex list-apps` |
+| Change a privacy permission | `grant-permission <verb> <service> <bundle_id>` | `qorvex grant-permission <verb> <service> <bundle_id>` |
+| Add media to the libraries | `add-media <file>...` | `qorvex add-media <file>...` |
+| Open a URL | `open-url <url>` | `qorvex open-url <url>` |
 
 These wrap `simctl install`, `uninstall`, `get_app_container` and `listapps` on
 the session's selected simulator — no agent needed, and no UDID to pass:
@@ -61,6 +111,18 @@ $ qorvex --format json list-apps
 
 `app-container` defaults to the `app` container (the installed `.app` bundle),
 matching `simctl get_app_container`.
+
+```bash
+$ qorvex grant-permission grant microphone com.example.MyApp
+$ qorvex add-media ./fixtures/one.png ./fixtures/two.mov   # several files at once
+$ qorvex open-url myapp://onboarding/step-2
+```
+
+`grant-permission` takes `grant`, `revoke` or `reset`, and the simctl privacy
+services: `all`, `calendar`, `contacts-limited`, `contacts`, `location`,
+`location-always`, `photos-add`, `photos`, `media-library`, `microphone`,
+`motion`, `reminders`, `siri`. `reset` forgets the decision, so the app prompts
+again the next time it asks.
 
 ## Agent Management
 
