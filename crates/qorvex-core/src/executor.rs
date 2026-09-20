@@ -662,7 +662,8 @@ impl ActionExecutor {
             | ActionType::SetContentSize { .. }
             | ActionType::GrantPermission { .. }
             | ActionType::AddMedia { .. }
-            | ActionType::OpenUrl { .. } => {
+            | ActionType::OpenUrl { .. }
+            | ActionType::MemoryInfo { .. } => {
                 ExecutionResult::failure("Device management actions must be handled by the server")
             }
         }

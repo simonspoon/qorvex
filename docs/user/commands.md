@@ -307,6 +307,7 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 - `start`: `-d, --device <udid>` -- Select a device (simulator or physical) before starting the session; equivalent to sending `use-device` then `start-session` in sequence
 - `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`, `--tag <text>`
 - `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000), `--tag <text>`
+- `memory-info`: `--tag <text>` — annotates the JSONL log entry; the measured report is written into the entry itself
 - All action commands accept `--tag <text>` — annotates the JSONL log entry; replays as `--tag` in converted scripts
 
 ## Environment Variables

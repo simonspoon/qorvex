@@ -148,7 +148,11 @@ pub static COMMANDS: &[CommandDef] = &[
         name: "memory-info",
         description: "Report target app and device memory",
         args: &[],
-        options: &[],
+        options: &[OptionSpec {
+            flag: "--tag",
+            takes_value: true,
+            description: "Annotate the action log entry with a free-text tag",
+        }],
     },
     CommandDef {
         name: "start-target",

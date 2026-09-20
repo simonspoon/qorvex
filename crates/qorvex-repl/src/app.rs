@@ -713,7 +713,9 @@ impl App {
             "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
-            "memory-info" => IpcRequest::GetMemoryInfo,
+            "memory-info" => IpcRequest::GetMemoryInfo {
+                tag: args.tag.clone(),
+            },
             "shutdown-device" => IpcRequest::ShutdownDevice,
             "delete-device" => IpcRequest::DeleteDevice,
             "quiet-device" => IpcRequest::QuietDevice,
@@ -1221,7 +1223,9 @@ impl App {
             "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
-            "memory-info" => IpcRequest::GetMemoryInfo,
+            "memory-info" => IpcRequest::GetMemoryInfo {
+                tag: args.tag.clone(),
+            },
             "shutdown-device" => IpcRequest::ShutdownDevice,
             "delete-device" => IpcRequest::DeleteDevice,
             "quiet-device" => IpcRequest::QuietDevice,
@@ -1777,6 +1781,8 @@ pub(crate) struct ParsedArgs {
     pub last: Option<String>,
     /// `--predicate <expr>` on `device-log`: NSPredicate to filter with.
     pub predicate: Option<String>,
+    /// `--tag <text>`: free-text annotation for the action log entry.
+    pub tag: Option<String>,
 }
 
 /// Resolve a path argument against the REPL's working directory.
@@ -1854,6 +1860,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         force: false,
         last: None,
         predicate: None,
+        tag: None,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -1875,6 +1882,9 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             "--force" => args.force = true,
             "--last" => {
                 args.last = iter.next();
+            }
+            "--tag" => {
+                args.tag = iter.next();
             }
             "--predicate" => {
                 args.predicate = iter.next();

@@ -22,6 +22,16 @@ fn test_help_exits_zero() {
 }
 
 #[test]
+fn test_memory_info_accepts_tag_flag() {
+    Command::cargo_bin("qorvex")
+        .unwrap()
+        .args(["memory-info", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--tag"));
+}
+
+#[test]
 fn test_convert_basic_session() {
     let fixture = fixture_path("basic_session.jsonl");
 

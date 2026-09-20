@@ -186,6 +186,18 @@ pub enum ActionType {
     /// Get metadata about the currently targeted application.
     GetTargetInfo,
 
+    /// Report the target app's memory footprint and the device's memory state.
+    MemoryInfo {
+        /// The report the command produced, or `None` when it failed. Carried
+        /// in the action itself so a log line records the measurement as well
+        /// as the fact that it was taken. Boxed to keep `ActionType` — and so
+        /// every `ActionLog` and `SessionEvent` — small; it serializes the
+        /// same either way.
+        /// `#[serde(default)]` keeps logs written before this field readable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report: Option<Box<crate::memory::MemoryInfo>>,
+    },
+
     /// Shut down the session's selected simulator.
     ShutdownDevice,
 
@@ -295,6 +307,7 @@ impl ActionType {
             ActionType::StartTarget { .. } => "start_target",
             ActionType::StopTarget => "stop_target",
             ActionType::GetTargetInfo => "get_target_info",
+            ActionType::MemoryInfo { .. } => "memory_info",
             ActionType::ShutdownDevice => "shutdown_device",
             ActionType::DeleteDevice => "delete_device",
             ActionType::InstallApp { .. } => "install_app",
@@ -332,6 +345,7 @@ impl ActionType {
             ActionType::StartTarget { .. } => "StartTarget",
             ActionType::StopTarget => "StopTarget",
             ActionType::GetTargetInfo => "TargetInfo",
+            ActionType::MemoryInfo { .. } => "MemoryInfo",
             ActionType::ShutdownDevice => "ShutdownDevice",
             ActionType::DeleteDevice => "DeleteDevice",
             ActionType::InstallApp { .. } => "InstallApp",
@@ -405,6 +419,7 @@ impl ActionType {
             ActionType::StartTarget { .. }
             | ActionType::StopTarget
             | ActionType::GetTargetInfo
+            | ActionType::MemoryInfo { .. }
             | ActionType::ShutdownDevice
             | ActionType::DeleteDevice
             | ActionType::ListApps

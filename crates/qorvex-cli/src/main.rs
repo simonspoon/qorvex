@@ -427,7 +427,11 @@ enum Command {
     /// Report the target app's memory footprint and the device's memory state
     ///
     /// iOS simulator and Android only; physical iOS devices are not supported.
-    MemoryInfo,
+    MemoryInfo {
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
 
     /// Boot a device (simulator UDID for iOS, AVD name / adb serial for Android)
     BootDevice {
@@ -1105,7 +1109,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::StartTarget { force } => execute_start_target(&mut client, &cli, force).await,
         Command::StopTarget => send_command(&mut client, IpcRequest::StopTarget, &cli).await,
         Command::TargetInfo => execute_target_info(&mut client, &cli).await,
-        Command::MemoryInfo => execute_memory_info(&mut client, &cli).await,
+        Command::MemoryInfo { ref tag } => {
+            execute_memory_info(&mut client, &cli, tag.clone()).await
+        }
         Command::StartSession => send_command(&mut client, IpcRequest::StartSession, &cli).await,
         Command::StartAgent {
             ref project_dir,
@@ -1645,9 +1651,13 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
     }
 }
 
-async fn execute_memory_info(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+async fn execute_memory_info(
+    client: &mut IpcClient,
+    cli: &Cli,
+    tag: Option<String>,
+) -> Result<(), CliError> {
     let response = client
-        .send(&IpcRequest::GetMemoryInfo)
+        .send(&IpcRequest::GetMemoryInfo { tag })
         .await
         .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
 

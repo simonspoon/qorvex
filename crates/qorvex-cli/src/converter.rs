@@ -133,6 +133,7 @@ impl LogConverter {
             }),
             ActionType::StopTarget => Some("qorvex stop-target".to_string()),
             ActionType::GetTargetInfo => Some("qorvex get-target-info".to_string()),
+            ActionType::MemoryInfo { .. } => Some("qorvex memory-info".to_string()),
             ActionType::ShutdownDevice => Some("qorvex shutdown-device".to_string()),
             ActionType::DeleteDevice => Some("qorvex delete-device".to_string()),
             ActionType::InstallApp { path } => {

@@ -284,7 +284,11 @@ pub enum IpcRequest {
     ///
     /// Gathered host-side via `simctl`/`ps`/`vm_stat` (iOS simulator) or `adb`
     /// (Android), so it needs no agent — only a device and a target.
-    GetMemoryInfo,
+    GetMemoryInfo {
+        /// Optional free-text tag for log filtering/analysis.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
 
     // --- App Management ---
     /// Install an app bundle on the session's selected simulator.

@@ -896,6 +896,96 @@ async fn test_session_creates_persistent_log_file() {
     fs::remove_file(&log_file).expect("Should clean up test log file");
 }
 
+/// `memory-info` carries its report in the action payload, so one JSONL line
+/// records both that the measurement was taken and what it measured — along
+/// with the `--tag` the caller passed.
+#[tokio::test]
+async fn test_memory_info_action_is_logged_with_report_and_tag() {
+    use qorvex_core::memory::{AppMemory, DeviceMemory, MemoryInfo, MemoryPressure};
+    use std::fs;
+
+    let session_name = unique_session_name();
+    let log_dir = std::env::temp_dir().join(format!("qorvex_test_{}", session_name));
+    let session = Session::new_with_log_dir(None, &session_name, log_dir.clone());
+
+    let report = MemoryInfo {
+        app: AppMemory {
+            pid: 4242,
+            footprint_bytes: 123_456_789,
+            source: "ps -o rss".to_string(),
+        },
+        device: DeviceMemory {
+            total_bytes: 17_179_869_184,
+            free_bytes: 2_147_483_648,
+            pressure: MemoryPressure::Normal,
+            source: "vm_stat".to_string(),
+        },
+    };
+
+    session
+        .log_action(
+            ActionType::MemoryInfo {
+                report: Some(Box::new(report)),
+            },
+            ActionResult::Success,
+            None,
+            Some(12),
+            Some("mem-probe".to_string()),
+        )
+        .await;
+    session
+        .log_action(
+            ActionType::MemoryInfo { report: None },
+            ActionResult::Failure(
+                "com.example.App is not running. Use start-target first.".to_string(),
+            ),
+            None,
+            Some(7),
+            Some("mem-probe".to_string()),
+        )
+        .await;
+
+    let log_file = fs::read_dir(&log_dir)
+        .expect("Log directory should exist")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        .expect("Should find the session log file");
+    let contents = fs::read_to_string(&log_file).expect("Should read log file");
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len(), 2, "Should have 2 log entries");
+
+    let success: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(success["action"]["type"].as_str(), Some("MemoryInfo"));
+    assert_eq!(success["result"], "Success");
+    assert_eq!(success["tag"].as_str(), Some("mem-probe"));
+    assert_eq!(success["duration_ms"].as_u64(), Some(12));
+    assert_eq!(
+        success["action"]["report"]["app"]["footprint_bytes"].as_u64(),
+        Some(123_456_789)
+    );
+    assert_eq!(
+        success["action"]["report"]["app"]["pid"].as_u64(),
+        Some(4242)
+    );
+    assert_eq!(
+        success["action"]["report"]["device"]["pressure"].as_str(),
+        Some("normal")
+    );
+
+    let failure: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(failure["action"]["type"].as_str(), Some("MemoryInfo"));
+    assert_eq!(failure["tag"].as_str(), Some("mem-probe"));
+    assert_eq!(
+        failure["result"]["Failure"].as_str(),
+        Some("com.example.App is not running. Use start-target first.")
+    );
+    // `report` is skipped when absent, so a failed probe logs no measurement.
+    assert!(failure["action"].get("report").is_none());
+
+    fs::remove_dir_all(&log_dir).ok();
+}
+
 // =============================================================================
 // Socket Cleanup Tests
 // =============================================================================

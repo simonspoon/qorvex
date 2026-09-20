@@ -211,7 +211,7 @@ impl ServerState {
 
             // ── Target Info ─────────────────────────────────────────────
             IpcRequest::GetTargetInfo => self.handle_get_target_info().await,
-            IpcRequest::GetMemoryInfo => self.handle_memory_info().await,
+            IpcRequest::GetMemoryInfo { tag } => self.handle_memory_info(tag).await,
 
             // ── App Management ──────────────────────────────────────────
             IpcRequest::InstallApp { path } => self.handle_install_app(&path).await,
@@ -1333,11 +1333,24 @@ impl ServerState {
     /// `simulator_udid`, so `is_physical_device` is what separates it from a
     /// simulator; it is checked first so such a device is never measured as
     /// though it were one.
-    async fn handle_memory_info(&self) -> IpcResponse {
+    async fn handle_memory_info(&self, tag: Option<String>) -> IpcResponse {
+        // This command does not flow through `handle_execute`, so it times
+        // itself and logs each outcome explicitly. The report rides along in
+        // the action payload so one log line records what was measured.
+        let started = std::time::Instant::now();
+
         let Some(bundle_id) = self.target_bundle_id.clone() else {
+            let message = "No target set. Use set-target first.".to_string();
+            self.log_action(
+                ActionType::MemoryInfo { report: None },
+                ActionResult::Failure(message.clone()),
+                Some(started.elapsed().as_millis() as u64),
+                tag,
+            )
+            .await;
             return IpcResponse::CommandResult {
                 success: false,
-                message: "No target set. Use set-target first.".to_string(),
+                message,
             };
         };
         let result = if let Some(serial) = self.android_serial.clone() {
@@ -1347,11 +1360,19 @@ impl ServerState {
             })
             .await
         } else if self.is_physical_device {
+            let message = "memory-info is not supported on physical iOS devices. \
+                           Use an iOS simulator or an Android device."
+                .to_string();
+            self.log_action(
+                ActionType::MemoryInfo { report: None },
+                ActionResult::Failure(message.clone()),
+                Some(started.elapsed().as_millis() as u64),
+                tag,
+            )
+            .await;
             return IpcResponse::CommandResult {
                 success: false,
-                message: "memory-info is not supported on physical iOS devices. \
-                          Use an iOS simulator or an Android device."
-                    .to_string(),
+                message,
             };
         } else if let Some(udid) = self.simulator_udid.clone() {
             let bid = bundle_id.clone();
@@ -1360,34 +1381,84 @@ impl ServerState {
             })
             .await
         } else {
+            let message = "No device selected.".to_string();
+            self.log_action(
+                ActionType::MemoryInfo { report: None },
+                ActionResult::Failure(message.clone()),
+                Some(started.elapsed().as_millis() as u64),
+                tag,
+            )
+            .await;
             return IpcResponse::CommandResult {
                 success: false,
-                message: "No device selected.".to_string(),
+                message,
             };
         };
 
         match result {
-            Ok(Ok(Some(info))) => IpcResponse::ActionResult {
-                success: true,
-                message: format!(
-                    "{} using {} bytes (pid {})",
-                    bundle_id, info.app.footprint_bytes, info.app.pid
-                ),
-                screenshot: None,
-                data: Some(serde_json::to_string(&info).unwrap_or_default()),
-            },
-            Ok(Ok(None)) => IpcResponse::CommandResult {
-                success: false,
-                message: format!("{} is not running. Use start-target first.", bundle_id),
-            },
-            Ok(Err(e)) => IpcResponse::CommandResult {
-                success: false,
-                message: format!("memory-info failed: {}", e),
-            },
-            Err(e) => IpcResponse::CommandResult {
-                success: false,
-                message: format!("memory-info failed: {}", e),
-            },
+            Ok(Ok(Some(info))) => {
+                let response = IpcResponse::ActionResult {
+                    success: true,
+                    message: format!(
+                        "{} using {} bytes (pid {})",
+                        bundle_id, info.app.footprint_bytes, info.app.pid
+                    ),
+                    screenshot: None,
+                    data: Some(serde_json::to_string(&info).unwrap_or_default()),
+                };
+                self.log_action(
+                    ActionType::MemoryInfo {
+                        report: Some(Box::new(info)),
+                    },
+                    ActionResult::Success,
+                    Some(started.elapsed().as_millis() as u64),
+                    tag,
+                )
+                .await;
+                response
+            }
+            Ok(Ok(None)) => {
+                let message = format!("{} is not running. Use start-target first.", bundle_id);
+                self.log_action(
+                    ActionType::MemoryInfo { report: None },
+                    ActionResult::Failure(message.clone()),
+                    Some(started.elapsed().as_millis() as u64),
+                    tag,
+                )
+                .await;
+                IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+            Ok(Err(e)) => {
+                let message = format!("memory-info failed: {}", e);
+                self.log_action(
+                    ActionType::MemoryInfo { report: None },
+                    ActionResult::Failure(message.clone()),
+                    Some(started.elapsed().as_millis() as u64),
+                    tag,
+                )
+                .await;
+                IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+            Err(e) => {
+                let message = format!("memory-info failed: {}", e);
+                self.log_action(
+                    ActionType::MemoryInfo { report: None },
+                    ActionResult::Failure(message.clone()),
+                    Some(started.elapsed().as_millis() as u64),
+                    tag,
+                )
+                .await;
+                IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
         }
     }
 

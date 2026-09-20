@@ -522,6 +522,7 @@ fn matrix_covers_every_action_type() {
         "grant_permission",
         "add_media",
         "open_url",
+        "memory_info",
     ];
 
     // Exhaustive match: adding a new ActionType variant fails to compile until
@@ -557,7 +558,8 @@ fn matrix_covers_every_action_type() {
             | ActionType::SetContentSize { .. }
             | ActionType::GrantPermission { .. }
             | ActionType::AddMedia { .. }
-            | ActionType::OpenUrl { .. } => "device",
+            | ActionType::OpenUrl { .. }
+            | ActionType::MemoryInfo { .. } => "device",
         }
     }
 
@@ -582,7 +584,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        32,
+        33,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }
