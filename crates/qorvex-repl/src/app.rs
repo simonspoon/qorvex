@@ -783,11 +783,11 @@ impl App {
             "get-session-info" => IpcRequest::GetSessionInfo,
             "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
-                tag: None,
+                tag: args.tag.clone(),
             },
             "list-elements" | "get-screen-info" => IpcRequest::Execute {
                 action: ActionType::GetScreenInfo,
-                tag: None,
+                tag: args.tag.clone(),
             },
             "tap" => {
                 let selector = args
@@ -818,7 +818,7 @@ impl App {
                         element_type,
                         timeout_ms,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "swipe" => IpcRequest::Execute {
@@ -829,7 +829,7 @@ impl App {
                         .map(|s| s.to_lowercase())
                         .unwrap_or_else(|| "up".to_string()),
                 },
-                tag: None,
+                tag: args.tag.clone(),
             },
             "tap-location" => {
                 if args.positional.len() < 2 {
@@ -847,7 +847,7 @@ impl App {
                 ) {
                     (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
                         action: ActionType::TapLocation { x, y },
-                        tag: None,
+                        tag: args.tag.clone(),
                     },
                     _ => {
                         self.add_output(format_result(false, "Invalid coordinates"));
@@ -883,7 +883,7 @@ impl App {
                         timeout_ms,
                         require_stable: true,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "wait-for-not" => {
@@ -911,7 +911,7 @@ impl App {
                         element_type,
                         timeout_ms,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "send-keys" => {
@@ -927,7 +927,7 @@ impl App {
                 }
                 IpcRequest::Execute {
                     action: ActionType::SendKeys { text },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "get-value" => {
@@ -959,7 +959,7 @@ impl App {
                         element_type,
                         timeout_ms,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "log-comment" => {
@@ -975,7 +975,7 @@ impl App {
                 }
                 IpcRequest::Execute {
                     action: ActionType::LogComment { message },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             _ => {
@@ -1291,11 +1291,11 @@ impl App {
             "get-session-info" => IpcRequest::GetSessionInfo,
             "get-screenshot" => IpcRequest::Execute {
                 action: ActionType::GetScreenshot,
-                tag: None,
+                tag: args.tag.clone(),
             },
             "list-elements" | "get-screen-info" => IpcRequest::Execute {
                 action: ActionType::GetScreenInfo,
-                tag: None,
+                tag: args.tag.clone(),
             },
             "tap" => {
                 let selector = args
@@ -1324,7 +1324,7 @@ impl App {
                         element_type,
                         timeout_ms,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "swipe" => IpcRequest::Execute {
@@ -1335,7 +1335,7 @@ impl App {
                         .map(|s| s.to_lowercase())
                         .unwrap_or_else(|| "up".to_string()),
                 },
-                tag: None,
+                tag: args.tag.clone(),
             },
             "tap-location" => {
                 if args.positional.len() < 2 {
@@ -1351,7 +1351,7 @@ impl App {
                 ) {
                     (Ok(x), Ok(y)) if x >= 0 && y >= 0 => IpcRequest::Execute {
                         action: ActionType::TapLocation { x, y },
-                        tag: None,
+                        tag: args.tag.clone(),
                     },
                     _ => {
                         self.add_output(format_result(false, "Invalid coordinates"));
@@ -1383,7 +1383,7 @@ impl App {
                         timeout_ms,
                         require_stable: true,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "wait-for-not" => {
@@ -1409,7 +1409,7 @@ impl App {
                         element_type,
                         timeout_ms,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "send-keys" => {
@@ -1423,7 +1423,7 @@ impl App {
                 }
                 IpcRequest::Execute {
                     action: ActionType::SendKeys { text },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "get-value" => {
@@ -1453,7 +1453,7 @@ impl App {
                         element_type,
                         timeout_ms,
                     },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             "log-comment" => {
@@ -1467,7 +1467,7 @@ impl App {
                 }
                 IpcRequest::Execute {
                     action: ActionType::LogComment { message },
-                    tag: None,
+                    tag: args.tag.clone(),
                 }
             }
             _ => {
@@ -2144,5 +2144,108 @@ mod tests {
         // Should not panic or error
         app.shutdown().await;
         assert!(app.client.is_none());
+    }
+
+    // --- --tag threading tests ---
+
+    /// Verify that `tap <selector> --tag <tag>` leaves the REPL with the tag
+    /// attached, so the server writes it into the JSONL action log entry.
+    ///
+    /// A real tap needs a connected automation driver — without one the server
+    /// answers "No automation backend connected" and logs nothing — so this
+    /// asserts at the closest driver-free seam: the `IpcRequest` the REPL
+    /// actually writes to the socket. A stub server on the session socket
+    /// captures that line and replies so `process_command` doesn't block.
+    #[tokio::test]
+    async fn test_tap_with_tag_sends_tag_in_ipc_request() {
+        use qorvex_core::ipc::socket_path;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+
+        // Unique session name to avoid conflicts
+        let session_name = format!(
+            "repl_tag_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        );
+        let sock = socket_path(&session_name);
+        if let Some(parent) = sock.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+
+            let response = IpcResponse::ActionResult {
+                success: true,
+                message: "ok".to_string(),
+                screenshot: None,
+                data: None,
+            };
+            let json = serde_json::to_string(&response).unwrap() + "\n";
+            writer.write_all(json.as_bytes()).await.unwrap();
+            writer.flush().await.unwrap();
+            line
+        });
+
+        let client = IpcClient::connect(&session_name).await.unwrap();
+
+        // Build a minimal App with the client
+        let mut app = App {
+            input: Input::default(),
+            completion: CompletionState::default(),
+            output_history: std::collections::VecDeque::new(),
+            output_scroll_position: 0,
+            selection: SelectionState::default(),
+            output_area: None,
+            should_quit: false,
+            history_revision: 0,
+            visual_cache: VisualLineCache::default(),
+            session_name: session_name.clone(),
+            client: Some(client),
+            cached_elements: Vec::new(),
+            cached_devices: Vec::new(),
+            cached_android_devices: Vec::new(),
+            cached_apps: Vec::new(),
+            app_update_rx: None,
+            app_fetch_trigger_tx: None,
+            apps_loading: false,
+            apps_fetch_started_at: None,
+            element_update_rx: None,
+            fetch_trigger_tx: None,
+            active_fetch_command: None,
+            elements_loading: false,
+            fetch_started_at: None,
+            is_processing: false,
+            processing_label: String::new(),
+            processing_start: None,
+            cmd_result_rx: None,
+            startup_rx: None,
+        };
+
+        app.process_command("tap btn --tag smoke").await;
+
+        let line = server_handle.await.unwrap();
+        let _ = std::fs::remove_file(&sock);
+
+        let request: IpcRequest = serde_json::from_str(line.trim()).unwrap();
+        match request {
+            IpcRequest::Execute {
+                action: ActionType::Tap { selector, .. },
+                tag,
+            } => {
+                assert_eq!(selector, "btn");
+                assert_eq!(tag.as_deref(), Some("smoke"), "--tag must reach the server");
+            }
+            other => panic!("expected Execute/Tap request, got {:?}", other),
+        }
     }
 }
