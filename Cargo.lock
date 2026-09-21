@@ -1928,7 +1928,7 @@ checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
 
 [[package]]
 name = "qorvex-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1946,7 +1946,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-repl"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arboard",
  "base64",
@@ -1983,7 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "qorvex-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "clap",
  "qorvex-core",
