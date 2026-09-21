@@ -50,8 +50,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # packages: '' installs cmdline-tools and accepts the licenses without
+      # installing anything. The action's default ('tools platform-tools')
+      # fails: the legacy standalone 'tools' package no longer exists.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install Android SDK packages
         run: |

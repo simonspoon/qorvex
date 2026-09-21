@@ -146,10 +146,16 @@ jobs:
           java-version: '17'
 
       # ubuntu-latest ships an Android SDK; ANDROID_HOME/ANDROID_SDK_ROOT are
-      # preset. This action makes the requested platform + build-tools present
-      # (matching qorvex-agent-android/build.gradle.kts: compileSdk 35).
+      # preset. This action installs cmdline-tools and accepts the SDK licenses
+      # so the next step can install the packages that
+      # qorvex-agent-android/build.gradle.kts needs (compileSdk 35).
+      # packages: '' installs nothing here; the action's default
+      # ('tools platform-tools') fails, because the legacy standalone
+      # 'tools' package no longer exists.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install Android SDK packages
         run: |
