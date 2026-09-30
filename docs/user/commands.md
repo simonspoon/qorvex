@@ -31,6 +31,29 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Set content size | `set-content-size <size>` | `qorvex set-content-size <size>` |
 | Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>]` |
 
+### Simulator leases and disk reclamation
+
+These commands need no running session. A lease is a throwaway simulator cloned
+from a shut-down golden device (`qorvex-golden-<model>`, created on first use and
+never booted) and named `qorvex-lease-<id>`. Leases live in `~/.qorvex/leases.db`
+(`$QORVEX_HOME`).
+
+| Command | What it does |
+|---------|--------------|
+| `qorvex lease --model "iPhone Air" --owner <name> [--runtime <id>] [--ttl 4h]` | Clone, boot and wait; prints the UDID, then `QORVEX_DEVICE=<udid>` |
+| `qorvex lease heartbeat <udid>` | Reset the lease's heartbeat |
+| `qorvex lease list` | Leases with age, heartbeat age and expiry (`-f json` for JSON) |
+| `qorvex release <udid>` / `--owner <name>` | Shut down and delete the clone. Idempotent; refuses names not starting `qorvex-lease-` |
+| `qorvex reap [--dry-run]` | Release leases past their TTL; delete `qorvex-lease-*` devices with no lease row |
+| `qorvex sims reclaim [--older-than 14d] [--yes]` | Disk reclamation for any machine. Dry run by default |
+
+`reap` leaves an orphan alone if it is booted or was touched in the last ten
+minutes. `sims reclaim` lists each candidate with its on-disk size and a total:
+unavailable simulators, expired/orphan leases, and shut-down simulators idle for
+`--older-than`. It never touches a booted simulator or a golden device, reports
+the `CoreSimulator/Caches` size without deleting it, and points at
+`xcrun simctl runtime list` for unused runtimes.
+
 > **The device commands are session-scoped:** none of them takes a UDID. They
 > act on the simulator this session selected with `use-device`, `boot-device`
 > or `create-device` and on nothing else, so one session can never shut down or

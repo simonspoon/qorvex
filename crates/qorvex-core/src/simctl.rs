@@ -106,6 +106,31 @@ pub struct SimulatorDevice {
     pub device_type: Option<String>,
 }
 
+/// A simulator as listed by `simctl list devices -j`, with availability.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeviceDetail {
+    /// The unique device identifier (UDID).
+    pub udid: String,
+
+    /// The human-readable name of the device.
+    pub name: String,
+
+    /// The current state of the device (e.g., "Booted", "Shutdown").
+    pub state: String,
+
+    /// False when the device's runtime is no longer installed.
+    #[serde(rename = "isAvailable", default = "default_available")]
+    pub is_available: bool,
+
+    /// Runtime identifier the device belongs to (the key it is listed under).
+    #[serde(skip)]
+    pub runtime: String,
+}
+
+fn default_available() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize)]
 struct DeviceList {
     devices: std::collections::HashMap<String, Vec<SimulatorDevice>>,
@@ -369,6 +394,112 @@ impl Simctl {
             ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Clones a simulator under a new name and returns the clone's UDID.
+    ///
+    /// The source must be shut down. The clone is a full copy of its data.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn clone_device(udid: &str, name: &str) -> Result<String, SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "clone", udid, name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Lists every simulator with its availability, including unavailable ones.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns a non-zero exit code
+    /// - [`SimctlError::JsonParse`] if the output cannot be parsed as JSON
+    pub fn list_device_details() -> Result<Vec<DeviceDetail>, SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "list", "devices", "-j"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Self::parse_device_details(&output.stdout)
+    }
+
+    /// Parses `simctl list devices -j` output into [`DeviceDetail`]s.
+    pub fn parse_device_details(json: &[u8]) -> Result<Vec<DeviceDetail>, SimctlError> {
+        #[derive(Deserialize)]
+        struct Details {
+            devices: std::collections::HashMap<String, Vec<DeviceDetail>>,
+        }
+        let details: Details = serde_json::from_slice(json)?;
+        Ok(details
+            .devices
+            .into_iter()
+            .flat_map(|(runtime, devices)| {
+                devices.into_iter().map(move |mut d| {
+                    d.runtime = runtime.clone();
+                    d
+                })
+            })
+            .collect())
+    }
+
+    /// Returns the identifier of the newest available iOS runtime.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns a non-zero exit code
+    /// - [`SimctlError::JsonParse`] if the output cannot be parsed as JSON
+    /// - [`SimctlError::CommandFailed`] if no iOS runtime is available
+    pub fn newest_ios_runtime() -> Result<String, SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "list", "runtimes", "-j"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Self::newest_ios_runtime_from(&output.stdout)?
+            .ok_or_else(|| SimctlError::CommandFailed("no available iOS runtime".to_string()))
+    }
+
+    /// Picks the newest available iOS runtime identifier from `simctl list runtimes -j`.
+    pub fn newest_ios_runtime_from(json: &[u8]) -> Result<Option<String>, SimctlError> {
+        #[derive(Deserialize)]
+        struct Runtime {
+            identifier: String,
+            version: String,
+            #[serde(rename = "isAvailable", default)]
+            is_available: bool,
+        }
+        #[derive(Deserialize)]
+        struct Runtimes {
+            runtimes: Vec<Runtime>,
+        }
+        let runtimes: Runtimes = serde_json::from_slice(json)?;
+        let version_key =
+            |v: &str| -> Vec<u32> { v.split('.').map(|p| p.parse().unwrap_or(0)).collect() };
+        Ok(runtimes
+            .runtimes
+            .into_iter()
+            .filter(|r| r.is_available && r.identifier.contains(".SimRuntime.iOS-"))
+            .max_by_key(|r| version_key(&r.version))
+            .map(|r| r.identifier))
     }
 
     /// Blocks until a simulator has finished booting.

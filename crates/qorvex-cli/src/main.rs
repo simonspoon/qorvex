@@ -51,6 +51,7 @@
 //! ```
 
 mod converter;
+mod lease;
 
 use clap::{Parser, Subcommand};
 use qorvex_core::action::ActionType;
@@ -246,6 +247,50 @@ impl PrivacyServiceArg {
             PrivacyServiceArg::Siri => "siri",
         }
     }
+}
+
+#[derive(clap::Args)]
+struct LeaseArgs {
+    /// Device type name (e.g. "iPhone Air")
+    #[arg(long)]
+    model: Option<String>,
+    /// Who holds the lease (used by `release --owner`)
+    #[arg(long)]
+    owner: Option<String>,
+    /// Runtime identifier for a new golden device (default: newest iOS)
+    #[arg(long)]
+    runtime: Option<String>,
+    /// Lease time-to-live without a heartbeat (<n>s|m|h|d)
+    #[arg(long, default_value = "4h")]
+    ttl: String,
+}
+
+#[derive(Subcommand)]
+enum LeaseAction {
+    /// Extend a lease by resetting its heartbeat
+    Heartbeat {
+        /// UDID of the leased simulator
+        udid: String,
+    },
+    /// List leases with age, heartbeat and expiry
+    List,
+}
+
+#[derive(Subcommand)]
+enum SimsAction {
+    /// Find (and with --yes delete) simulators that only waste disk
+    ///
+    /// Dry run by default. Candidates: unavailable simulators, expired and
+    /// orphaned leases, and shut-down simulators idle for --older-than.
+    /// Booted simulators and golden devices are never touched.
+    Reclaim {
+        /// Idle age after which a shut-down simulator is a candidate (<n>s|m|h|d, default 14d)
+        #[arg(long)]
+        older_than: Option<String>,
+        /// Delete the candidates instead of listing them
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -586,6 +631,43 @@ enum Command {
         udid: String,
     },
 
+    /// Lease a throwaway simulator cloned from a golden device
+    ///
+    /// Prints the UDID, then `QORVEX_DEVICE=<udid>`. Give it back with
+    /// `qorvex release`; `qorvex reap` deletes leases that stopped heartbeating.
+    #[command(args_conflicts_with_subcommands = true)]
+    Lease {
+        #[command(flatten)]
+        args: LeaseArgs,
+        #[command(subcommand)]
+        action: Option<LeaseAction>,
+    },
+
+    /// Delete a leased simulator and its lease (by UDID or owner)
+    ///
+    /// Refuses any device not named qorvex-lease-*. Idempotent.
+    #[command(group(clap::ArgGroup::new("target").required(true).args(["udid", "owner"])))]
+    Release {
+        /// UDID of the leased simulator
+        udid: Option<String>,
+        /// Release every lease held by this owner
+        #[arg(long)]
+        owner: Option<String>,
+    },
+
+    /// Delete leases past their TTL and orphaned qorvex-lease-* simulators
+    Reap {
+        /// Print what would be deleted without deleting it
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Simulator housekeeping
+    Sims {
+        #[command(subcommand)]
+        action: SimsAction,
+    },
+
     /// Convert a JSONL action log to a shell script
     Convert {
         /// Path to the JSONL log file (reads from stdin if omitted)
@@ -756,6 +838,39 @@ async fn connect_to_session(session: &str) -> Result<IpcClient, CliError> {
 async fn run(cli: Cli) -> Result<(), CliError> {
     // Handle commands that don't need an IPC connection
     match cli.command {
+        Command::Lease {
+            ref args,
+            ref action,
+        } => {
+            let json = cli.format == OutputFormat::Json;
+            return match action {
+                None => lease::lease(
+                    args.model.as_deref(),
+                    args.owner.as_deref(),
+                    args.runtime.as_deref(),
+                    &args.ttl,
+                    json,
+                ),
+                Some(LeaseAction::Heartbeat { udid }) => lease::heartbeat(udid),
+                Some(LeaseAction::List) => lease::list(json),
+            };
+        }
+        Command::Release {
+            ref udid,
+            ref owner,
+        } => {
+            return lease::release_cmd(udid.as_deref(), owner.as_deref());
+        }
+        Command::Reap { dry_run } => return lease::reap(dry_run),
+        Command::Sims {
+            action:
+                SimsAction::Reclaim {
+                    ref older_than,
+                    yes,
+                },
+        } => {
+            return lease::reclaim(older_than.as_deref(), yes, cli.format == OutputFormat::Json);
+        }
         Command::ListSessions => {
             let sessions = discover_sessions();
             if cli.format == OutputFormat::Json {
@@ -1255,6 +1370,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         // These commands are handled before IPC connection above
         Command::ListSessions
+        | Command::Lease { .. }
+        | Command::Release { .. }
+        | Command::Reap { .. }
+        | Command::Sims { .. }
         | Command::ListDevices { .. }
         | Command::BootDevice { .. }
         | Command::Convert { .. }

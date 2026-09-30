@@ -26,6 +26,7 @@
 //! - [`simctl`] - Wrapper around Apple's `xcrun simctl` CLI for simulator control
 //! - [`adb_device`] - Wrapper around Android's `adb` CLI for device/emulator control
 //! - [`adb_forward`] - Single `adb forward` TCP tunnel to the on-device Android agent
+//! - [`lease`] - Throwaway simulator leases (clone, heartbeat, release, reap) and disk reclamation
 //! - [`session`] - Session state management with event broadcasting
 //! - [`ipc`] - Unix socket-based IPC for REPL and watcher communication
 //! - [`memory`] - Shared `MemoryInfo` report types for `memory-info`
@@ -60,6 +61,7 @@ pub mod driver;
 pub mod element;
 pub mod executor;
 pub mod ipc;
+pub mod lease;
 pub mod memory;
 pub mod protocol;
 pub mod session;
