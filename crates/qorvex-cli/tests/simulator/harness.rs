@@ -1,6 +1,7 @@
 use assert_cmd::Command;
+use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Simulator the suite creates and drives when `QORVEX_TEST_SIM` is unset.
 const TEST_SIM_NAME: &str = "qorvex-test";
@@ -227,8 +228,38 @@ fn launch_testapp(udid: &str) {
     std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
-/// Get or initialize the shared harness.
+/// Bring the testapp back to the foreground in a clean state. For tests that
+/// leave it away (another app opened, testapp uninstalled and reinstalled) —
+/// later tests assume it is frontmost.
+pub fn relaunch_testapp() {
+    let t = TEARDOWN.get().expect("harness() must run first");
+    launch_testapp(&t.udid);
+}
+
+/// Serializes the tests. They all drive one simulator through one session, and
+/// concurrent device commands contend with each other and blow the 15s command
+/// timeout in `run`/`run_fail` (`<interrupted>`). That is contention between
+/// tests, not a product defect, so the suite serializes itself and no
+/// `--test-threads=1` is needed.
+static SUITE_LOCK: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// The lock guard of the test running on this thread. Taken on the first
+    /// `harness()` call and held until the test's thread exits, so a whole test
+    /// body (including multi-step ones) runs without interleaving. Thread-local
+    /// destructors run at thread exit, which libtest reaches after the test ends.
+    static SUITE_GUARD: RefCell<Option<MutexGuard<'static, ()>>> = const { RefCell::new(None) };
+}
+
+/// Get or initialize the shared harness. Also takes the suite-wide lock for the
+/// calling test's thread (reentrant: later calls on that thread are no-ops).
 pub fn harness() -> &'static SimulatorHarness {
+    SUITE_GUARD.with(|g| {
+        let mut g = g.borrow_mut();
+        if g.is_none() {
+            *g = Some(SUITE_LOCK.lock().unwrap_or_else(|e| e.into_inner()));
+        }
+    });
     HARNESS.get_or_init(SimulatorHarness::init)
 }
 

@@ -1,4 +1,4 @@
-use super::harness::{harness, run, run_fail, run_json, testapp_path};
+use super::harness::{harness, relaunch_testapp, run, run_fail, run_json, testapp_path};
 
 /// The testapp the harness installs, used as a known-present bundle id.
 const TESTAPP_BUNDLE_ID: &str = "com.qorvex.testapp";
@@ -89,6 +89,8 @@ fn test_uninstall_then_reinstall_testapp() {
         run(&["list-apps"]).contains(TESTAPP_BUNDLE_ID),
         "testapp should be back after install-app"
     );
+    // Reinstalling leaves it not running; later tests need it frontmost.
+    relaunch_testapp();
 }
 
 #[test]
@@ -229,6 +231,8 @@ fn test_grant_permission_rejects_unknown_service() {
 fn test_open_url_succeeds() {
     harness();
     run(&["open-url", "https://example.com"]);
+    // Safari is now frontmost; later tests need the testapp.
+    relaunch_testapp();
 }
 
 #[test]
