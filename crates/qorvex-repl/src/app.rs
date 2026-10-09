@@ -8,7 +8,7 @@ use ratatui::text::Line;
 use tokio::sync::mpsc;
 use tui_input::Input;
 
-use qorvex_core::action::ActionType;
+use qorvex_core::action::{parse_coordinate, ActionType};
 use qorvex_core::adb_device::AndroidDevice;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
@@ -829,14 +829,20 @@ impl App {
                     tag: args.tag.clone(),
                 }
             }
-            "swipe" => IpcRequest::Execute {
-                action: ActionType::Swipe {
-                    direction: args
-                        .positional
-                        .first()
-                        .map(|s| s.to_lowercase())
-                        .unwrap_or_else(|| "up".to_string()),
+            "swipe" => match swipe_action(&args) {
+                Ok(action) => IpcRequest::Execute {
+                    action,
+                    tag: args.tag.clone(),
                 },
+                Err(msg) => {
+                    self.add_output(format_result(false, &msg));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+            },
+            "lock" => IpcRequest::Execute {
+                action: ActionType::Lock,
                 tag: args.tag.clone(),
             },
             "tap-location" => {
@@ -1341,14 +1347,18 @@ impl App {
                     tag: args.tag.clone(),
                 }
             }
-            "swipe" => IpcRequest::Execute {
-                action: ActionType::Swipe {
-                    direction: args
-                        .positional
-                        .first()
-                        .map(|s| s.to_lowercase())
-                        .unwrap_or_else(|| "up".to_string()),
+            "swipe" => match swipe_action(&args) {
+                Ok(action) => IpcRequest::Execute {
+                    action,
+                    tag: args.tag.clone(),
                 },
+                Err(msg) => {
+                    self.add_output(format_result(false, &msg));
+                    return;
+                }
+            },
+            "lock" => IpcRequest::Execute {
+                action: ActionType::Lock,
                 tag: args.tag.clone(),
             },
             "tap-location" => {
@@ -1757,6 +1767,8 @@ impl App {
             "  list-elements            List all UI elements",
             "  tap <sel> [--label] [--type T] [--no-wait] [--timeout ms]",
             "  swipe [direction]        Swipe: up, down, left, right",
+            "  swipe --from x,y --to x,y  Swipe between two coordinates",
+            "  lock                     Lock the selected device",
             "  tap-location <x> <y>    Tap at screen coordinates",
             "  get-value <sel> [--label] [--type T] [--no-wait]",
             "  wait-for <sel> [--label] [--type T] [--timeout ms]",
@@ -1797,6 +1809,38 @@ pub(crate) struct ParsedArgs {
     pub predicate: Option<String>,
     /// `--tag <text>`: free-text annotation for the action log entry.
     pub tag: Option<String>,
+    /// `--from x,y` on `swipe`: raw start coordinate.
+    pub from: Option<String>,
+    /// `--to x,y` on `swipe`: raw end coordinate.
+    pub to: Option<String>,
+}
+
+/// Build the `swipe` action from parsed REPL args: a direction (default `up`)
+/// or `--from x,y --to x,y`. Returns a user-facing error message on misuse.
+fn swipe_action(args: &ParsedArgs) -> Result<ActionType, String> {
+    match (&args.from, &args.to) {
+        (None, None) => Ok(ActionType::Swipe {
+            direction: args
+                .positional
+                .first()
+                .map(|s| s.to_lowercase())
+                .unwrap_or_else(|| "up".to_string()),
+        }),
+        (Some(from), Some(to)) => {
+            if !args.positional.is_empty() {
+                return Err("swipe: a direction cannot be combined with --from/--to".to_string());
+            }
+            let (from_x, from_y) = parse_coordinate(from)?;
+            let (to_x, to_y) = parse_coordinate(to)?;
+            Ok(ActionType::SwipeCoords {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            })
+        }
+        _ => Err("swipe: --from and --to must be given together".to_string()),
+    }
 }
 
 /// Resolve a path argument against the REPL's working directory.
@@ -1947,6 +1991,8 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         last: None,
         predicate: None,
         tag: None,
+        from: None,
+        to: None,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -1975,6 +2021,12 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             "--predicate" => {
                 args.predicate = iter.next();
             }
+            "--from" if cmd == "swipe" => {
+                args.from = iter.next();
+            }
+            "--to" if cmd == "swipe" => {
+                args.to = iter.next();
+            }
             _ => args.positional.push(tok),
         }
     }
@@ -1990,6 +2042,47 @@ mod tests {
 
     fn pos(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_from_to_only_flags_for_swipe() {
+        let (_, a) = parse_command("send-keys --to");
+        assert_eq!(a.positional, vec!["--to".to_string()]);
+        assert!(a.to.is_none());
+        let (_, a) = parse_command("log-comment --from here");
+        assert_eq!(a.positional, vec!["--from".to_string(), "here".to_string()]);
+        assert!(a.from.is_none());
+        let (_, a) = parse_command("swipe --from 1,2 --to 3,4");
+        assert_eq!(a.from.as_deref(), Some("1,2"));
+        assert_eq!(a.to.as_deref(), Some("3,4"));
+    }
+
+    #[test]
+    fn test_swipe_action() {
+        let (_, a) = parse_command("swipe Down");
+        assert!(
+            matches!(swipe_action(&a), Ok(ActionType::Swipe { direction }) if direction == "down")
+        );
+        let (_, a) = parse_command("swipe");
+        assert!(
+            matches!(swipe_action(&a), Ok(ActionType::Swipe { direction }) if direction == "up")
+        );
+        let (_, a) = parse_command("swipe --from 10,20 --to 30,40");
+        assert!(matches!(
+            swipe_action(&a),
+            Ok(ActionType::SwipeCoords {
+                from_x: 10,
+                from_y: 20,
+                to_x: 30,
+                to_y: 40
+            })
+        ));
+        let (_, a) = parse_command("swipe --from 10;20 --to 30,40");
+        assert!(swipe_action(&a).unwrap_err().contains("expected x,y"));
+        let (_, a) = parse_command("swipe --from 1,2");
+        assert!(swipe_action(&a).is_err());
+        let (_, a) = parse_command("swipe up --from 1,2 --to 3,4");
+        assert!(swipe_action(&a).is_err());
     }
 
     #[test]

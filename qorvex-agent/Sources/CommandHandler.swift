@@ -103,6 +103,9 @@ final class CommandHandler {
 
         case .deviceUdid:
             return handleDeviceUdid()
+
+        case .lock:
+            return handleLock()
         }
     }
 
@@ -117,6 +120,26 @@ final class CommandHandler {
     /// "identity unknown".
     private func handleDeviceUdid() -> AgentResponse {
         return .value(ProcessInfo.processInfo.environment["SIMULATOR_UDID"])
+    }
+
+    // MARK: - Lock
+
+    /// Lock the device via the private `pressLockButton` selector on `XCUIDevice`.
+    private func handleLock() -> AgentResponse {
+        let device = XCUIDevice.shared
+        let selector = NSSelectorFromString("pressLockButton")
+        guard device.responds(to: selector) else {
+            return .error(message: "Lock failed: XCUIDevice does not respond to pressLockButton")
+        }
+        var objcError: NSError?
+        let caught = QVXTryCatch({
+            _ = device.perform(selector)
+        }, &objcError)
+        if !caught {
+            let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+            return .error(message: "Lock failed: \(msg)")
+        }
+        return .ok
     }
 
     // MARK: - Tap coordinate

@@ -374,6 +374,11 @@ impl<T: AgentTransport> AutomationDriver for AgentSession<T> {
         expect_ok(response)
     }
 
+    async fn lock(&self) -> Result<(), DriverError> {
+        let response = self.send(&Request::Lock).await?;
+        expect_ok(response)
+    }
+
     async fn long_press(&self, x: i32, y: i32, duration: f64) -> Result<(), DriverError> {
         let response = self.send(&Request::LongPress { x, y, duration }).await?;
         expect_ok(response)

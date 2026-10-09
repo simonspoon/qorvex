@@ -229,6 +229,7 @@ All commands are dispatched on the main thread via `AgentServer`.
 | `screenshot` | `handleScreenshot` | `XCUIScreen.main.screenshot().pngRepresentation` -- full screen capture |
 | `setTarget` | `handleSetTarget` | Replaces `self.app = XCUIApplication(bundleIdentifier:)` for app context switching; disables quiescence on the new app |
 | `findElement` | `handleFindElement` | Calls `parseSelectorIndex`; uses `.element(boundBy: n)` when index present, `.firstMatch` otherwise; queries live `XCUIElement` for `isHittable` (not from snapshot), overrides hittable field in response |
+| `lock` | `handleLock` | Locks the device via private `XCUIDevice.shared.perform("pressLockButton")` (checks `responds(to:)` first, wrapped in `QVXTryCatch`); returns `.ok` |
 
 ### `pollUntilFound` Helper
 

@@ -329,6 +329,37 @@ impl ActionExecutor {
                 }
             }
 
+            ActionType::SwipeCoords {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => {
+                if from_x < 0 || from_y < 0 || to_x < 0 || to_y < 0 {
+                    return ExecutionResult::failure(format!(
+                        "Coordinates must be non-negative (got from=({}, {}), to=({}, {}))",
+                        from_x, from_y, to_x, to_y
+                    ));
+                }
+
+                match self
+                    .driver
+                    .swipe(from_x, from_y, to_x, to_y, Some(0.3))
+                    .await
+                {
+                    Ok(_) => ExecutionResult::success(format!(
+                        "Swiped from ({}, {}) to ({}, {})",
+                        from_x, from_y, to_x, to_y
+                    )),
+                    Err(e) => ExecutionResult::failure(e.to_string()),
+                }
+            }
+
+            ActionType::Lock => match self.driver.lock().await {
+                Ok(_) => ExecutionResult::success("Device locked"),
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
+
             ActionType::LongPress { x, y, duration } => {
                 match self.driver.long_press(x, y, duration).await {
                     Ok(_) => ExecutionResult::success(format!(

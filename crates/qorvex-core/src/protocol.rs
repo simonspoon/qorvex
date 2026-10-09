@@ -108,6 +108,8 @@ pub enum OpCode {
     /// port. An agent that predates this opcode answers with an error, which the
     /// host treats as "identity unknown".
     DeviceUdid = 0x16,
+    /// Lock the device via the lock button (no payload).
+    Lock = 0x17,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -134,6 +136,7 @@ impl OpCode {
             0x14 => Ok(OpCode::GetTargetInfo),
             0x15 => Ok(OpCode::BridgeHealth),
             0x16 => Ok(OpCode::DeviceUdid),
+            0x17 => Ok(OpCode::Lock),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -206,6 +209,8 @@ pub enum Request {
     BridgeHealth,
     /// Ask the agent for the UDID of the device it is running on (simulator-only).
     DeviceUdid,
+    /// Lock the device (press the lock button).
+    Lock,
 }
 
 impl Request {
@@ -229,6 +234,7 @@ impl Request {
             Request::GetTargetInfo => "get_target_info",
             Request::BridgeHealth => "bridge_health",
             Request::DeviceUdid => "device_udid",
+            Request::Lock => "lock",
         }
     }
 }
@@ -589,6 +595,9 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
         Request::DeviceUdid => {
             payload.push(OpCode::DeviceUdid as u8);
         }
+        Request::Lock => {
+            payload.push(OpCode::Lock as u8);
+        }
     }
 
     encode_frame(&payload)
@@ -713,6 +722,8 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
         OpCode::BridgeHealth => Ok(Request::BridgeHealth),
 
         OpCode::DeviceUdid => Ok(Request::DeviceUdid),
+
+        OpCode::Lock => Ok(Request::Lock),
 
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
@@ -1098,6 +1109,18 @@ mod tests {
         let wire = encode_request(&Request::BridgeHealth);
         // 4-byte header with length=1, then opcode 0x15
         assert_eq!(wire, vec![1, 0, 0, 0, 0x15]);
+    }
+
+    #[test]
+    fn request_lock() {
+        round_trip_request(&Request::Lock);
+    }
+
+    #[test]
+    fn lock_wire_format() {
+        let wire = encode_request(&Request::Lock);
+        // 4-byte header with length=1, then opcode 0x17
+        assert_eq!(wire, vec![1, 0, 0, 0, 0x17]);
     }
 
     #[test]

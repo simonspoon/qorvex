@@ -513,6 +513,9 @@ pub trait AutomationDriver: Send + Sync {
         duration: Option<f64>,
     ) -> Result<(), DriverError>;
 
+    /// Lock the device (press the lock button).
+    async fn lock(&self) -> Result<(), DriverError>;
+
     /// Perform a long press at specific screen coordinates.
     ///
     /// # Arguments

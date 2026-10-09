@@ -54,7 +54,7 @@ mod converter;
 mod lease;
 
 use clap::{Parser, Subcommand};
-use qorvex_core::action::ActionType;
+use qorvex_core::action::{parse_coordinate, ActionType};
 use qorvex_core::adb_device::Adb;
 use qorvex_core::element::{ElementFrame, UIElement};
 use qorvex_core::ipc::{
@@ -436,10 +436,25 @@ enum Command {
         tag: Option<String>,
     },
 
-    /// Swipe the screen in a direction
+    /// Swipe the screen in a direction, or between two coordinates
+    #[command(group(clap::ArgGroup::new("swipe_mode").required(true).args(["direction", "from"])))]
     Swipe {
         /// Direction: up, down, left, right
-        direction: String,
+        #[arg(conflicts_with_all = ["from", "to"])]
+        direction: Option<String>,
+        /// Start point as x,y (requires --to)
+        #[arg(long, value_name = "X,Y", value_parser = parse_coordinate, requires = "to", allow_hyphen_values = true)]
+        from: Option<(i32, i32)>,
+        /// End point as x,y (requires --from)
+        #[arg(long, value_name = "X,Y", value_parser = parse_coordinate, requires = "from", allow_hyphen_values = true)]
+        to: Option<(i32, i32)>,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Lock the selected device (press the lock button)
+    Lock {
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1140,17 +1155,31 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Command::Swipe {
             ref direction,
+            from,
+            to,
             ref tag,
         } => {
-            execute_action(
-                &mut client,
-                ActionType::Swipe {
+            let action = match (direction, from, to) {
+                (Some(direction), _, _) => ActionType::Swipe {
                     direction: direction.clone(),
                 },
-                tag.clone(),
-                &cli,
-            )
-            .await
+                (None, Some((from_x, from_y)), Some((to_x, to_y))) => ActionType::SwipeCoords {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                },
+                // Unreachable: clap requires a direction or --from/--to.
+                _ => {
+                    return Err(CliError::ActionFailed(
+                        "swipe requires a direction or --from x,y --to x,y".to_string(),
+                    ));
+                }
+            };
+            execute_action(&mut client, action, tag.clone(), &cli).await
+        }
+        Command::Lock { ref tag } => {
+            execute_action(&mut client, ActionType::Lock, tag.clone(), &cli).await
         }
         Command::SetTarget {
             ref bundle_id,
@@ -2225,6 +2254,89 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 mod tests {
     use super::*;
     use std::fs::{self, File};
+
+    fn swipe_parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec!["qorvex", "swipe"];
+        argv.extend_from_slice(args);
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn swipe_direction_parses() {
+        let cli = swipe_parse(&["up"]).unwrap();
+        match cli.command {
+            Command::Swipe {
+                direction,
+                from,
+                to,
+                ..
+            } => {
+                assert_eq!(direction.as_deref(), Some("up"));
+                assert!(from.is_none() && to.is_none());
+            }
+            _ => panic!("expected swipe"),
+        }
+    }
+
+    #[test]
+    fn swipe_coords_parses() {
+        let cli = swipe_parse(&["--from", "10,20", "--to", "30,40"]).unwrap();
+        match cli.command {
+            Command::Swipe {
+                direction,
+                from,
+                to,
+                ..
+            } => {
+                assert!(direction.is_none());
+                assert_eq!(from, Some((10, 20)));
+                assert_eq!(to, Some((30, 40)));
+            }
+            _ => panic!("expected swipe"),
+        }
+    }
+
+    #[test]
+    fn swipe_bad_coordinate_errors_clearly() {
+        let err = swipe_parse(&["--from", "10;20", "--to", "30,40"])
+            .err()
+            .expect("bad coordinate should fail");
+        assert!(
+            err.to_string()
+                .contains("invalid coordinate '10;20': expected x,y"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn swipe_negative_coordinate_errors() {
+        let err = swipe_parse(&["--from", "-1,20", "--to", "30,40"])
+            .err()
+            .expect("negative coordinate should fail");
+        assert!(err.to_string().contains("non-negative"), "{err}");
+    }
+
+    #[test]
+    fn swipe_direction_conflicts_with_coords() {
+        assert!(swipe_parse(&["up", "--from", "1,2", "--to", "3,4"]).is_err());
+    }
+
+    #[test]
+    fn swipe_from_requires_to() {
+        assert!(swipe_parse(&["--from", "1,2"]).is_err());
+        assert!(swipe_parse(&["--to", "1,2"]).is_err());
+    }
+
+    #[test]
+    fn swipe_requires_direction_or_coords() {
+        assert!(swipe_parse(&[]).is_err());
+    }
+
+    #[test]
+    fn lock_parses() {
+        let cli = Cli::try_parse_from(["qorvex", "lock"]).unwrap();
+        assert!(matches!(cli.command, Command::Lock { .. }));
+    }
 
     #[test]
     fn test_discover_sessions() {

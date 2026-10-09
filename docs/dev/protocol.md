@@ -54,6 +54,7 @@ Both sides use a sequential reader pattern (`ProtocolCursor` in Rust, equivalent
 | SetTarget | `0x12` | `String bundle_id` | Switch target application |
 | FindElement | `0x13` | `String selector`, `Bool by_label`, `Optional String element_type` | Find single element with live hittability |
 | GetTargetInfo | `0x14` | (none) | Get metadata (state, version, build, display name) for the current target app |
+| Lock | `0x17` | (none) | Lock the device (iOS agent: `XCUIDevice.pressLockButton`); replies `Ok`. iOS-only for now: the Android agent does not implement 0x17 |
 
 ### Special OpCodes (Agent-initiated)
 

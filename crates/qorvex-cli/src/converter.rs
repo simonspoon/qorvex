@@ -64,6 +64,16 @@ impl LogConverter {
             ActionType::Swipe { direction } => {
                 Some(format!("qorvex swipe {}", shell_escape(direction)))
             }
+            ActionType::SwipeCoords {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => Some(format!(
+                "qorvex swipe --from {},{} --to {},{}",
+                from_x, from_y, to_x, to_y
+            )),
+            ActionType::Lock => Some("qorvex lock".to_string()),
             ActionType::SendKeys { text } => {
                 Some(format!("qorvex send-keys {}", shell_escape(text)))
             }
@@ -301,6 +311,28 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex swipe up".to_string())
+        );
+    }
+
+    #[test]
+    fn test_swipe_coords_to_command() {
+        let action = ActionType::SwipeCoords {
+            from_x: 10,
+            from_y: 20,
+            to_x: 30,
+            to_y: 40,
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex swipe --from 10,20 --to 30,40".to_string())
+        );
+    }
+
+    #[test]
+    fn test_lock_to_command() {
+        assert_eq!(
+            LogConverter::action_to_command(&ActionType::Lock, None),
+            Some("qorvex lock".to_string())
         );
     }
 

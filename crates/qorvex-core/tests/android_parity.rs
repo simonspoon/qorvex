@@ -219,6 +219,28 @@ async fn parity_swipe() {
     .await;
 }
 
+// --- SwipeCoords ---
+#[tokio::test]
+async fn parity_swipe_coords() {
+    run_parity(
+        "swipe-coords",
+        ActionType::SwipeCoords {
+            from_x: 10,
+            from_y: 20,
+            to_x: 30,
+            to_y: 40,
+        },
+        vec![Response::Ok, Response::Ok],
+    )
+    .await;
+}
+
+// --- Lock ---
+#[tokio::test]
+async fn parity_lock() {
+    run_parity("lock", ActionType::Lock, vec![Response::Ok, Response::Ok]).await;
+}
+
 // --- LongPress ---
 #[tokio::test]
 async fn parity_long_press() {
@@ -485,6 +507,8 @@ fn matrix_covers_every_action_type() {
         "tap",
         "tap_location",
         "swipe",
+        "swipe_coords",
+        "lock",
         "long_press",
         "send_keys",
         "get_screen_info",
@@ -532,6 +556,8 @@ fn matrix_covers_every_action_type() {
             ActionType::Tap { .. }
             | ActionType::TapLocation { .. }
             | ActionType::Swipe { .. }
+            | ActionType::SwipeCoords { .. }
+            | ActionType::Lock
             | ActionType::LongPress { .. }
             | ActionType::SendKeys { .. }
             | ActionType::GetScreenInfo

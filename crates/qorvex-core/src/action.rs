@@ -85,6 +85,21 @@ pub enum ActionType {
         direction: String,
     },
 
+    /// Swipe the screen between two explicit coordinates.
+    SwipeCoords {
+        /// Starting x-coordinate in screen points.
+        from_x: i32,
+        /// Starting y-coordinate in screen points.
+        from_y: i32,
+        /// Ending x-coordinate in screen points.
+        to_x: i32,
+        /// Ending y-coordinate in screen points.
+        to_y: i32,
+    },
+
+    /// Lock the device (press the lock button).
+    Lock,
+
     /// Long press at specific screen coordinates.
     LongPress {
         /// The x-coordinate in screen points.
@@ -287,6 +302,22 @@ pub enum ActionType {
     Quit,
 }
 
+/// Parse an `x,y` coordinate pair (non-negative `i32`s), as used by
+/// `swipe --from/--to`. Returns a user-facing error message on bad input.
+pub fn parse_coordinate(s: &str) -> Result<(i32, i32), String> {
+    let bad = || format!("invalid coordinate '{}': expected x,y", s);
+    let (x, y) = s.split_once(',').ok_or_else(bad)?;
+    let x: i32 = x.trim().parse().map_err(|_| bad())?;
+    let y: i32 = y.trim().parse().map_err(|_| bad())?;
+    if x < 0 || y < 0 {
+        return Err(format!(
+            "invalid coordinate '{}': coordinates must be non-negative",
+            s
+        ));
+    }
+    Ok((x, y))
+}
+
 impl ActionType {
     /// Returns a short, static name for this action type suitable for use in
     /// tracing span metadata. Avoids Debug-formatting large enum payloads.
@@ -295,6 +326,8 @@ impl ActionType {
             ActionType::Tap { .. } => "tap",
             ActionType::TapLocation { .. } => "tap_location",
             ActionType::Swipe { .. } => "swipe",
+            ActionType::SwipeCoords { .. } => "swipe_coords",
+            ActionType::Lock => "lock",
             ActionType::LongPress { .. } => "long_press",
             ActionType::LogComment { .. } => "log_comment",
             ActionType::GetScreenshot => "get_screenshot",
@@ -332,7 +365,8 @@ impl ActionType {
     pub fn display_name(&self) -> &'static str {
         match self {
             ActionType::Tap { .. } | ActionType::TapLocation { .. } => "Tap",
-            ActionType::Swipe { .. } => "Swipe",
+            ActionType::Swipe { .. } | ActionType::SwipeCoords { .. } => "Swipe",
+            ActionType::Lock => "Lock",
             ActionType::LongPress { .. } => "LongPress",
             ActionType::LogComment { .. } => "Comment",
             ActionType::GetScreenshot => "Screenshot",
@@ -389,6 +423,12 @@ impl ActionType {
             }
             ActionType::TapLocation { x, y } => format!("({},{})", x, y),
             ActionType::Swipe { direction } => direction.clone(),
+            ActionType::SwipeCoords {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => format!("({},{})->({},{})", from_x, from_y, to_x, to_y),
             ActionType::LongPress { x, y, duration } => format!("({},{}) {:.1}s", x, y, duration),
             ActionType::SendKeys { text } => {
                 if text.len() > 20 {
@@ -418,6 +458,7 @@ impl ActionType {
             ActionType::OpenUrl { url } => url.clone(),
             ActionType::StartTarget { .. }
             | ActionType::StopTarget
+            | ActionType::Lock
             | ActionType::GetTargetInfo
             | ActionType::MemoryInfo { .. }
             | ActionType::ShutdownDevice
@@ -507,6 +548,21 @@ impl ActionLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_coordinate_accepts_and_rejects() {
+        assert_eq!(parse_coordinate("10,20"), Ok((10, 20)));
+        assert_eq!(parse_coordinate(" 10 , 20"), Ok((10, 20)));
+        assert_eq!(
+            parse_coordinate("10;20").unwrap_err(),
+            "invalid coordinate '10;20': expected x,y"
+        );
+        assert!(parse_coordinate("10,").is_err());
+        assert!(parse_coordinate("a,b").is_err());
+        assert!(parse_coordinate("-1,5")
+            .unwrap_err()
+            .contains("non-negative"));
+    }
 
     #[test]
     fn legacy_start_target_log_entry_without_force_deserializes() {

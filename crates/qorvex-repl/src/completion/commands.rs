@@ -386,11 +386,28 @@ pub static COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "swipe",
-        description: "Swipe the screen",
+        description: "Swipe the screen (direction, or --from x,y --to x,y)",
         args: &[ArgSpec {
             name: "direction",
             completion: ArgCompletion::None,
         }],
+        options: &[
+            OptionSpec {
+                flag: "--from",
+                takes_value: true,
+                description: "Start point as x,y (requires --to)",
+            },
+            OptionSpec {
+                flag: "--to",
+                takes_value: true,
+                description: "End point as x,y (requires --from)",
+            },
+        ],
+    },
+    CommandDef {
+        name: "lock",
+        description: "Lock the selected device",
+        args: &[],
         options: &[],
     },
     CommandDef {

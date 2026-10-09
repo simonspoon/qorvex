@@ -564,6 +564,19 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Lock
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn lock_sends_request() {
+        let addr = mock_server_with_connect(Response::Ok).await;
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        driver.connect().await.unwrap();
+
+        driver.lock().await.unwrap();
+    }
+
+    // -----------------------------------------------------------------------
     // Long press
     // -----------------------------------------------------------------------
 

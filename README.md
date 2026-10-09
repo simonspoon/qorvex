@@ -147,6 +147,8 @@ Available commands:
 - `tap-location <x> <y>` — Tap at screen coordinates
 - `swipe` — Swipe up (default)
 - `swipe <direction>` — Swipe in a direction: up, down, left, right
+- `swipe --from x,y --to x,y` — Swipe between two screen coordinates
+- `lock` — Lock the selected device (press the lock button); iOS only for now
 - `send-keys <text>` — Type text into the focused field
 - `wait-for <selector>` — Wait for element by ID (5s default timeout)
 - `wait-for <selector> --timeout <ms>` — Wait with custom timeout

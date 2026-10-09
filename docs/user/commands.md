@@ -30,6 +30,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Set appearance | `set-appearance <dark\|light>` | `qorvex set-appearance <dark\|light>` |
 | Set content size | `set-content-size <size>` | `qorvex set-content-size <size>` |
 | Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>]` |
+| Lock the device (iOS only for now) | `lock` | `qorvex lock` |
 
 ### Simulator leases and disk reclamation
 
@@ -232,7 +233,8 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 
 | Syntax | Description |
 |--------|-------------|
-| `swipe` or `swipe <direction>` | Swipe (default: up). Directions: up, down, left, right (REPL and CLI) |
+| `swipe` or `swipe <direction>` | Swipe (default: up in the REPL; the CLI requires a direction or `--from/--to`). Directions: up, down, left, right |
+| `swipe --from <x,y> --to <x,y>` | Swipe between two coordinates (non-negative integers); cannot be combined with a direction (REPL and CLI) |
 
 ### Send Keys
 
