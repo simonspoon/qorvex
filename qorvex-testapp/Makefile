@@ -8,16 +8,16 @@ BUILD_DIR = .build
 PROJECT = QorvexTestApp.xcodeproj
 SCHEME = QorvexTestApp
 
-# Auto-detect the first booted iPhone simulator, falling back to any available iPhone.
-BOOTED_SIM := $(shell xcrun simctl list devices booted -j 2>/dev/null | python3 -c \
-	"import sys,json; d=json.load(sys.stdin)['devices']; print(next((dev['udid'] for devs in d.values() for dev in devs if dev.get('state')=='Booted' and 'iPhone' in dev.get('name','')), ''))" 2>/dev/null)
-ANY_SIM := $(shell xcrun simctl list devices available -j 2>/dev/null | python3 -c \
-	"import sys,json; d=json.load(sys.stdin)['devices']; print(next((dev['udid'] for rt in sorted(d.keys(),reverse=True) for dev in d[rt] if dev.get('isAvailable',False) and 'iPhone' in dev.get('name','')), ''))" 2>/dev/null)
-SIM_UDID := $(or $(BOOTED_SIM),$(ANY_SIM))
+# Simulator UDID to target. Required (no auto-detection, so a shared machine
+# never builds for or installs onto another session's device), e.g.:
+#   make build QORVEX_TEST_SIM=<udid>
+# DESTINATION may be set explicitly instead for build; install and run always
+# need QORVEX_TEST_SIM because simctl takes a UDID.
+ifneq ($(QORVEX_TEST_SIM),)
+DESTINATION ?= platform=iOS Simulator,id=$(QORVEX_TEST_SIM)
+endif
 
-DESTINATION ?= platform=iOS Simulator,id=$(SIM_UDID)
-
-.PHONY: generate build install run clean
+.PHONY: generate build install run clean require-destination require-sim
 
 # Generate the Xcode project from project.yml
 generate: project.yml
@@ -28,23 +28,36 @@ generate: project.yml
 	}
 	xcodegen generate
 
+# Guards: fail only the targets that need a simulator.
+require-destination:
+	@if [ -z "$(DESTINATION)" ]; then \
+		echo "Error: QORVEX_TEST_SIM is not set. Set it to a simulator UDID (or set DESTINATION)."; \
+		exit 1; \
+	fi
+
+require-sim:
+	@if [ -z "$(QORVEX_TEST_SIM)" ]; then \
+		echo "Error: QORVEX_TEST_SIM is not set. Set it to a simulator UDID."; \
+		exit 1; \
+	fi
+
 # Build the app for Simulator
-build: generate
+build: require-destination generate
 	xcodebuild build \
 		-project $(PROJECT) \
 		-scheme $(SCHEME) \
 		-destination '$(DESTINATION)' \
 		-derivedDataPath $(BUILD_DIR)
 
-# Install on booted Simulator
-install: build
+# Install on the Simulator named by QORVEX_TEST_SIM
+install: require-sim build
 	@APP=$$(find $(BUILD_DIR) -name '$(SCHEME).app' -path '*/Debug-iphonesimulator/*' | head -1) && \
-	xcrun simctl install booted "$$APP" && \
+	xcrun simctl install $(QORVEX_TEST_SIM) "$$APP" && \
 	echo "Installed $$APP"
 
-# Launch on booted Simulator
+# Launch on the Simulator named by QORVEX_TEST_SIM
 run: install
-	xcrun simctl launch booted com.qorvex.testapp
+	xcrun simctl launch $(QORVEX_TEST_SIM) com.qorvex.testapp
 
 clean:
 	rm -rf $(BUILD_DIR) $(PROJECT)

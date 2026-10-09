@@ -47,8 +47,8 @@ echo -e "help\nquit" | cargo run -p qorvex-repl -- --batch -s <session>   # REPL
 
 ```bash
 make -C qorvex-agent build       # build agent (requires Xcode)
-make -C qorvex-testapp build     # build test app (requires Xcode + xcodegen)
-make -C qorvex-testapp install   # install test app on booted Simulator
+make -C qorvex-testapp build     # build test app (requires Xcode + xcodegen + QORVEX_TEST_SIM=<udid>)
+make -C qorvex-testapp install   # install test app on the QORVEX_TEST_SIM simulator
 make -C qorvex-testapp run       # install + launch test app
 ```
 
@@ -168,7 +168,7 @@ cargo test -p qorvex-cli  --test cli_integration       # CLI binary behavior
 The suite owns its simulator: it creates one named `qorvex-test` on the newest available iOS runtime, boots it by UDID, installs the testapp on it, and pins the session to that UDID with `qorvex start --device <udid>`. It never uses `booted`, so other simulators can stay up while it runs. On exit it stops its session and shuts the simulator down again — but only if it booted it.
 
 **Prerequisites:**
-1. Build the testapp: `make -C qorvex-testapp build`
+1. Build the testapp: `make -C qorvex-testapp build QORVEX_TEST_SIM=<udid>` (the Makefile requires an explicit simulator UDID, or DESTINATION for build only)
 
 **Run:**
 ```bash
