@@ -686,6 +686,14 @@ impl App {
             _ => {}
         }
 
+        // Reject enum args the CLI would reject at parse time
+        if let Some(msg) = validate_enum_args(&cmd, &args.positional) {
+            self.add_output(format_result(false, &msg));
+            self.input = Input::default();
+            self.completion.hide();
+            return;
+        }
+
         // Map command to IPC request
         let request = match cmd.as_str() {
             "start-session" => IpcRequest::StartSession,
@@ -1194,6 +1202,12 @@ impl App {
                 return;
             }
             _ => {}
+        }
+
+        // Reject enum args the CLI would reject at parse time
+        if let Some(msg) = validate_enum_args(&cmd, &args.positional) {
+            self.add_output(format_result(false, &msg));
+            return;
         }
 
         // Map command to IPC request
@@ -1797,6 +1811,78 @@ fn absolute_arg(path: &str) -> String {
         .unwrap_or_else(|_| path.to_string())
 }
 
+/// Valid `app-container` container kinds (CLI `ContainerArg`).
+const CONTAINER_KINDS: &[&str] = &["app", "data", "groups"];
+/// Valid `set-appearance` values (CLI `AppearanceArg`).
+const APPEARANCES: &[&str] = &["dark", "light"];
+/// Valid `set-content-size` values (CLI `ContentSizeArg`).
+const CONTENT_SIZES: &[&str] = &[
+    "extra-small",
+    "small",
+    "medium",
+    "large",
+    "extra-large",
+    "extra-extra-large",
+    "extra-extra-extra-large",
+    "accessibility-medium",
+    "accessibility-large",
+    "accessibility-extra-large",
+    "accessibility-extra-extra-large",
+    "accessibility-extra-extra-extra-large",
+];
+/// Valid `grant-permission` verbs (CLI `PrivacyVerbArg`).
+const PRIVACY_VERBS: &[&str] = &["grant", "revoke", "reset"];
+/// Valid `grant-permission` services (CLI `PrivacyServiceArg`).
+const PRIVACY_SERVICES: &[&str] = &[
+    "all",
+    "calendar",
+    "contacts-limited",
+    "contacts",
+    "location",
+    "location-always",
+    "photos-add",
+    "photos",
+    "media-library",
+    "microphone",
+    "motion",
+    "reminders",
+    "siri",
+];
+
+/// Check one enum arg against its allowed values, as clap's `ValueEnum` does
+/// (exact, case-sensitive match).
+fn check_enum(label: &str, value: &str, valid: &[&str]) -> Option<String> {
+    if valid.contains(&value) {
+        None
+    } else {
+        Some(format!(
+            "invalid {} '{}' (valid: {})",
+            label,
+            value,
+            valid.join(", ")
+        ))
+    }
+}
+
+/// Validate the enum-typed positionals of `app-container`, `set-appearance`,
+/// `set-content-size` and `grant-permission` against the values the CLI
+/// accepts. Returns an error message, or `None` if the args are valid (or the
+/// command has no enum args). A missing required value is invalid.
+fn validate_enum_args(cmd: &str, positional: &[String]) -> Option<String> {
+    let arg = |i: usize| positional.get(i).map(|s| s.as_str()).unwrap_or("");
+    match cmd {
+        // The container kind is optional.
+        "app-container" => positional
+            .get(1)
+            .and_then(|v| check_enum("container", v, CONTAINER_KINDS)),
+        "set-appearance" => check_enum("appearance", arg(0), APPEARANCES),
+        "set-content-size" => check_enum("content size", arg(0), CONTENT_SIZES),
+        "grant-permission" => check_enum("verb", arg(0), PRIVACY_VERBS)
+            .or_else(|| check_enum("service", arg(1), PRIVACY_SERVICES)),
+        _ => None,
+    }
+}
+
 /// Tokenize input using shell-style rules: split on whitespace, respect double quotes.
 pub(crate) fn shell_tokenize(input: &str) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -1899,6 +1985,74 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- validate_enum_args tests ---
+
+    fn pos(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_validate_container_kind() {
+        for k in ["app", "data", "groups"] {
+            assert!(validate_enum_args("app-container", &pos(&["com.x", k])).is_none());
+        }
+        assert!(validate_enum_args("app-container", &pos(&["com.x"])).is_none());
+        let msg = validate_enum_args("app-container", &pos(&["com.x", "bogus"])).unwrap();
+        assert!(msg.contains("bogus") && msg.contains("app, data, groups"));
+        assert!(validate_enum_args("app-container", &pos(&["com.x", "Data"])).is_some());
+    }
+
+    #[test]
+    fn test_validate_appearance() {
+        for v in ["dark", "light"] {
+            assert!(validate_enum_args("set-appearance", &pos(&[v])).is_none());
+        }
+        let msg = validate_enum_args("set-appearance", &pos(&["blue"])).unwrap();
+        assert!(msg.contains("dark, light"));
+        assert!(validate_enum_args("set-appearance", &[]).is_some());
+    }
+
+    #[test]
+    fn test_validate_content_size() {
+        for v in CONTENT_SIZES {
+            assert!(validate_enum_args("set-content-size", &pos(&[v])).is_none());
+        }
+        assert_eq!(CONTENT_SIZES.len(), 12);
+        let msg = validate_enum_args("set-content-size", &pos(&["huge"])).unwrap();
+        assert!(msg.contains("huge") && msg.contains("accessibility-medium"));
+        assert!(validate_enum_args("set-content-size", &pos(&["ExtraSmall"])).is_some());
+    }
+
+    #[test]
+    fn test_validate_permission_verb() {
+        for v in ["grant", "revoke", "reset"] {
+            assert!(
+                validate_enum_args("grant-permission", &pos(&[v, "photos", "com.x"])).is_none()
+            );
+        }
+        let msg =
+            validate_enum_args("grant-permission", &pos(&["allow", "photos", "com.x"])).unwrap();
+        assert!(msg.contains("verb") && msg.contains("grant, revoke, reset"));
+    }
+
+    #[test]
+    fn test_validate_permission_service() {
+        for s in PRIVACY_SERVICES {
+            assert!(validate_enum_args("grant-permission", &pos(&["grant", s, "com.x"])).is_none());
+        }
+        assert_eq!(PRIVACY_SERVICES.len(), 13);
+        let msg =
+            validate_enum_args("grant-permission", &pos(&["grant", "camera", "com.x"])).unwrap();
+        assert!(
+            msg.contains("service") && msg.contains("camera") && msg.contains("location-always")
+        );
+    }
+
+    #[test]
+    fn test_validate_other_commands_unaffected() {
+        assert!(validate_enum_args("tap", &pos(&["bogus"])).is_none());
+    }
 
     // --- parse_command tests (updated for new CLI-style syntax) ---
 
