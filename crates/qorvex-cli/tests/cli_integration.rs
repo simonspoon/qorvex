@@ -98,6 +98,18 @@ fn test_convert_nonexistent_file() {
 
 #[test]
 fn test_list_devices_runs() {
+    // list-devices shells out to simctl; skip when only CommandLineTools is
+    // selected (xcrun cannot find simctl without full Xcode).
+    let simctl_found = std::process::Command::new("xcrun")
+        .args(["--find", "simctl"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !simctl_found {
+        eprintln!("skipping test_list_devices_runs: `xcrun --find simctl` failed (no full Xcode)");
+        return;
+    }
+
     // list-devices should not panic; it may output an empty list
     // if no simulators are available, but should exit cleanly
     Command::cargo_bin("qorvex")
