@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cut a release: bump the version, commit, push main, tag, push the tag.
 #
-#   MESA_ALLOW_PUSH=1 scripts/release.sh 0.2.17
+#   NARU_ALLOW_PUSH=1 scripts/release.sh 0.2.17   # MESA_ALLOW_PUSH=1 still works
 #   scripts/release.sh --dry-run 0.2.17     # every check, no mutation
 #
 # Modelled on mesa's scripts/release.sh so a release is a single allowlisted
@@ -16,8 +16,9 @@
 # SAFETY: the push guard is a PreToolUse hook on the *Bash tool*, so it only
 # ever sees the outer command string — a `git push` inside this script is
 # invisible to it. This script therefore re-implements the gate itself: it
-# refuses to run the mutating path unless MESA_ALLOW_PUSH=1 is in its
-# environment. Do not remove that check; it is the entire safety story.
+# refuses to run the mutating path unless NARU_ALLOW_PUSH=1 (or the older
+# MESA_ALLOW_PUSH=1) is in its environment. Do not remove that check; it is
+# the entire safety story.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -50,9 +51,10 @@ fail() {
 # --- preflight: everything that can refuse must refuse before anything moves ---
 
 # 1. The gate the Bash hook cannot enforce from out here (see SAFETY above).
-if [ "$dry_run" -eq 0 ] && [ "${MESA_ALLOW_PUSH:-}" != "1" ]; then
-  fail "refusing to push without MESA_ALLOW_PUSH=1 in the environment;" \
-    "run: MESA_ALLOW_PUSH=1 $(basename "$0") $version (or --dry-run)"
+if [ "$dry_run" -eq 0 ] && [ "${NARU_ALLOW_PUSH:-}" != "1" ] &&
+  [ "${MESA_ALLOW_PUSH:-}" != "1" ]; then
+  fail "refusing to push without NARU_ALLOW_PUSH=1 (or MESA_ALLOW_PUSH=1) in the environment;" \
+    "run: NARU_ALLOW_PUSH=1 $(basename "$0") $version (or --dry-run)"
 fi
 
 branch=$(git rev-parse --abbrev-ref HEAD)
