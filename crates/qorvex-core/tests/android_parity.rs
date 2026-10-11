@@ -610,7 +610,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        33,
+        35,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

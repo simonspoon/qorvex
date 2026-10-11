@@ -105,6 +105,13 @@ if [ -n "${CLAUDE_SESSION_URL:-}" ]; then
 Claude-Session: ${CLAUDE_SESSION_URL}"
 fi
 
+# The same test gate CI runs (.github/workflows/release.yml "Run tests"),
+# before anything moves. --features test-support is required: the qorvex-core
+# parity harness is compiled out without it. Runs in --dry-run too, bypassing
+# `run`, because it does not mutate anything.
+echo "+ cargo test --workspace --all-targets --features test-support"
+cargo test --workspace --all-targets --features test-support
+
 # Only the [workspace.package] version — the first `version = ` line in the
 # file — is rewritten; dependency pins are left alone.
 if [ "$dry_run" -eq 1 ]; then
