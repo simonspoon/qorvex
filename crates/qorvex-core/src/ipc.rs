@@ -550,6 +550,8 @@ pub enum IpcResponse {
 /// Implement this trait to provide custom request handling logic for the IPC server.
 /// The handler receives parsed requests and writes responses directly to the client.
 #[async_trait]
+// async_trait expands methods to a must_use boxed future; clippy 1.99 flags it as double_must_use on Result returns.
+#[allow(clippy::double_must_use)]
 pub trait RequestHandler: Send + Sync + 'static {
     /// Handle a single IPC request.
     ///

@@ -97,6 +97,8 @@ pub struct Recovered {
 /// retry, counter bookkeeping, target restoration); the transport owns the
 /// *mechanism* (open a socket; optionally respawn the agent).
 #[async_trait]
+// async_trait expands methods to a must_use boxed future; clippy 1.99 flags it as double_must_use on Result returns.
+#[allow(clippy::double_must_use)]
 pub trait AgentTransport: Send + Sync + 'static {
     /// Open and heartbeat-verify a fresh [`AgentClient`] for this transport.
     async fn create_client(&self) -> Result<AgentClient, DriverError>;

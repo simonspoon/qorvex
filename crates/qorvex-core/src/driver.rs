@@ -476,6 +476,8 @@ pub struct TargetInfo {
 /// [`get_value_with_type`](AutomationDriver::get_value_with_type),
 /// and [`screenshot`](AutomationDriver::screenshot).
 #[async_trait]
+// async_trait expands methods to a must_use boxed future; clippy 1.99 flags it as double_must_use on Result returns.
+#[allow(clippy::double_must_use)]
 pub trait AutomationDriver: Send + Sync {
     /// Establish connection to the automation backend.
     ///
