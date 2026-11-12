@@ -651,6 +651,7 @@ fn matrix_covers_every_action_type() {
         "install_app",
         "uninstall_app",
         "app_container",
+        "reset_app",
         "list_apps",
         "create_device",
         "wait_for_boot",
@@ -658,10 +659,16 @@ fn matrix_covers_every_action_type() {
         "set_appearance",
         "set_content_size",
         "grant_permission",
+        "biometric",
         "add_media",
         "open_url",
         "memory_info",
     ];
+
+    // Server-handled actions with no parity test yet: foreground_target
+    // (target lifecycle) and hide_keyboard (iOS simulator only, refused on
+    // Android before reaching the driver).
+    let server_handled_untested = ["foreground_target", "hide_keyboard"];
 
     // Exhaustive match: adding a new ActionType variant fails to compile until
     // it is classified here, guaranteeing the matrix stays complete.
@@ -696,6 +703,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::InstallApp { .. }
             | ActionType::UninstallApp { .. }
             | ActionType::AppContainer { .. }
+            | ActionType::ResetApp { .. }
             | ActionType::ListApps
             | ActionType::CreateDevice { .. }
             | ActionType::WaitForBoot
@@ -703,9 +711,11 @@ fn matrix_covers_every_action_type() {
             | ActionType::SetAppearance { .. }
             | ActionType::SetContentSize { .. }
             | ActionType::GrantPermission { .. }
+            | ActionType::Biometric { .. }
             | ActionType::AddMedia { .. }
             | ActionType::OpenUrl { .. }
             | ActionType::MemoryInfo { .. } => "device",
+            ActionType::ForegroundTarget | ActionType::HideKeyboard => "server",
         }
     }
 
@@ -727,10 +737,13 @@ fn matrix_covers_every_action_type() {
         "shutdown-device must be a device-management action"
     );
 
-    // Total action count is the sum of the three disjoint classes.
+    // Total action count is the sum of the four disjoint classes.
     assert_eq!(
-        covered_via_driver.len() + session_control.len() + device_management.len(),
-        39,
+        covered_via_driver.len()
+            + session_control.len()
+            + device_management.len()
+            + server_handled_untested.len(),
+        43,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }
