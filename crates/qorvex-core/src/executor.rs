@@ -394,6 +394,14 @@ impl ActionExecutor {
                 Err(e) => ExecutionResult::failure(e.to_string()),
             },
 
+            ActionType::GetScreenTree => match self.driver.dump_tree().await {
+                Ok(tree) => match serde_json::to_string(&tree) {
+                    Ok(json) => ExecutionResult::success("Screen tree retrieved").with_data(json),
+                    Err(e) => ExecutionResult::failure(format!("JSON serialization error: {}", e)),
+                },
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
+
             ActionType::GetValue {
                 ref selector,
                 by_label,

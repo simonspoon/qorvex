@@ -88,6 +88,7 @@ enum ActionType {
     SendKeys { text: String },
     GetScreenshot,
     GetScreenInfo,
+    GetScreenTree,
     GetValue { selector: String, by_label: bool, element_type: Option<String> },
     WaitFor { selector: String, by_label: bool, element_type: Option<String> },
     WaitForNot { selector: String, by_label: bool, element_type: Option<String> },

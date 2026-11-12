@@ -124,6 +124,14 @@ pub enum ActionType {
     /// Get accessibility information for all elements on screen.
     GetScreenInfo,
 
+    /// Get the complete, unfiltered accessibility tree (nested), including
+    /// elements with no identifier or label. Used by `screen-info --all`.
+    ///
+    /// A separate variant (rather than a field on `GetScreenInfo`) keeps the
+    /// default `GetScreenInfo` request byte-identical on the wire, so old and
+    /// new clients/servers interoperate on the default path.
+    GetScreenTree,
+
     /// Get the current value of an element by ID or label.
     GetValue {
         /// The selector value (accessibility ID or label).
@@ -332,6 +340,7 @@ impl ActionType {
             ActionType::LogComment { .. } => "log_comment",
             ActionType::GetScreenshot => "get_screenshot",
             ActionType::GetScreenInfo => "get_screen_info",
+            ActionType::GetScreenTree => "get_screen_tree",
             ActionType::GetValue { .. } => "get_value",
             ActionType::SendKeys { .. } => "send_keys",
             ActionType::WaitFor { .. } => "wait_for",
@@ -370,7 +379,7 @@ impl ActionType {
             ActionType::LongPress { .. } => "LongPress",
             ActionType::LogComment { .. } => "Comment",
             ActionType::GetScreenshot => "Screenshot",
-            ActionType::GetScreenInfo => "ScreenInfo",
+            ActionType::GetScreenInfo | ActionType::GetScreenTree => "ScreenInfo",
             ActionType::GetValue { .. } => "GetValue",
             ActionType::SendKeys { .. } => "Type",
             ActionType::WaitFor { .. } => "Find",

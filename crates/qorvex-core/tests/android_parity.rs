@@ -295,6 +295,37 @@ async fn parity_get_screen_info() {
     .await;
 }
 
+// --- GetScreenTree (dump-tree, unfiltered) ---
+#[tokio::test]
+async fn parity_get_screen_tree() {
+    // Unnamed container with a named child: the full tree keeps both.
+    let tree = r#"[{
+        "type": "Other",
+        "role": "android.widget.FrameLayout",
+        "hittable": true,
+        "frame": {"x": 0.0, "y": 0.0, "width": 400.0, "height": 800.0},
+        "children": [{
+            "AXUniqueId": "controls_tap_button",
+            "AXLabel": "Tap Me",
+            "type": "Button",
+            "hittable": true,
+            "frame": {"x": 0.0, "y": 100.0, "width": 200.0, "height": 48.0},
+            "children": []
+        }]
+    }]"#;
+    run_parity(
+        "get-screen-tree",
+        ActionType::GetScreenTree,
+        vec![
+            Response::Ok,
+            Response::Tree {
+                json: tree.to_string(),
+            },
+        ],
+    )
+    .await;
+}
+
 // --- GetValue (by id) ---
 #[tokio::test]
 async fn parity_get_value() {
@@ -512,6 +543,7 @@ fn matrix_covers_every_action_type() {
         "long_press",
         "send_keys",
         "get_screen_info",
+        "get_screen_tree",
         "get_value",
         "get_screenshot",
         "wait_for",
@@ -561,6 +593,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::LongPress { .. }
             | ActionType::SendKeys { .. }
             | ActionType::GetScreenInfo
+            | ActionType::GetScreenTree
             | ActionType::GetValue { .. }
             | ActionType::GetScreenshot
             | ActionType::WaitFor { .. }
@@ -610,7 +643,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        35,
+        36,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

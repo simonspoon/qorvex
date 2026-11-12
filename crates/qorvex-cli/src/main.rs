@@ -370,6 +370,10 @@ enum Command {
         /// Output REPL-style formatted list
         #[arg(long)]
         pretty: bool,
+        /// List every element in the tree (also unnamed, offscreen, zero-size),
+        /// each with `offscreen`, `zero_size` and `hittable` flags
+        #[arg(long, conflicts_with = "full")]
+        all: bool,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1376,8 +1380,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::ScreenInfo {
             full,
             pretty,
+            all,
             ref tag,
-        } => execute_screen_info(&mut client, &cli, full, pretty, tag.clone()).await,
+        } => execute_screen_info(&mut client, &cli, full, pretty, all, tag.clone()).await,
         Command::GetValue {
             ref selector,
             label,
@@ -1925,6 +1930,124 @@ fn format_element_pretty(elem: &UIElement) -> String {
     parts.join(" ")
 }
 
+/// Visibility flags for one element of `screen-info --all`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ElementFlags {
+    /// The frame has no intersection with the root element's frame.
+    offscreen: bool,
+    /// The frame's width or height is <= 0.
+    zero_size: bool,
+    /// The agent's `hittable` value; `None` when the agent does not report it.
+    hittable: Option<bool>,
+}
+
+/// Flatten a nested tree depth-first (parent before children), keeping every
+/// element, named or not.
+fn flatten_all(elements: &[UIElement]) -> Vec<&UIElement> {
+    fn walk<'a>(elements: &'a [UIElement], out: &mut Vec<&'a UIElement>) {
+        for e in elements {
+            out.push(e);
+            walk(&e.children, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(elements, &mut out);
+    out
+}
+
+/// Whether the 1-D span [a0, a1) overlaps [b0, b1). A zero-length span counts
+/// as overlapping when its point lies inside [b0, b1).
+fn spans_overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> bool {
+    if a1 > a0 {
+        a0 < b1 && a1 > b0
+    } else {
+        a0 >= b0 && a0 < b1
+    }
+}
+
+/// Compute per-element flags for a depth-first flattened element list. The
+/// root frame is the first element's (the first top-level element of the
+/// dump: the application/window). Elements without a frame get
+/// `offscreen: false` and `zero_size: false`; when the root has no frame or a
+/// zero-size one, no element is judged offscreen.
+fn compute_element_flags(elements: &[&UIElement]) -> Vec<ElementFlags> {
+    let root = elements
+        .first()
+        .and_then(|e| e.frame.as_ref())
+        .filter(|r| r.width > 0.0 && r.height > 0.0);
+    elements
+        .iter()
+        .map(|e| {
+            let (offscreen, zero_size) = match e.frame.as_ref() {
+                Some(f) => {
+                    let offscreen = root.is_some_and(|r| {
+                        !(spans_overlap(f.x, f.x + f.width, r.x, r.x + r.width)
+                            && spans_overlap(f.y, f.y + f.height, r.y, r.y + r.height))
+                    });
+                    (offscreen, f.width <= 0.0 || f.height <= 0.0)
+                }
+                None => (false, false),
+            };
+            ElementFlags {
+                offscreen,
+                zero_size,
+                hittable: e.hittable,
+            }
+        })
+        .collect()
+}
+
+/// Render `screen-info --all`: every element of the nested tree in `data_str`,
+/// flattened depth-first, with its flags.
+fn render_screen_info_all(
+    data_str: &str,
+    pretty: bool,
+) -> Result<(String, Option<usize>), CliError> {
+    let tree: Vec<UIElement> = serde_json::from_str(data_str)
+        .map_err(|e| CliError::Protocol(format!("Failed to parse elements: {}", e)))?;
+    let elements = flatten_all(&tree);
+    let flags = compute_element_flags(&elements);
+    if pretty {
+        let mut out = String::new();
+        for (elem, f) in elements.iter().zip(&flags) {
+            out.push_str(&format_element_pretty(elem));
+            if f.offscreen {
+                out.push_str(" [offscreen]");
+            }
+            if f.zero_size {
+                out.push_str(" [zero-size]");
+            }
+            if f.hittable == Some(false) {
+                out.push_str(" [not-hittable]");
+            }
+            out.push('\n');
+        }
+        Ok((out, Some(elements.len())))
+    } else {
+        let concise: Vec<serde_json::Value> = elements
+            .iter()
+            .zip(&flags)
+            .map(|(e, f)| {
+                let mut v = element_to_concise_json(e);
+                let map = v.as_object_mut().expect("concise element is an object");
+                map.insert("offscreen".into(), serde_json::Value::Bool(f.offscreen));
+                map.insert("zero_size".into(), serde_json::Value::Bool(f.zero_size));
+                map.insert(
+                    "hittable".into(),
+                    f.hittable
+                        .map(serde_json::Value::Bool)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                v
+            })
+            .collect();
+        Ok((
+            format!("{}\n", serde_json::to_string_pretty(&concise).unwrap()),
+            None,
+        ))
+    }
+}
+
 /// Render `screen-info` element data as stdout text, plus the element count
 /// to report on stderr (`--pretty` only).
 fn render_screen_info(
@@ -1970,12 +2093,17 @@ async fn execute_screen_info(
     cli: &Cli,
     full: bool,
     pretty: bool,
+    all: bool,
     tag: Option<String>,
 ) -> Result<(), CliError> {
-    let request = IpcRequest::Execute {
-        action: ActionType::GetScreenInfo,
-        tag,
+    // `--all` asks for the unfiltered nested tree with a separate action, so
+    // the default request stays exactly what older servers expect.
+    let action = if all {
+        ActionType::GetScreenTree
+    } else {
+        ActionType::GetScreenInfo
     };
+    let request = IpcRequest::Execute { action, tag };
     let response = client
         .send(&request)
         .await
@@ -1992,7 +2120,11 @@ async fn execute_screen_info(
                 return Err(CliError::ActionFailed(message));
             }
             let data_str = data.as_deref().unwrap_or("[]");
-            let (out, count) = render_screen_info(data_str, full, pretty)?;
+            let (out, count) = if all {
+                render_screen_info_all(data_str, pretty)?
+            } else {
+                render_screen_info(data_str, full, pretty)?
+            };
             print!("{}", out);
             // Only --pretty (the human mode) reports a count; default stays
             // pure JSON even when stdout and stderr are merged.
@@ -2625,6 +2757,136 @@ mod tests {
         assert_eq!(o.len(), 2);
         assert_eq!(o["success"], false);
         assert_eq!(o["message"], "Action failed: x");
+    }
+
+    fn el(frame: Option<(f64, f64, f64, f64)>, hittable: Option<bool>) -> UIElement {
+        UIElement {
+            identifier: None,
+            label: None,
+            value: None,
+            element_type: None,
+            frame: frame.map(|(x, y, width, height)| ElementFrame {
+                x,
+                y,
+                width,
+                height,
+            }),
+            children: vec![],
+            role: None,
+            hittable,
+        }
+    }
+
+    fn flags_of(elems: &[UIElement]) -> Vec<ElementFlags> {
+        let refs: Vec<&UIElement> = elems.iter().collect();
+        compute_element_flags(&refs)
+    }
+
+    #[test]
+    fn element_flags_geometry() {
+        let elems = [
+            el(Some((0.0, 0.0, 400.0, 800.0)), None),    // root
+            el(Some((10.0, 10.0, 100.0, 40.0)), None),   // inside
+            el(Some((0.0, 900.0, 400.0, 40.0)), None),   // below the fold
+            el(Some((0.0, 800.0, 400.0, 40.0)), None),   // starts exactly at the edge
+            el(Some((-50.0, 780.0, 100.0, 40.0)), None), // partial overlap
+            el(Some((10.0, 10.0, 0.0, 40.0)), None),     // zero width, inside
+            el(Some((0.0, 1200.0, 0.0, 0.0)), None),     // Android clamped, outside
+            el(Some((20.0, 20.0, -5.0, 10.0)), None),    // negative width, inside
+            el(None, None),                              // no frame
+        ];
+        let f = flags_of(&elems);
+        let got: Vec<(bool, bool)> = f.iter().map(|f| (f.offscreen, f.zero_size)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (false, false),
+                (false, false),
+                (true, false),
+                (true, false),
+                (false, false),
+                (false, true),
+                (true, true),
+                (false, true),
+                (false, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn element_flags_hittable_passthrough() {
+        let elems = [
+            el(Some((0.0, 0.0, 400.0, 800.0)), Some(true)),
+            el(Some((0.0, 0.0, 10.0, 10.0)), Some(false)),
+            el(Some((0.0, 0.0, 10.0, 10.0)), None),
+        ];
+        let h: Vec<Option<bool>> = flags_of(&elems).iter().map(|f| f.hittable).collect();
+        assert_eq!(h, vec![Some(true), Some(false), None]);
+    }
+
+    #[test]
+    fn element_flags_no_root() {
+        assert!(flags_of(&[]).is_empty());
+        // Root without a frame: nothing can be judged offscreen.
+        let elems = [el(None, None), el(Some((5000.0, 5000.0, 10.0, 10.0)), None)];
+        assert!(flags_of(&elems).iter().all(|f| !f.offscreen));
+        // Zero-size root: treated like a missing root.
+        let elems = [
+            el(Some((0.0, 0.0, 0.0, 0.0)), None),
+            el(Some((10.0, 10.0, 10.0, 10.0)), None),
+        ];
+        assert!(flags_of(&elems).iter().all(|f| !f.offscreen));
+    }
+
+    const ALL_TREE: &str = r#"[{"type":"Application","frame":{"x":0,"y":0,"width":400,"height":800},
+        "children":[{"type":"Other","frame":{"x":0,"y":0,"width":400,"height":800},
+          "children":[{"AXUniqueId":"row1","type":"Cell","frame":{"x":0,"y":100,"width":400,"height":40},"hittable":true},
+                      {"AXLabel":"Row 30","type":"Cell","frame":{"x":0,"y":1300,"width":400,"height":40},"hittable":false}]}]}]"#;
+
+    #[test]
+    fn screen_info_all_lists_every_element_with_flags() {
+        let (out, count) = render_screen_info_all(ALL_TREE, false).unwrap();
+        assert_eq!(count, None);
+        let v: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(v.len(), 4);
+        for e in &v {
+            assert!(e["offscreen"].is_boolean());
+            assert!(e["zero_size"].is_boolean());
+            assert!(e.get("hittable").is_some());
+            assert!(e.get("children").is_none());
+        }
+        // Unnamed elements are present without id/label keys.
+        assert!(v[1].get("id").is_none() && v[1].get("label").is_none());
+        assert_eq!(v[0]["hittable"], serde_json::Value::Null);
+        assert_eq!(v[2]["id"], "row1");
+        assert_eq!(v[2]["offscreen"], false);
+        assert_eq!(v[3]["offscreen"], true);
+        assert_eq!(v[3]["hittable"], false);
+    }
+
+    #[test]
+    fn screen_info_all_pretty_markers_and_count() {
+        let (out, count) = render_screen_info_all(ALL_TREE, true).unwrap();
+        assert_eq!(count, Some(4));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[2].ends_with("@(0,100)"));
+        assert!(lines[3].ends_with("[offscreen] [not-hittable]"));
+    }
+
+    #[test]
+    fn screen_info_all_empty_is_empty_array() {
+        let (out, _) = render_screen_info_all("[]", false).unwrap();
+        assert_eq!(out.trim(), "[]");
+    }
+
+    #[test]
+    fn screen_info_all_conflicts_with_full() {
+        match Cli::try_parse_from(["qorvex", "screen-info", "--all", "--full"]) {
+            Err(e) => assert_eq!(e.kind(), clap::error::ErrorKind::ArgumentConflict),
+            Ok(_) => panic!("--all --full must be a usage error"),
+        }
+        assert!(Cli::try_parse_from(["qorvex", "screen-info", "--all", "--pretty"]).is_ok());
     }
 
     fn swipe_parse(args: &[&str]) -> Result<Cli, clap::Error> {

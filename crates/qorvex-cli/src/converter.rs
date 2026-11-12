@@ -79,6 +79,7 @@ impl LogConverter {
             }
             ActionType::GetScreenshot => Some("qorvex screenshot".to_string()),
             ActionType::GetScreenInfo => Some("qorvex screen-info".to_string()),
+            ActionType::GetScreenTree => Some("qorvex screen-info --all".to_string()),
             ActionType::GetValue {
                 selector,
                 by_label,

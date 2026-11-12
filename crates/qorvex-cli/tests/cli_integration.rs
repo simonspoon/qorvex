@@ -446,3 +446,13 @@ fn test_doctor_without_adb_fails() {
     assert_eq!(v["checks"][0]["name"], "adb");
     assert_eq!(v["checks"][0]["status"], "fail");
 }
+
+#[test]
+fn test_screen_info_all_with_full_is_usage_error() {
+    Command::cargo_bin("qorvex")
+        .unwrap()
+        .args(["screen-info", "--all", "--full"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
