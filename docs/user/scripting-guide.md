@@ -109,6 +109,7 @@ See [commands.md](commands.md) for full option details.
 - Use `export QORVEX_SESSION=<name>` at the top — both `qorvex` and `qorvex-server` respect it, so you never need `-s` on individual commands.
 - Use `trap 'qorvex stop || true' EXIT` immediately after `qorvex start` so the server is always stopped, even on error. The `|| true` prevents the trap itself from masking the script's exit code when the server is already gone.
 - Use `QORVEX_TIMEOUT` to set a default timeout (ms) for all wait/tap operations without passing `-o` on every command.
+- Every command has a hard deadline (default 600000 ms): `--timeout <ms>` or `QORVEX_COMMAND_TIMEOUT` changes it, `0` disables it. On `tap`, `get-value`, `wait-for`, `wait-for-not`, `--timeout` is the element timeout instead. Use `--timeout 0` for a slow interactive signing build with `start -d <physical iPhone>`.
 - Use `QORVEX_LOG_DIR=/path/to/run-output` to redirect all log files to a per-run directory. Combine with `QORVEX_SESSION` for fully isolated CI runs.
 - Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
 - Use `--tag <text>` on any action to annotate the JSONL log entry (e.g., `qorvex tap login-button --tag "login-flow"`). Tags survive `qorvex convert` — converted scripts emit `--tag` so the annotation round-trips through replay.
@@ -123,3 +124,4 @@ See [commands.md](commands.md) for full option details.
 | 1 | Action failed (element not found, tap failed, etc.) |
 | 2 | Connection error (no running REPL session) |
 | 3 | Protocol error |
+| 124 | Hard deadline passed (`--timeout` / `QORVEX_COMMAND_TIMEOUT`, default 600000 ms); the server may still be working |

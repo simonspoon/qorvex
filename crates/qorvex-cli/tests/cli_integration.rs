@@ -222,3 +222,124 @@ fn test_screen_info_failure_without_json_has_empty_stdout() {
         .stdout("")
         .stderr(predicate::str::contains("Error:"));
 }
+
+/// Short temp dir (macOS socket paths are limited to 104 bytes) holding a
+/// `qorvex_hang.sock` that accepts connections and never answers.
+fn hung_server(tag: &str) -> (PathBuf, std::thread::JoinHandle<()>) {
+    use std::os::unix::net::UnixListener;
+    let home = PathBuf::from(format!("/tmp/qvx_{}_{}", tag, std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let listener = UnixListener::bind(home.join("qorvex_hang.sock")).unwrap();
+    let handle = std::thread::spawn(move || {
+        // Keep accepted streams alive so the client never sees EOF.
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+        }
+    });
+    (home, handle)
+}
+
+fn run_hung(home: &PathBuf, envs: &[(&str, &str)], args: &[&str]) -> (std::process::Output, u128) {
+    let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin("qorvex"));
+    cmd.env("QORVEX_HOME", home)
+        .env_remove("QORVEX_TIMEOUT")
+        .env_remove("QORVEX_COMMAND_TIMEOUT")
+        .args(args);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let start = std::time::Instant::now();
+    let out = cmd.output().unwrap();
+    (out, start.elapsed().as_millis())
+}
+
+#[test]
+fn test_deadline_flag_kills_hung_command() {
+    let (home, _h) = hung_server("flag");
+    let (out, ms) = run_hung(&home, &[], &["-s", "hang", "status", "--timeout", "300"]);
+    assert_eq!(out.status.code(), Some(124));
+    assert!(ms < 2000, "took {ms}ms");
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Timed out after 300ms: status"), "{err}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+}
+
+#[test]
+fn test_deadline_env_kills_hung_command() {
+    let (home, _h) = hung_server("env");
+    let (out, ms) = run_hung(
+        &home,
+        &[("QORVEX_COMMAND_TIMEOUT", "300")],
+        &["-s", "hang", "status"],
+    );
+    assert_eq!(out.status.code(), Some(124));
+    assert!(ms < 2000, "took {ms}ms");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Timed out after 300ms: status"));
+}
+
+#[test]
+fn test_deadline_flag_beats_element_timeout_env() {
+    let (home, _h) = hung_server("beat");
+    let (out, _) = run_hung(
+        &home,
+        &[("QORVEX_TIMEOUT", "300")],
+        &["-s", "hang", "status", "--timeout", "800"],
+    );
+    assert_eq!(out.status.code(), Some(124));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Timed out after 800ms: status"));
+}
+
+#[test]
+fn test_deadline_screen_info_json_object() {
+    let (home, _h) = hung_server("json");
+    let (out, _) = run_hung(
+        &home,
+        &[],
+        &[
+            "-s",
+            "hang",
+            "-f",
+            "json",
+            "screen-info",
+            "--timeout",
+            "300",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(124));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["success"], false);
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("Timed out after 300ms"));
+}
+
+#[test]
+fn test_fast_failure_is_not_a_timeout() {
+    let (home, _h) = hung_server("fast");
+    let (out, _) = run_hung(&home, &[], &["-s", "nosuch", "status", "--timeout", "300"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Timed out"));
+}
+
+#[test]
+fn test_timeout_non_numeric_is_usage_error() {
+    Command::cargo_bin("qorvex")
+        .unwrap()
+        .args(["status", "--timeout", "abc"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn test_command_timeout_env_non_numeric_is_usage_error() {
+    Command::cargo_bin("qorvex")
+        .unwrap()
+        .env("QORVEX_COMMAND_TIMEOUT", "abc")
+        .args(["status"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("QORVEX_COMMAND_TIMEOUT"));
+}

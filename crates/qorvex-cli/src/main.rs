@@ -53,7 +53,7 @@
 mod converter;
 mod lease;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use qorvex_core::action::{parse_coordinate, ActionType};
 use qorvex_core::adb_device::Adb;
 use qorvex_core::element::{ElementFrame, UIElement};
@@ -83,6 +83,13 @@ struct Cli {
     /// Suppress non-essential output
     #[arg(short, long)]
     quiet: bool,
+
+    /// Milliseconds. On tap, get-value, wait-for and wait-for-not: how long to
+    /// wait for the element (default 5000, env QORVEX_TIMEOUT). On every other
+    /// command: hard deadline for the whole process (default 600000, env
+    /// QORVEX_COMMAND_TIMEOUT, 0 = no deadline); exits 124 when it passes
+    #[arg(short = 'o', long, global = true)]
+    timeout: Option<u64>,
 
     #[command(subcommand)]
     command: Command,
@@ -308,9 +315,6 @@ enum Command {
         /// Skip retry, attempt tap once without waiting
         #[arg(long)]
         no_wait: bool,
-        /// Timeout in milliseconds for retrying
-        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
-        timeout: u64,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -383,9 +387,6 @@ enum Command {
         /// Skip retry, attempt get-value once without waiting
         #[arg(long)]
         no_wait: bool,
-        /// Timeout in milliseconds for retrying
-        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
-        timeout: u64,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -410,9 +411,6 @@ enum Command {
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
-        /// Timeout in milliseconds
-        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
-        timeout: u64,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -428,9 +426,6 @@ enum Command {
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
-        /// Timeout in milliseconds
-        #[arg(short = 'o', long, default_value = "5000", env = "QORVEX_TIMEOUT")]
-        timeout: u64,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -761,9 +756,37 @@ async fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let screen_info_json =
         matches!(cli.command, Command::ScreenInfo { .. }) && cli.format == OutputFormat::Json;
+
+    // Validate both env vars before anything runs (usage error, exit 2).
+    let is_wait = is_wait_command(&cli.command);
+    let element = if is_wait {
+        match element_timeout_checked(cli.timeout, std::env::var("QORVEX_TIMEOUT").ok()) {
+            Ok(ms) => Some(ms),
+            Err(msg) => Cli::command()
+                .error(clap::error::ErrorKind::ValueValidation, msg)
+                .exit(),
+        }
+    } else {
+        None
+    };
+    let env_deadline = match parse_env_ms("QORVEX_COMMAND_TIMEOUT") {
+        Ok(v) => v,
+        Err(msg) => Cli::command()
+            .error(clap::error::ErrorKind::ValueValidation, msg)
+            .exit(),
+    };
+    // `--no-wait` forwards no element timeout, so it does not stretch the deadline.
+    let forwarded = match cli.command {
+        Command::Tap { no_wait: true, .. } | Command::GetValue { no_wait: true, .. } => None,
+        _ => element,
+    };
+    if let Some(deadline) = command_deadline(is_wait, forwarded, cli.timeout, env_deadline) {
+        arm_watchdog(deadline, subcommand_name(&matches), screen_info_json);
+    }
 
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -775,6 +798,133 @@ async fn main() -> ExitCode {
             e.exit_code()
         }
     }
+}
+
+/// Default hard deadline for a command, in milliseconds.
+const DEFAULT_DEADLINE_MS: u64 = 600_000;
+/// Margin over the element timeout so the server's own timeout message arrives first.
+const ELEMENT_DEADLINE_MARGIN_MS: u64 = 20_000;
+
+/// Phase reached by `start` (0 = none), reported when the deadline fires.
+static START_PHASE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn set_start_phase(phase: u8) {
+    START_PHASE.store(phase, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn start_phase_name(phase: u8) -> Option<&'static str> {
+    match phase {
+        1 => Some("building agent"),
+        2 => Some("waiting for server"),
+        3 => Some("selecting device"),
+        4 => Some("starting session"),
+        _ => None,
+    }
+}
+
+/// True for the commands where `-o/--timeout` is an element timeout.
+fn is_wait_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Tap { .. }
+            | Command::GetValue { .. }
+            | Command::WaitFor { .. }
+            | Command::WaitForNot { .. }
+    )
+}
+
+/// Element timeout for the wait commands: flag, else `QORVEX_TIMEOUT`, else 5000.
+fn element_timeout_checked(flag: Option<u64>, env: Option<String>) -> Result<u64, String> {
+    if let Some(ms) = flag {
+        return Ok(ms);
+    }
+    match env {
+        Some(v) => v.trim().parse().map_err(|_| {
+            format!(
+                "invalid value '{}' for QORVEX_TIMEOUT: expected milliseconds",
+                v
+            )
+        }),
+        None => Ok(5000),
+    }
+}
+
+/// Element timeout of a wait command (the env var was validated in `main`).
+fn element_timeout(cli: &Cli) -> u64 {
+    element_timeout_checked(cli.timeout, std::env::var("QORVEX_TIMEOUT").ok()).unwrap_or(5000)
+}
+
+fn parse_env_ms(name: &str) -> Result<Option<u64>, String> {
+    match std::env::var(name) {
+        Ok(v) => v
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("invalid value '{}' for {}: expected milliseconds", v, name)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Hard deadline for the whole process, `None` when disabled.
+///
+/// `forwarded_element` is the element timeout sent to the server (wait commands
+/// without `--no-wait`). On the wait commands the flag is that element timeout,
+/// never the deadline.
+fn command_deadline(
+    is_wait: bool,
+    forwarded_element: Option<u64>,
+    flag: Option<u64>,
+    env: Option<u64>,
+) -> Option<std::time::Duration> {
+    let base = if is_wait { env } else { flag.or(env) }.unwrap_or(DEFAULT_DEADLINE_MS);
+    if base == 0 {
+        return None;
+    }
+    let ms = match forwarded_element {
+        Some(e) => base.max(e.saturating_add(ELEMENT_DEADLINE_MARGIN_MS)),
+        None => base,
+    };
+    Some(std::time::Duration::from_millis(ms))
+}
+
+/// User-facing subcommand path, e.g. `lease heartbeat`.
+fn subcommand_name(matches: &clap::ArgMatches) -> String {
+    let mut names = Vec::new();
+    let mut m = matches;
+    while let Some((name, sub)) = m.subcommand() {
+        names.push(name);
+        m = sub;
+    }
+    names.join(" ")
+}
+
+/// Ends the process with exit 124 once `deadline` passes, even if the main
+/// thread is blocked in synchronous work.
+fn arm_watchdog(deadline: std::time::Duration, name: String, screen_info_json: bool) {
+    use std::io::Write;
+    std::thread::spawn(move || {
+        std::thread::sleep(deadline);
+        let phase = start_phase_name(START_PHASE.load(std::sync::atomic::Ordering::SeqCst))
+            .map(|p| format!(" ({})", p))
+            .unwrap_or_default();
+        let message = format!(
+            "Timed out after {}ms: {}{}; the session server may still be working (check `qorvex status`)",
+            deadline.as_millis(),
+            name,
+            phase
+        );
+        // Write errors are ignored (no `println!`, which panics on them) so
+        // nothing can keep the process from exiting.
+        let _ = writeln!(std::io::stderr(), "Error: {}", message);
+        if screen_info_json {
+            let _ = writeln!(
+                std::io::stdout(),
+                "{}",
+                serde_json::json!({ "success": false, "message": message })
+            );
+        }
+        std::process::exit(124);
+    });
 }
 
 #[derive(Debug)]
@@ -1079,10 +1229,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             label,
             ref element_type,
             no_wait,
-            timeout,
             ref tag,
         } => {
-            let timeout_ms = if no_wait { None } else { Some(timeout) };
+            let timeout_ms = if no_wait {
+                None
+            } else {
+                Some(element_timeout(&cli))
+            };
             execute_action(
                 &mut client,
                 ActionType::Tap {
@@ -1141,10 +1294,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             label,
             ref element_type,
             no_wait,
-            timeout,
             ref tag,
         } => {
-            let timeout_ms = if no_wait { None } else { Some(timeout) };
+            let timeout_ms = if no_wait {
+                None
+            } else {
+                Some(element_timeout(&cli))
+            };
             execute_action(
                 &mut client,
                 ActionType::GetValue {
@@ -1218,7 +1374,6 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref selector,
             label,
             ref element_type,
-            timeout,
             ref tag,
         } => {
             execute_action(
@@ -1227,7 +1382,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     selector: selector.clone(),
                     by_label: label,
                     element_type: element_type.clone(),
-                    timeout_ms: timeout,
+                    timeout_ms: element_timeout(&cli),
                     require_stable: true,
                 },
                 tag.clone(),
@@ -1239,7 +1394,6 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref selector,
             label,
             ref element_type,
-            timeout,
             ref tag,
         } => {
             execute_action(
@@ -1248,7 +1402,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     selector: selector.clone(),
                     by_label: label,
                     element_type: element_type.clone(),
-                    timeout_ms: timeout,
+                    timeout_ms: element_timeout(&cli),
                 },
                 tag.clone(),
                 &cli,
@@ -2002,6 +2156,7 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
                 if let Some(ref ba) = bid_arg {
                     args.push(ba);
                 }
+                set_start_phase(1);
                 let status = std::process::Command::new("xcodebuild")
                     .args(&args)
                     .stdout(if cli.quiet {
@@ -2025,6 +2180,7 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
     }
 
     // Start server if not already running
+    set_start_phase(2);
     if !sock.exists() {
         let log_dir = qorvex_core::session::logs_dir();
         let log_file = std::fs::File::create(log_dir.join("qorvex-server-launch.log")).ok();
@@ -2061,6 +2217,7 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
         .map_err(|e| CliError::Connection(format!("Failed to connect: {}", e)))?;
 
     // Select device before starting session so agent auto-start uses the right connection mode
+    set_start_phase(3);
     if let Some(ref udid) = device {
         let response = client
             .send(&IpcRequest::UseDevice { udid: udid.clone() })
@@ -2081,6 +2238,7 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
         }
     }
 
+    set_start_phase(4);
     let response = client
         .send(&IpcRequest::StartSession)
         .await
@@ -2511,5 +2669,94 @@ mod tests {
         assert!(!is_known_simulator("emulator-5554", &sims));
         // Empty simctl list (e.g. simctl failed) -> nothing is a simulator.
         assert!(!is_known_simulator("SIM-AAAA-1111", &[]));
+    }
+
+    fn ms(n: u64) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_millis(n))
+    }
+
+    #[test]
+    fn deadline_defaults_to_600s() {
+        assert_eq!(command_deadline(false, None, None, None), ms(600_000));
+    }
+
+    #[test]
+    fn deadline_flag_beats_env() {
+        assert_eq!(
+            command_deadline(false, None, Some(1000), Some(5000)),
+            ms(1000)
+        );
+        assert_eq!(command_deadline(false, None, None, Some(5000)), ms(5000));
+    }
+
+    #[test]
+    fn deadline_zero_disables() {
+        assert_eq!(command_deadline(false, None, Some(0), None), None);
+        assert_eq!(command_deadline(false, None, None, Some(0)), None);
+        assert_eq!(command_deadline(true, Some(5000), Some(100), Some(0)), None);
+    }
+
+    #[test]
+    fn element_timeout_env_does_not_change_start_deadline() {
+        // QORVEX_TIMEOUT never reaches the deadline function for non-wait commands.
+        assert_eq!(command_deadline(false, None, None, None), ms(600_000));
+    }
+
+    #[test]
+    fn wait_command_deadline_exceeds_element_timeout() {
+        assert_eq!(
+            command_deadline(true, Some(700_000), Some(700_000), None),
+            ms(720_000)
+        );
+        assert_eq!(
+            command_deadline(true, Some(1000), Some(1000), None),
+            ms(600_000)
+        );
+        // --no-wait forwards nothing: plain default.
+        assert_eq!(
+            command_deadline(true, None, Some(700_000), None),
+            ms(600_000)
+        );
+    }
+
+    #[test]
+    fn timeout_flag_accepted_on_every_subcommand() {
+        fn check(cmd: &clap::Command, path: &mut Vec<String>) {
+            for sub in cmd.get_subcommands() {
+                path.push(sub.get_name().to_string());
+                if sub.has_subcommands() {
+                    check(sub, path);
+                }
+                path.pop();
+            }
+            if path.is_empty() {
+                return;
+            }
+            let mut args = vec!["qorvex".to_string()];
+            args.extend(path.iter().cloned());
+            args.extend(["--timeout".to_string(), "5".to_string()]);
+            // Required args may be missing; only a rejected --timeout would be an
+            // UnknownArgument error.
+            if let Err(e) = Cli::command().try_get_matches_from(&args) {
+                assert_ne!(
+                    e.kind(),
+                    clap::error::ErrorKind::UnknownArgument,
+                    "{:?}",
+                    args
+                );
+            }
+        }
+        check(&Cli::command(), &mut Vec::new());
+    }
+
+    #[test]
+    fn wait_for_element_timeout_parses() {
+        let cli = Cli::try_parse_from(["qorvex", "wait-for", "x"]).unwrap();
+        assert_eq!(cli.timeout, None);
+        assert_eq!(element_timeout_checked(cli.timeout, None), Ok(5000));
+        let cli = Cli::try_parse_from(["qorvex", "wait-for", "x", "-o", "100"]).unwrap();
+        assert_eq!(element_timeout_checked(cli.timeout, None), Ok(100));
+        assert_eq!(element_timeout_checked(None, Some("300".into())), Ok(300));
+        assert!(element_timeout_checked(None, Some("abc".into())).is_err());
     }
 }

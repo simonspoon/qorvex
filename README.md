@@ -243,6 +243,7 @@ Options:
 Environment:
 - `QORVEX_SESSION` — Default session name
 - `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not` (default: 5000); overridden by `-o`
+- `QORVEX_COMMAND_TIMEOUT` — Hard deadline in milliseconds for any command (default: 600000, `0` = off); exits 124 when it passes. `--timeout <ms>` overrides it, except on `tap`, `get-value`, `wait-for`, `wait-for-not`, where `-o/--timeout` stays the element timeout
 - `QORVEX_LOG_DIR` — Override log file directory (default: `~/.qorvex/logs/`)
 - `QORVEX_HOME` — Override the qorvex state directory (default: `~/.qorvex/`). Sockets, config, and logs all live here, so scripts that export their own `HOME` should set this to keep talking to the running session
 
