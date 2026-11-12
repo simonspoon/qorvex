@@ -1166,6 +1166,43 @@ impl Simctl {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// Clears an installed app's data container, keeping the app installed.
+    ///
+    /// Terminates the app (not running is fine), resolves its `data`
+    /// container, checks it with [`is_safe_data_container`] and that it is a
+    /// real directory, then removes every entry inside it. The container
+    /// directory itself, the app bundle, the Keychain and app-group
+    /// containers are left alone.
+    ///
+    /// Returns the number of top-level entries removed.
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if a command fails to execute or a removal fails
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error (including
+    ///   an app that is not installed) or the container path fails the
+    ///   safety check
+    pub fn reset_app(udid: &str, bundle_id: &str) -> Result<usize, SimctlError> {
+        // Newer simctl reports an app that is not running as "found nothing
+        // to terminate", which terminate_app does not swallow.
+        match Self::terminate_app(udid, bundle_id) {
+            Err(SimctlError::CommandFailed(msg)) if msg.contains("found nothing to terminate") => {}
+            other => other?,
+        }
+        let path = Self::app_container(udid, bundle_id, Some("data"))?;
+        let dir = std::path::Path::new(&path);
+        let is_real_dir = std::fs::symlink_metadata(dir)
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if !is_safe_data_container(&path) || !is_real_dir {
+            return Err(SimctlError::CommandFailed(format!(
+                "refusing to clear '{}': not an app data container directory",
+                path
+            )));
+        }
+        Ok(clear_dir_contents(dir)?)
+    }
+
     /// Lists installed apps on a booted simulator.
     ///
     /// Runs `xcrun simctl listapps <udid>` and pipes the output through
@@ -1320,9 +1357,96 @@ pub fn biometric_notification(matched: bool, touch_id: bool) -> &'static str {
     }
 }
 
+/// True if `path` looks like a simulator app data container: non-empty,
+/// absolute, free of `..`, and under `/Containers/Data/Application/`.
+///
+/// Pure string check; the caller also confirms the directory exists.
+pub fn is_safe_data_container(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    !path.is_empty()
+        && p.is_absolute()
+        && !p.components().any(|c| c == std::path::Component::ParentDir)
+        && path
+            .split_once("/Containers/Data/Application/")
+            .is_some_and(|(_, app)| !app.trim_matches('/').is_empty())
+}
+
+/// Removes every entry inside `dir`, leaving `dir` itself. Symlinks are
+/// removed as links and never followed. Returns the number of top-level
+/// entries removed.
+pub fn clear_dir_contents(dir: &std::path::Path) -> std::io::Result<usize> {
+    let mut removed = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if std::fs::symlink_metadata(&path)?.is_dir() {
+            // remove_dir_all does not follow symlinks found inside.
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_safe_data_container() {
+        assert!(is_safe_data_container(
+            "/Users/me/Library/Developer/CoreSimulator/Devices/ABC/data/Containers/Data/Application/1234-ABCD"
+        ));
+        assert!(!is_safe_data_container(""));
+        assert!(!is_safe_data_container("Containers/Data/Application/1234"));
+        assert!(!is_safe_data_container("/"));
+        assert!(!is_safe_data_container(
+            "/Users/me/Library/Developer/CoreSimulator/Devices/ABC/data/Containers/Data/Application/"
+        ));
+        assert!(!is_safe_data_container("/Users/me"));
+        if let Ok(home) = std::env::var("HOME") {
+            assert!(!is_safe_data_container(&home));
+        }
+        assert!(!is_safe_data_container(
+            "/Users/me/Library/Developer/CoreSimulator/Devices/ABC/data/Containers/Bundle/Application/1234"
+        ));
+        assert!(!is_safe_data_container(
+            "/x/Containers/Data/Application/1234/../../../../.."
+        ));
+    }
+
+    #[test]
+    fn test_clear_dir_contents_keeps_dir_and_symlink_target() {
+        let base = std::env::temp_dir().join(format!(
+            "qorvex-clear-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let container = base.join("container");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(container.join("Documents/nested")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "keep").unwrap();
+        std::fs::write(container.join("file.txt"), "x").unwrap();
+        std::fs::write(container.join("Documents/nested/deep.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, container.join("link")).unwrap();
+        // A symlink nested inside a directory must not be followed either.
+        std::os::unix::fs::symlink(&outside, container.join("Documents/inner-link")).unwrap();
+
+        let removed = clear_dir_contents(&container).unwrap();
+        assert_eq!(removed, 3);
+        assert!(container.is_dir());
+        assert_eq!(std::fs::read_dir(&container).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "keep"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn test_biometric_notification_names() {

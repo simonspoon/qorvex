@@ -764,6 +764,14 @@ enum Command {
         container: Option<ContainerArg>,
     },
 
+    /// Clear an app's data container on the selected iOS simulator, keeping
+    /// the app installed (Keychain and app-group containers are not cleared)
+    #[command(name = "reset-app")]
+    ResetApp {
+        /// Bundle identifier (e.g., com.example.MyApp)
+        bundle_id: String,
+    },
+
     /// List apps installed on the session's selected simulator
     #[command(name = "list-apps")]
     ListApps,
@@ -2175,6 +2183,29 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 container.map(|c| c.as_str().to_string()),
             )
             .await
+        }
+        Command::ResetApp { ref bundle_id } => {
+            let response = client
+                .send(&IpcRequest::ResetApp {
+                    bundle_id: bundle_id.clone(),
+                })
+                .await
+                .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+            match response {
+                IpcResponse::AppReset { cleared } => {
+                    if cli.format == OutputFormat::Json {
+                        let out = serde_json::json!({ "reset": bundle_id, "cleared": cleared });
+                        println!("{}", with_duration_ms(&out.to_string()));
+                    } else if !cli.quiet {
+                        println!("Reset: {}", bundle_id);
+                    }
+                    Ok(())
+                }
+                IpcResponse::CommandResult { message, .. } | IpcResponse::Error { message } => {
+                    Err(CliError::ActionFailed(message))
+                }
+                _ => Err(CliError::Protocol("Unexpected response".to_string())),
+            }
         }
         Command::ListApps => list_apps(&mut client, &cli).await,
         Command::CreateDevice {
@@ -3688,6 +3719,19 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_reset_app_parse() {
+        let cli = Cli::try_parse_from(["qorvex", "reset-app", "com.x.y"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::ResetApp { ref bundle_id } if bundle_id == "com.x.y"
+        ));
+        match Cli::try_parse_from(["qorvex", "reset-app"]) {
+            Ok(_) => panic!("bare reset-app should not parse"),
+            Err(e) => assert_eq!(e.exit_code(), 2),
+        }
+    }
 
     #[test]
     fn test_biometric_parse() {

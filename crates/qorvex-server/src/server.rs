@@ -234,6 +234,7 @@ impl ServerState {
                 self.handle_app_container(&bundle_id, container.as_deref())
                     .await
             }
+            IpcRequest::ResetApp { bundle_id } => self.handle_reset_app(&bundle_id).await,
             IpcRequest::ListApps => self.handle_list_apps().await,
 
             // ── Configuration ───────────────────────────────────────────
@@ -1774,6 +1775,49 @@ impl ServerState {
             ActionType::AppContainer {
                 bundle_id: bundle_id.to_string(),
                 container: container.map(|c| c.to_string()),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_reset_app(&self, bundle_id: &str) -> IpcResponse {
+        if self.is_physical_device || self.android_serial.is_some() {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "reset-app is only supported on an iOS simulator".to_string(),
+            };
+        }
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let bid = bundle_id.to_string();
+        let result = Self::run_simctl(move || Simctl::reset_app(&udid, &bid)).await;
+        let (response, action_result) = match result {
+            Ok(cleared) => (IpcResponse::AppReset { cleared }, ActionResult::Success),
+            Err(e) => {
+                let msg = format!("Failed to reset app: {}", e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::ResetApp {
+                bundle_id: bundle_id.to_string(),
             },
             action_result,
             None,

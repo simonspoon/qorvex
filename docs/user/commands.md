@@ -171,6 +171,7 @@ $ qorvex device-log --last 1h --max-bytes 20000
 | Install an app bundle | `install-app <path.app>` | `qorvex install-app <path.app>` |
 | Uninstall an app | `uninstall-app <bundle_id>` | `qorvex uninstall-app <bundle_id>` |
 | Get an app container path | `app-container <bundle_id> [app\|data\|groups]` | `qorvex app-container <bundle_id> [app\|data\|groups]` |
+| Clear an app's data (iOS simulator) | — | `qorvex reset-app <bundle_id>` |
 | List installed apps | `list-apps` | `qorvex list-apps` |
 | Change a privacy permission | `grant-permission <verb> <service> <bundle_id>` | `qorvex grant-permission <verb> <service> <bundle_id>` |
 | Add media to the libraries | `add-media <file>...` | `qorvex add-media <file>...` |
@@ -191,6 +192,23 @@ $ qorvex --format json list-apps
 
 `app-container` defaults to the `app` container (the installed `.app` bundle),
 matching `simctl get_app_container`.
+
+`reset-app` gives an installed app a clean first-run state without
+`uninstall-app` + `install-app`. iOS simulator only: on an Android session or a
+physical iPhone it exits 1 with `reset-app is only supported on an iOS
+simulator`. It terminates the app if it is running, resolves its `data`
+container and deletes everything **inside** it (Documents, Library, tmp, ...).
+The container directory and the installed app bundle are kept. The Keychain and
+app-group containers are **not** cleared, so a login stored in the Keychain
+survives the reset. A symlink inside the container is removed as a link; its
+target is never touched. An app that is not installed exits 1 and nothing is
+deleted. `-f json` prints `{"reset":"<bundle_id>","cleared":<N>}`, where `N` is
+the number of top-level entries removed.
+
+```bash
+$ qorvex reset-app com.example.MyApp
+Reset: com.example.MyApp
+```
 
 ```bash
 $ qorvex grant-permission grant microphone com.example.MyApp

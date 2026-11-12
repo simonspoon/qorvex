@@ -434,6 +434,12 @@ pub enum ActionType {
         bundle_id: String,
     },
 
+    /// Clear an app's data container on the selected simulator.
+    ResetApp {
+        /// The bundle identifier of the app whose data was cleared.
+        bundle_id: String,
+    },
+
     /// Look up the path of one of an app's containers on the selected simulator.
     AppContainer {
         /// The bundle identifier of the installed app.
@@ -600,6 +606,7 @@ impl ActionType {
             ActionType::InstallApp { .. } => "install_app",
             ActionType::UninstallApp { .. } => "uninstall_app",
             ActionType::AppContainer { .. } => "app_container",
+            ActionType::ResetApp { .. } => "reset_app",
             ActionType::ListApps => "list_apps",
             ActionType::CreateDevice { .. } => "create_device",
             ActionType::WaitForBoot => "wait_for_boot",
@@ -647,6 +654,7 @@ impl ActionType {
             ActionType::InstallApp { .. } => "InstallApp",
             ActionType::UninstallApp { .. } => "UninstallApp",
             ActionType::AppContainer { .. } => "AppContainer",
+            ActionType::ResetApp { .. } => "ResetApp",
             ActionType::ListApps => "ListApps",
             ActionType::CreateDevice { .. } => "CreateDevice",
             ActionType::WaitForBoot => "WaitForBoot",
@@ -758,6 +766,7 @@ impl ActionType {
             ActionType::SetTarget { bundle_id } => bundle_id.clone(),
             ActionType::InstallApp { path } => path.clone(),
             ActionType::UninstallApp { bundle_id } => bundle_id.clone(),
+            ActionType::ResetApp { bundle_id } => bundle_id.clone(),
             ActionType::AppContainer {
                 bundle_id,
                 container,

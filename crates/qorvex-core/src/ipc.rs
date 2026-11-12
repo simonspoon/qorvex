@@ -320,6 +320,9 @@ pub enum IpcRequest {
         #[serde(default)]
         container: Option<String>,
     },
+    /// Clear an installed app's data container on the session's selected
+    /// simulator, keeping the app installed. iOS simulator only.
+    ResetApp { bundle_id: String },
     /// List the apps installed on the session's selected simulator.
     ListApps,
 
@@ -461,6 +464,12 @@ pub enum IpcResponse {
     AppContainer {
         /// Absolute path reported by `simctl get_app_container`.
         path: String,
+    },
+
+    /// An app's data container was cleared by `reset-app`.
+    AppReset {
+        /// Number of top-level entries removed from the data container.
+        cleared: usize,
     },
 
     /// UDID of a simulator just created by `create-device`.

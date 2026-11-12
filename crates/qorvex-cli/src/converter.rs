@@ -246,6 +246,9 @@ impl LogConverter {
             ActionType::UninstallApp { bundle_id } => {
                 Some(format!("qorvex uninstall-app {}", shell_escape(bundle_id)))
             }
+            ActionType::ResetApp { bundle_id } => {
+                Some(format!("qorvex reset-app {}", shell_escape(bundle_id)))
+            }
             ActionType::AppContainer {
                 bundle_id,
                 container,

@@ -1161,6 +1161,7 @@ impl ActionExecutor {
             | ActionType::InstallApp { .. }
             | ActionType::UninstallApp { .. }
             | ActionType::AppContainer { .. }
+            | ActionType::ResetApp { .. }
             | ActionType::ListApps
             | ActionType::CreateDevice { .. }
             | ActionType::WaitForBoot
