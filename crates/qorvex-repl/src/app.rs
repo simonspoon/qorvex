@@ -731,7 +731,7 @@ impl App {
             "shutdown-device" => IpcRequest::ShutdownDevice,
             "delete-device" => IpcRequest::DeleteDevice,
             "quiet-device" => IpcRequest::QuietDevice,
-            "wait-for-boot" => IpcRequest::WaitForBoot,
+            "wait-for-boot" => IpcRequest::WaitForBoot { timeout_ms: None },
             "install-app" => IpcRequest::InstallApp {
                 path: args
                     .positional
@@ -1293,7 +1293,7 @@ impl App {
             "shutdown-device" => IpcRequest::ShutdownDevice,
             "delete-device" => IpcRequest::DeleteDevice,
             "quiet-device" => IpcRequest::QuietDevice,
-            "wait-for-boot" => IpcRequest::WaitForBoot,
+            "wait-for-boot" => IpcRequest::WaitForBoot { timeout_ms: None },
             "install-app" => IpcRequest::InstallApp {
                 path: args
                     .positional

@@ -114,6 +114,20 @@ fn test_ipc_request_execute_serialization() {
 }
 
 #[test]
+fn test_ipc_request_wait_for_boot_timeout_is_optional() {
+    // Older clients send no field; `None` serializes to the old bare form.
+    let req: IpcRequest = serde_json::from_str(r#"{"type":"WaitForBoot"}"#).unwrap();
+    assert!(matches!(req, IpcRequest::WaitForBoot { timeout_ms: None }));
+    let json = serde_json::to_string(&IpcRequest::WaitForBoot { timeout_ms: None }).unwrap();
+    assert_eq!(json, r#"{"type":"WaitForBoot"}"#);
+    let json = serde_json::to_string(&IpcRequest::WaitForBoot {
+        timeout_ms: Some(3000),
+    })
+    .unwrap();
+    assert_eq!(json, r#"{"type":"WaitForBoot","timeout_ms":3000}"#);
+}
+
+#[test]
 fn test_ipc_request_subscribe_serialization() {
     let request = IpcRequest::Subscribe;
 

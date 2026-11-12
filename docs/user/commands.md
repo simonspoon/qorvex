@@ -111,6 +111,15 @@ $ qorvex wait-for-boot
 has *started*. `wait-for-boot` (`simctl bootstatus -b`) blocks until it has
 finished, which is what a script should wait on before driving the UI.
 
+On an Android session `wait-for-boot` polls `adb -s <serial> shell getprop
+sys.boot_completed` about once a second until it prints `1`, then prints
+`<serial> finished booting`. The wait is bounded by `-o/--timeout` (default
+120000 ms); on expiry, or when the serial is not attached, it exits 1 with
+`Failed to wait for boot: timed out after <N> ms waiting for <serial>`.
+`boot-device --platform android` keeps its own fixed 120 s boot wait. On iOS
+`-o` does not shorten `simctl bootstatus`; with `-o` given, the hard deadline
+is `-o` plus 20 s.
+
 `quiet-device` is the one command whose CLI and REPL forms differ: the CLI takes
 a UDID because it also serves build scripts with no qorvex server running, while
 the REPL form uses the session's device like everything else here. Device

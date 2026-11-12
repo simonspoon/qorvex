@@ -332,6 +332,19 @@ impl Adb {
         }
     }
 
+    /// Polls a device about once a second until it reports
+    /// `sys.boot_completed == 1`; false if `timeout` elapses first.
+    ///
+    /// Backs `wait-for-boot` on an Android session. Unlike
+    /// [`Adb::wait_for_boot`] it does not require the device to be online: an
+    /// unlisted, offline or unauthorized serial probes as "not booted" and the
+    /// call returns false at the deadline instead of hanging.
+    pub fn wait_boot_completed(serial: &str, timeout: Duration) -> bool {
+        poll_until(timeout, Duration::from_secs(1), || {
+            Self::is_boot_completed(serial)
+        })
+    }
+
     /// Returns true if the device reports `sys.boot_completed == 1`.
     ///
     /// A single best-effort probe (no retry); any command failure is treated as
@@ -811,9 +824,98 @@ impl Adb {
     }
 }
 
+/// Calls `probe` until it returns true (`true`) or `timeout` elapses (`false`).
+///
+/// Probes once immediately, then every `interval`; a sleep never runs past the
+/// deadline, which is checked between probes (a probe that itself hangs is not
+/// interrupted). A `timeout` too large for `Instant` means no deadline.
+fn poll_until(timeout: Duration, interval: Duration, mut probe: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now().checked_add(timeout);
+    loop {
+        if probe() {
+            return true;
+        }
+        let now = Instant::now();
+        let sleep = match deadline {
+            Some(d) if now >= d => return false,
+            Some(d) => interval.min(d - now),
+            None => interval,
+        };
+        std::thread::sleep(sleep);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poll_until_booted_at_once_probes_once() {
+        let mut calls = 0;
+        let ok = poll_until(Duration::from_secs(5), Duration::from_millis(10), || {
+            calls += 1;
+            true
+        });
+        assert!(ok);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn poll_until_booted_after_two_polls() {
+        let mut calls = 0;
+        let ok = poll_until(Duration::from_secs(5), Duration::from_millis(10), || {
+            calls += 1;
+            calls == 3
+        });
+        assert!(ok);
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn poll_until_times_out_within_deadline() {
+        let start = Instant::now();
+        let ok = poll_until(
+            Duration::from_millis(200),
+            Duration::from_millis(50),
+            || false,
+        );
+        assert!(!ok);
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(200));
+        assert!(elapsed < Duration::from_millis(1000), "{elapsed:?}");
+    }
+
+    #[test]
+    fn poll_until_huge_timeout_does_not_panic() {
+        let mut calls = 0;
+        assert!(poll_until(Duration::MAX, Duration::from_millis(1), || {
+            calls += 1;
+            calls == 2
+        }));
+    }
+
+    #[test]
+    fn poll_until_sleep_is_capped_by_deadline() {
+        // A 1 s interval must not stretch a 100 ms timeout.
+        let start = Instant::now();
+        assert!(!poll_until(
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+            || false
+        ));
+        assert!(start.elapsed() < Duration::from_millis(800));
+    }
+
+    #[test]
+    fn wait_boot_completed_unlisted_serial_returns_false_at_deadline() {
+        // No such device: adb (or its absence) probes as "not booted".
+        let start = Instant::now();
+        assert!(!Adb::wait_boot_completed(
+            "qorvex-test-no-such-serial",
+            Duration::from_millis(300)
+        ));
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
 
     // Representative `adb devices -l` output: a running emulator, a USB
     // physical device, a network (`adb connect`) device, and an offline one.

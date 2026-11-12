@@ -202,8 +202,13 @@ pub enum IpcRequest {
         device_type: String,
         runtime: String,
     },
-    /// Block until the session's selected simulator has finished booting.
-    WaitForBoot,
+    /// Block until the session's selected device has finished booting.
+    WaitForBoot {
+        /// Android only: the boot-wait deadline in ms (server default 120000).
+        /// Absent from the JSON when `None`, so the iOS request is unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
     /// Stop the runaway `mediaanalysisd` on the session's selected simulator.
     ///
     /// The CLI's `quiet-device` takes a UDID because it also serves build

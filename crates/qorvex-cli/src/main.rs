@@ -796,7 +796,10 @@ enum Command {
         runtime: String,
     },
 
-    /// Wait until the session's selected simulator has finished booting
+    /// Wait until the session's selected device has finished booting
+    ///
+    /// Android: polls sys.boot_completed, bounded by -o/--timeout (default
+    /// 120000 ms).
     #[command(name = "wait-for-boot")]
     WaitForBoot,
 
@@ -1086,6 +1089,8 @@ async fn main() -> ExitCode {
             if_present: true, ..
         }
         | Command::GetValue { no_wait: true, .. } => None,
+        // `-o` is also the Android boot wait sent to the server.
+        Command::WaitForBoot => cli.timeout,
         _ => element,
     };
     if let Some(deadline) = command_deadline(is_wait, forwarded, cli.timeout, env_deadline) {
@@ -2253,7 +2258,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             )
             .await
         }
-        Command::WaitForBoot => send_command(&mut client, IpcRequest::WaitForBoot, &cli).await,
+        Command::WaitForBoot => {
+            let request = IpcRequest::WaitForBoot {
+                timeout_ms: cli.timeout,
+            };
+            send_command(&mut client, request, &cli).await
+        }
         Command::DeviceLog {
             ref last,
             ref predicate,
@@ -5118,6 +5128,18 @@ mod tests {
     #[test]
     fn element_timeout_env_does_not_change_start_deadline() {
         // QORVEX_TIMEOUT never reaches the deadline function for non-wait commands.
+        assert_eq!(command_deadline(false, None, None, None), ms(600_000));
+    }
+
+    #[test]
+    fn wait_for_boot_deadline_is_timeout_plus_margin() {
+        // wait-for-boot forwards -o as the Android boot wait, so the watchdog
+        // lands after the server's own timeout message.
+        assert_eq!(
+            command_deadline(false, Some(3000), Some(3000), None),
+            ms(23_000)
+        );
+        // No -o: nothing forwarded, plain default deadline.
         assert_eq!(command_deadline(false, None, None, None), ms(600_000));
     }
 

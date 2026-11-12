@@ -180,7 +180,7 @@ impl ServerState {
                 self.handle_create_device(&name, &device_type, &runtime)
                     .await
             }
-            IpcRequest::WaitForBoot => self.handle_wait_for_boot().await,
+            IpcRequest::WaitForBoot { timeout_ms } => self.handle_wait_for_boot(timeout_ms).await,
             IpcRequest::QuietDevice => self.handle_quiet_device().await,
             IpcRequest::DeviceLog { last, predicate } => {
                 self.handle_device_log(&last, predicate.as_deref()).await
@@ -1962,7 +1962,10 @@ impl ServerState {
     ///
     /// `boot-device` returns as soon as `simctl boot` returns, which is when
     /// the boot has *started*; this closes that gap.
-    async fn handle_wait_for_boot(&self) -> IpcResponse {
+    async fn handle_wait_for_boot(&self, timeout_ms: Option<u64>) -> IpcResponse {
+        if let Some(serial) = self.android_serial.clone() {
+            return self.wait_for_boot_android(serial, timeout_ms).await;
+        }
         let udid = match self.selected_simulator() {
             Ok(udid) => udid,
             Err(message) => {
@@ -1992,6 +1995,43 @@ impl ServerState {
                     ActionResult::Failure(msg),
                 )
             }
+        };
+        self.log_action(ActionType::WaitForBoot, action_result, None, None)
+            .await;
+        response
+    }
+
+    /// `wait-for-boot` on an Android session: poll `sys.boot_completed`
+    /// until it is `1`, bounded by `timeout_ms` (default 120 s). An unlisted
+    /// or offline serial fails at the deadline rather than hanging.
+    async fn wait_for_boot_android(&self, serial: String, timeout_ms: Option<u64>) -> IpcResponse {
+        let ms = timeout_ms.unwrap_or(120_000);
+        let poll_serial = serial.clone();
+        let booted = tokio::task::spawn_blocking(move || {
+            Adb::wait_boot_completed(&poll_serial, std::time::Duration::from_millis(ms))
+        })
+        .await
+        .unwrap_or(false);
+        let (response, action_result) = if booted {
+            (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("{} finished booting", serial),
+                },
+                ActionResult::Success,
+            )
+        } else {
+            let msg = format!(
+                "Failed to wait for boot: timed out after {} ms waiting for {}",
+                ms, serial
+            );
+            (
+                IpcResponse::CommandResult {
+                    success: false,
+                    message: msg.clone(),
+                },
+                ActionResult::Failure(msg),
+            )
         };
         self.log_action(ActionType::WaitForBoot, action_result, None, None)
             .await;
@@ -3245,6 +3285,39 @@ mod tests {
             assert!(state.android_forward.is_none());
             assert!(state.simulator_udid.is_some());
         }
+    }
+
+    /// `wait-for-boot` on a session with no device (Android or iOS) fails
+    /// with the existing "No device selected." message.
+    #[tokio::test]
+    async fn wait_for_boot_without_device_errors() {
+        let state = ServerState::new("test".into());
+        match state.handle_wait_for_boot(Some(1000)).await {
+            IpcResponse::CommandResult { success, message } => {
+                assert!(!success);
+                assert_eq!(message, "No device selected.");
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    /// An Android serial that is not attached fails at the deadline, naming it.
+    #[tokio::test]
+    async fn wait_for_boot_android_unlisted_serial_times_out() {
+        let mut state = ServerState::new("test".into());
+        state.android_serial = Some("qorvex-test-no-such-serial".into());
+        let start = std::time::Instant::now();
+        match state.handle_wait_for_boot(Some(300)).await {
+            IpcResponse::CommandResult { success, message } => {
+                assert!(!success);
+                assert_eq!(
+                    message,
+                    "Failed to wait for boot: timed out after 300 ms waiting for qorvex-test-no-such-serial"
+                );
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     /// Starting the Android agent with no device selected returns a clear
