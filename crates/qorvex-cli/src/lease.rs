@@ -132,8 +132,26 @@ pub fn list(json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Ownership guard for `release <UDID> --owner <O>`: refuses when the lease row
+/// is held by a different owner. No row means there is no owner to contradict.
+fn check_owner(row_owner: Option<&str>, claimed: &str) -> Result<(), String> {
+    match row_owner {
+        Some(actual) if actual != claimed => {
+            Err(format!("lease is held by '{}', not '{}'", actual, claimed))
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn release_cmd(udid: Option<&str>, owner: Option<&str>) -> Result<(), CliError> {
     let db = open_db()?;
+    if let (Some(u), Some(o)) = (udid, owner) {
+        let row = db.get(u).map_err(fail("lease database"))?;
+        if let Err(e) = check_owner(row.as_ref().map(|l| l.owner.as_str()), o) {
+            eprintln!("Error: {}: {}", u, e);
+            return Err(CliError::ActionFailed("release failed".into()));
+        }
+    }
     let targets: Vec<String> = match (udid, owner) {
         (Some(u), _) => vec![u.to_string()],
         (None, Some(o)) => db
@@ -336,5 +354,25 @@ pub fn reclaim(older_than: Option<&str>, yes: bool, json: bool) -> Result<(), Cl
         ))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_owner;
+
+    #[test]
+    fn owner_guard() {
+        assert_eq!(check_owner(Some("a"), "a"), Ok(()));
+        assert_eq!(
+            check_owner(Some("a"), "b"),
+            Err("lease is held by 'a', not 'b'".into())
+        );
+        assert_eq!(check_owner(None, "b"), Ok(()));
+        assert_eq!(
+            check_owner(Some("a"), ""),
+            Err("lease is held by 'a', not ''".into())
+        );
+        assert_eq!(check_owner(Some(""), ""), Ok(()));
     }
 }

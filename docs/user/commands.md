@@ -58,9 +58,21 @@ never booted) and named `qorvex-lease-<id>`. Leases live in `~/.qorvex/leases.db
 | `qorvex lease --model "iPhone Air" --owner <name> [--runtime <id>] [--ttl 4h]` | Clone, boot and wait; prints the UDID, then `QORVEX_DEVICE=<udid>` |
 | `qorvex lease heartbeat <udid>` | Reset the lease's heartbeat |
 | `qorvex lease list` | Leases with age, heartbeat age and expiry (`-f json` for JSON) |
-| `qorvex release <udid>` / `--owner <name>` | Shut down and delete the clone. Idempotent; refuses names not starting `qorvex-lease-` |
+| `qorvex release <udid>` / `--owner <name>` / `<udid> --owner <name>` | Shut down and delete the clone. Idempotent; refuses names not starting `qorvex-lease-`. With both, refuses a lease held by another owner |
 | `qorvex reap [--dry-run]` | Release leases past their TTL; delete `qorvex-lease-*` devices with no lease row |
 | `qorvex sims reclaim [--older-than 14d] [--yes]` | Disk reclamation for any machine. Dry run by default |
+
+`qorvex release <udid> --owner <name>` is the ownership-checked form: if the
+lease row for `<udid>` belongs to a different owner it changes nothing, prints
+`Error: <udid>: lease is held by '<actual>', not '<name>'` and exits 1. With no
+lease row (already released) there is no owner to contradict, so it behaves
+exactly like plain `release <udid>` (idempotent, exit 0). Omitting `--owner`
+skips the check, and `release --owner <name>` alone still releases every lease
+that owner holds.
+
+```bash
+qorvex release 1A2B... --owner ci-job-42   # exit 1 if another owner holds it
+```
 
 `reap` leaves an orphan alone if it is booted or was touched in the last ten
 minutes. `sims reclaim` lists each candidate with its on-disk size and a total:

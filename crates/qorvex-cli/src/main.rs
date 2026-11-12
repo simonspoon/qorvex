@@ -819,12 +819,13 @@ enum Command {
 
     /// Delete a leased simulator and its lease (by UDID or owner)
     ///
-    /// Refuses any device not named qorvex-lease-*. Idempotent.
-    #[command(group(clap::ArgGroup::new("target").required(true).args(["udid", "owner"])))]
+    /// Refuses any device not named qorvex-lease-*. Idempotent. With both a
+    /// UDID and --owner, refuses a lease held by a different owner.
+    #[command(group(clap::ArgGroup::new("target").required(true).multiple(true).args(["udid", "owner"])))]
     Release {
         /// UDID of the leased simulator
         udid: Option<String>,
-        /// Release every lease held by this owner
+        /// Release every lease held by this owner (with a UDID: only if it holds that lease)
         #[arg(long)]
         owner: Option<String>,
     },
@@ -3499,6 +3500,27 @@ mod tests {
         assert!(parse_max_bytes("-1").is_err());
         assert!(parse_max_bytes("abc").is_err());
         assert!(parse_max_bytes("").is_err());
+    }
+
+    #[test]
+    fn release_accepts_udid_with_owner() {
+        let target = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Command::Release { udid, owner } => (udid, owner),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            target(&["qorvex", "release", "U", "--owner", "O"]),
+            (Some("U".into()), Some("O".into()))
+        );
+        assert_eq!(
+            target(&["qorvex", "release", "U"]),
+            (Some("U".into()), None)
+        );
+        assert_eq!(
+            target(&["qorvex", "release", "--owner", "O"]),
+            (None, Some("O".into()))
+        );
+        assert!(Cli::try_parse_from(["qorvex", "release"]).is_err());
     }
 
     #[test]
