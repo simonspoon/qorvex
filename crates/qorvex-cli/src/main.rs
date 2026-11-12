@@ -54,6 +54,7 @@ mod converter;
 mod doctor;
 mod lease;
 
+use chrono::{DateTime, Utc};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use qorvex_core::action::{
     parse_coordinate, parse_max_swipes, parse_swipe_duration_ms, ActionLog, ActionType, LabelMatch,
@@ -847,7 +848,12 @@ enum Command {
     Status,
 
     /// Get action log history
-    Log,
+    Log {
+        /// Only entries at or after this time: an RFC3339 timestamp
+        /// (`2026-11-12T08:58:40Z`) or an age `<n>s`, `<n>m` or `<n>h`
+        #[arg(long, value_name = "T", value_parser = parse_since)]
+        since: Option<DateTime<Utc>>,
+    },
 
     /// List all running qorvex sessions
     ListSessions,
@@ -1934,7 +1940,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::StopAgent => send_command(&mut client, IpcRequest::StopAgent, &cli).await,
         Command::Stop => stop_server(&mut client, &cli).await,
         Command::Status => get_status(&mut client, &cli).await,
-        Command::Log => get_log(&mut client, &cli).await,
+        Command::Log { since } => get_log(&mut client, &cli, since).await,
         Command::UseDevice { ref udid } => {
             send_command(
                 &mut client,
@@ -2731,7 +2737,48 @@ fn log_entry_line(entry: &ActionLog) -> String {
     }
 }
 
-async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
+/// `log --since <T>`: an RFC3339 timestamp, or an age (`<n>s`, `<n>m`, `<n>h`)
+/// meaning now minus that. Resolved to an absolute cut-off once, here.
+fn parse_since(s: &str) -> Result<DateTime<Utc>, String> {
+    if let Ok(t) = DateTime::parse_from_rfc3339(s) {
+        return Ok(t.with_timezone(&Utc));
+    }
+    let bad = || {
+        format!(
+            "invalid --since '{}': expected an RFC3339 timestamp (e.g. 2026-11-12T08:58:40Z) or an age <n>s, <n>m or <n>h (e.g. 30s, 5m, 1h)",
+            s
+        )
+    };
+    let (idx, unit) = s.char_indices().last().ok_or_else(bad)?;
+    let secs_per_unit: u32 = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        _ => return Err(bad()),
+    };
+    let digits = &s[..idx];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    let n: u32 = digits.parse().map_err(|_| bad())?;
+    let age =
+        chrono::Duration::try_seconds(i64::from(n) * i64::from(secs_per_unit)).ok_or_else(bad)?;
+    Utc::now().checked_sub_signed(age).ok_or_else(bad)
+}
+
+/// Keep only entries whose timestamp is at or after `since` (all when `None`).
+fn filter_since(entries: Vec<ActionLog>, since: Option<DateTime<Utc>>) -> Vec<ActionLog> {
+    match since {
+        Some(cut) => entries.into_iter().filter(|e| e.timestamp >= cut).collect(),
+        None => entries,
+    }
+}
+
+async fn get_log(
+    client: &mut IpcClient,
+    cli: &Cli,
+    since: Option<DateTime<Utc>>,
+) -> Result<(), CliError> {
     let response = client
         .send(&IpcRequest::GetLog)
         .await
@@ -2739,6 +2786,7 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
 
     match response {
         IpcResponse::Log { entries } => {
+            let entries = filter_since(entries, since);
             if cli.format == OutputFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&entries).unwrap());
             } else {
@@ -3873,6 +3921,103 @@ mod tests {
         assert!(line.ends_with(" - Success - 123ms"), "{line}");
         entry.duration_ms = None;
         assert!(log_entry_line(&entry).ends_with(" - Success"));
+    }
+
+    fn log_at(ts: DateTime<Utc>) -> ActionLog {
+        let mut entry = ActionLog::new(
+            ActionType::Key {
+                name: "home".parse().unwrap(),
+            },
+            qorvex_core::action::ActionResult::Success,
+            None,
+            None,
+            None,
+        );
+        entry.timestamp = ts;
+        entry
+    }
+
+    #[test]
+    fn since_parses_rfc3339_exactly() {
+        let t = parse_since("2026-11-12T08:58:40Z").unwrap();
+        assert_eq!(t.to_rfc3339(), "2026-11-12T08:58:40+00:00");
+        let offset = parse_since("2026-11-12T10:58:40+02:00").unwrap();
+        assert_eq!(offset, t);
+    }
+
+    #[test]
+    fn since_parses_relative_ages() {
+        for (input, secs) in [("0s", 0), ("30s", 30), ("5m", 300), ("1h", 3600)] {
+            let before = Utc::now();
+            let cut = parse_since(input).unwrap();
+            let after = Utc::now();
+            let lo = before - chrono::Duration::seconds(secs);
+            let hi = after - chrono::Duration::seconds(secs);
+            assert!(lo <= cut && cut <= hi, "{input}: {cut} not in [{lo}, {hi}]");
+        }
+    }
+
+    #[test]
+    fn since_rejects_bad_input() {
+        for bad in [
+            "",
+            "garbage",
+            "-5m",
+            "+5m",
+            "30",
+            "5x",
+            "m",
+            "1.5h",
+            "5 m",
+            "99999999999h",
+            "4000000000h",
+            "2026-11-12",
+        ] {
+            let err = parse_since(bad).expect_err(bad);
+            assert!(err.contains("--since"), "{bad}: {err}");
+            assert!(err.contains("<n>s"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn filter_since_keeps_entries_at_or_after_cut() {
+        let cut = parse_since("2026-11-12T08:58:40Z").unwrap();
+        let entries = vec![
+            log_at(cut - chrono::Duration::seconds(10)),
+            log_at(cut),
+            log_at(cut + chrono::Duration::seconds(10)),
+        ];
+        let kept = filter_since(entries.clone(), Some(cut));
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].timestamp, cut);
+        assert_eq!(kept[1].timestamp, cut + chrono::Duration::seconds(10));
+        assert_eq!(filter_since(entries.clone(), None).len(), 3);
+        let later = cut + chrono::Duration::seconds(60);
+        assert!(filter_since(entries, Some(later)).is_empty());
+    }
+
+    #[test]
+    fn log_since_is_a_usage_error_when_bad() {
+        match Cli::try_parse_from(["qorvex", "log"]).unwrap().command {
+            Command::Log { since } => assert_eq!(since, None),
+            _ => panic!("expected Log"),
+        }
+        match Cli::try_parse_from(["qorvex", "log", "--since", "5m"])
+            .unwrap()
+            .command
+        {
+            Command::Log { since } => assert!(since.is_some()),
+            _ => panic!("expected Log"),
+        }
+        let Err(err) = Cli::try_parse_from(["qorvex", "log", "--since", "garbage"]) else {
+            panic!("bad --since should be rejected")
+        };
+        assert_eq!(err.exit_code(), 2);
+        assert!(
+            err.to_string().contains("invalid --since 'garbage'"),
+            "{}",
+            err
+        );
     }
 
     #[test]
