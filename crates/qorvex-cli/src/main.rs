@@ -322,6 +322,14 @@ enum Command {
         /// (exit 0). One lookup, then a single tap attempt like --no-wait.
         #[arg(long)]
         if_present: bool,
+        /// If the tap fails but the element is in the tree with a non-empty
+        /// frame, tap its frame centre once (may hit a covering view)
+        #[arg(long)]
+        fallback_frame: bool,
+        /// Report whether the UI changed (two extra tree dumps, up to ~1.2 s);
+        /// always on with -f json
+        #[arg(long)]
+        report: bool,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1434,6 +1442,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref element_type,
             no_wait,
             if_present,
+            fallback_frame,
+            report,
             ref tag,
         } => {
             if if_present {
@@ -1464,6 +1474,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     by_label: label,
                     element_type: element_type.clone(),
                     timeout_ms,
+                    fallback_frame,
+                    report: report || cli.format == OutputFormat::Json,
                 },
                 tag.clone(),
                 &cli,
@@ -1951,17 +1963,21 @@ async fn execute_action(
                             eprintln!("{}", message);
                         } else {
                             let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3fZ");
-                            let duration_str = data
+                            let parsed = data
                                 .as_ref()
-                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                                .and_then(|parsed| {
-                                    parsed.get("elapsed_ms").and_then(|v| v.as_u64())
-                                })
+                                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok());
+                            let duration_str = parsed
+                                .as_ref()
+                                .and_then(|p| p.get("elapsed_ms").and_then(|v| v.as_u64()))
                                 .map(|ms| format!("{}ms", ms))
                                 .unwrap_or_default();
                             eprintln!(
-                                "|{}|{}|{}|{}|",
-                                now, action_label, action_target, duration_str
+                                "|{}|{}|{}|{}|{}",
+                                now,
+                                action_label,
+                                action_target,
+                                duration_str,
+                                parsed.as_ref().map(tap_report_suffix).unwrap_or_default()
                             );
                         }
                     }
@@ -1974,6 +1990,23 @@ async fn execute_action(
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
+}
+
+/// Extra fields for the text trace line of a tap: `fallback:frame_centre(x,y)|`
+/// when the frame-centre fallback tapped, `ui_changed:<v>|` when reported.
+/// Empty for every other action.
+fn tap_report_suffix(data: &serde_json::Value) -> String {
+    let mut out = String::new();
+    if data["method"] == "frame_centre" {
+        out.push_str(&format!(
+            "fallback:frame_centre({},{})|",
+            data["x"], data["y"]
+        ));
+    }
+    if let Some(changed) = data.get("ui_changed") {
+        out.push_str(&format!("ui_changed:{}|", changed));
+    }
+    out
 }
 
 /// Sends `start-target` and reports whether the app really launched.
@@ -3297,6 +3330,47 @@ mod tests {
             Command::Tap { if_present, .. } => assert!(!if_present),
             _ => panic!("expected Tap"),
         }
+    }
+
+    #[test]
+    fn tap_fallback_frame_and_report_parse() {
+        let cli = Cli::try_parse_from([
+            "qorvex",
+            "tap",
+            "x",
+            "--fallback-frame",
+            "--report",
+            "--if-present",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Tap {
+                fallback_frame,
+                report,
+                ..
+            } => assert!(fallback_frame && report),
+            _ => panic!("expected Tap"),
+        }
+        match Cli::try_parse_from(["qorvex", "tap", "x"]).unwrap().command {
+            Command::Tap {
+                fallback_frame,
+                report,
+                ..
+            } => assert!(!fallback_frame && !report),
+            _ => panic!("expected Tap"),
+        }
+    }
+
+    #[test]
+    fn tap_report_suffix_marks_fallback_and_ui_changed() {
+        let plain = serde_json::json!({"elapsed_ms": 5, "method": "element", "x": null, "y": null});
+        assert_eq!(tap_report_suffix(&plain), "");
+        let fb = serde_json::json!({"elapsed_ms": 5, "method": "frame_centre", "x": 120, "y": 340, "ui_changed": true});
+        assert_eq!(
+            tap_report_suffix(&fb),
+            "fallback:frame_centre(120,340)|ui_changed:true|"
+        );
+        assert_eq!(tap_report_suffix(&serde_json::json!({"elapsed_ms": 5})), "");
     }
 
     #[test]

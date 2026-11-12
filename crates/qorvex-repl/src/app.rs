@@ -825,6 +825,8 @@ impl App {
                         by_label,
                         element_type,
                         timeout_ms,
+                        fallback_frame: false,
+                        report: false,
                     },
                     tag: args.tag.clone(),
                 }
@@ -1365,6 +1367,8 @@ impl App {
                         by_label,
                         element_type,
                         timeout_ms,
+                        fallback_frame: false,
+                        report: false,
                     },
                     tag: args.tag.clone(),
                 }

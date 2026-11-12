@@ -19,6 +19,8 @@
 //!         by_label: false,
 //!         element_type: None,
 //!         timeout_ms: Some(5000),
+//!         fallback_frame: false,
+//!         report: false,
 //!     }).await;
 //!
 //!     if result.success {
@@ -34,7 +36,7 @@ use tracing::{debug, info, info_span, Instrument};
 
 use crate::action::ActionType;
 use crate::driver::{AutomationDriver, CompiledLabelMatch, DriverError};
-use crate::element::UIElement;
+use crate::element::{ElementFrame, UIElement};
 
 /// Result of executing an action.
 ///
@@ -271,6 +273,75 @@ impl ActionExecutor {
         .await
     }
 
+    /// Serialized whole tree, the form `WaitStable` compares.
+    async fn tree_snapshot(&self) -> Result<String, DriverError> {
+        let tree = self.driver.dump_tree().await?;
+        serde_json::to_string(&tree).map_err(|e| DriverError::CommandFailed(e.to_string()))
+    }
+
+    /// Tree snapshot once it compared equal on two polls 100 ms apart, or the
+    /// last one after 1000 ms if it never settled.
+    async fn settled_tree_snapshot(&self) -> Result<String, DriverError> {
+        let start = Instant::now();
+        let mut last = self.tree_snapshot().await?;
+        while start.elapsed() < Duration::from_millis(1000) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let current = self.tree_snapshot().await?;
+            if current == last {
+                break;
+            }
+            last = current;
+        }
+        Ok(last)
+    }
+
+    /// `tap --fallback-frame`: after the normal tap failed with `err`, find the
+    /// element and tap its frame centre once. Returns the point tapped, or a
+    /// note on why the fallback did not tap (appended to the original error).
+    async fn fallback_frame_tap(
+        &self,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        err: &DriverError,
+    ) -> Result<(i32, i32), String> {
+        if matches!(
+            err,
+            DriverError::NotConnected | DriverError::ConnectionLost(_) | DriverError::Io(_)
+        ) {
+            return Err("fallback frame tap skipped: no connection to the agent".to_string());
+        }
+        // Never tap coordinates over whatever replaced a target that is gone.
+        // A backend that cannot tell (error or empty state) does not block.
+        if let Ok(info) = self.driver.get_target_info().await {
+            if !info.state.is_empty() && info.state != "running_foreground" {
+                return Err(format!(
+                    "fallback frame tap skipped: target state is {}",
+                    info.state
+                ));
+            }
+        }
+        let element = match self
+            .driver
+            .find_element_with_type(selector, by_label, element_type)
+            .await
+        {
+            Ok(Some(el)) => el,
+            Ok(None) => return Err("fallback frame: element not found".to_string()),
+            Err(e) => return Err(format!("fallback frame lookup failed: {}", e)),
+        };
+        let (x, y) = element
+            .frame
+            .as_ref()
+            .and_then(frame_centre)
+            .ok_or_else(|| "fallback frame: element has no non-empty frame".to_string())?;
+        self.driver
+            .tap_location(x, y)
+            .await
+            .map_err(|e| format!("fallback frame tap at ({},{}) failed: {}", x, y, e))?;
+        Ok((x, y))
+    }
+
     async fn execute_inner(&self, action: ActionType) -> ExecutionResult {
         match action {
             ActionType::Tap {
@@ -278,7 +349,16 @@ impl ActionExecutor {
                 by_label,
                 ref element_type,
                 timeout_ms,
+                fallback_frame,
+                report,
             } => {
+                let type_filter = element_type.as_deref();
+                let before = if report {
+                    Some(self.tree_snapshot().await)
+                } else {
+                    None
+                };
+                // After the "before" dump so `elapsed_ms` times the tap only.
                 let start = Instant::now();
 
                 let tap_result = if timeout_ms.is_some() {
@@ -309,21 +389,69 @@ impl ActionExecutor {
                     }
                 };
 
-                let elapsed_ms = start.elapsed().as_millis() as u64;
-                match tap_result {
+                let (method, point) = match tap_result {
                     Ok(_) => {
-                        let msg = if by_label {
-                            format!("Tapped element with label '{}'", selector)
+                        // Where the element is just after the tap. Only looked up
+                        // when reporting so a plain tap costs no extra request.
+                        let point = if report {
+                            self.driver
+                                .find_element_with_type(selector, by_label, type_filter)
+                                .await
+                                .ok()
+                                .flatten()
+                                .and_then(|el| el.frame.as_ref().and_then(frame_centre))
                         } else {
-                            format!("Tapped element '{}'", selector)
+                            None
                         };
-                        ExecutionResult::success(msg)
-                            .with_data(format!(r#"{{"elapsed_ms":{}}}"#, elapsed_ms))
+                        ("element", point)
                     }
                     Err(e) => {
-                        ExecutionResult::failure(format!("Timeout after {}ms: {}", elapsed_ms, e))
+                        let failed = format!(
+                            "Timeout after {}ms: {}",
+                            start.elapsed().as_millis() as u64,
+                            e
+                        );
+                        if !fallback_frame {
+                            return ExecutionResult::failure(failed);
+                        }
+                        match self
+                            .fallback_frame_tap(selector, by_label, type_filter, &e)
+                            .await
+                        {
+                            Ok(point) => ("frame_centre", Some(point)),
+                            Err(note) => {
+                                return ExecutionResult::failure(format!("{}; {}", failed, note))
+                            }
+                        }
                     }
+                };
+
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                let mut data = serde_json::json!({
+                    "elapsed_ms": elapsed_ms,
+                    "method": method,
+                    "x": point.map(|p| p.0),
+                    "y": point.map(|p| p.1),
+                });
+                if let Some(before) = before {
+                    // No settle when the "before" dump failed: the answer is null anyway.
+                    data["ui_changed"] = match before {
+                        Ok(b) => match self.settled_tree_snapshot().await {
+                            Ok(a) => serde_json::Value::Bool(b != a),
+                            Err(_) => serde_json::Value::Null,
+                        },
+                        Err(_) => serde_json::Value::Null,
+                    };
                 }
+                let mut msg = if by_label {
+                    format!("Tapped element with label '{}'", selector)
+                } else {
+                    format!("Tapped element '{}'", selector)
+                };
+                if let ("frame_centre", Some((x, y))) = (method, point) {
+                    msg.push_str(&format!(" via frame centre ({}, {})", x, y));
+                }
+                ExecutionResult::success(msg).with_data(data.to_string())
             }
 
             ActionType::TapLocation { x, y } => {
@@ -863,6 +991,17 @@ impl ActionExecutor {
                 ExecutionResult::failure("Device management actions must be handled by the server")
             }
         }
+    }
+}
+
+/// Centre of a non-empty frame, rounded to the nearest point and clamped to >= 0.
+fn frame_centre(frame: &ElementFrame) -> Option<(i32, i32)> {
+    if frame.width > 0.0 && frame.height > 0.0 {
+        let x = (frame.x + frame.width / 2.0).round().max(0.0) as i32;
+        let y = (frame.y + frame.height / 2.0).round().max(0.0) as i32;
+        Some((x, y))
+    } else {
+        None
     }
 }
 

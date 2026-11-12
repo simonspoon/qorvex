@@ -157,6 +157,8 @@ async fn parity_tap_by_id() {
             by_label: false,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         },
         vec![Response::Ok, Response::Ok],
     )
@@ -173,6 +175,8 @@ async fn parity_tap_by_label() {
             by_label: true,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         },
         vec![Response::Ok, Response::Ok],
     )
@@ -189,6 +193,8 @@ async fn parity_tap_with_type() {
             by_label: true,
             element_type: Some("Button".to_string()),
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         },
         vec![Response::Ok, Response::Ok],
     )
@@ -540,6 +546,8 @@ async fn parity_error_propagation() {
             by_label: false,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         },
         vec![
             Response::Ok,

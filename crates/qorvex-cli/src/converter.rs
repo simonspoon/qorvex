@@ -49,6 +49,7 @@ impl LogConverter {
                 selector,
                 by_label,
                 element_type,
+                fallback_frame,
                 ..
             } => {
                 let mut cmd = format!("qorvex tap {}", shell_escape(selector));
@@ -57,6 +58,9 @@ impl LogConverter {
                 }
                 if let Some(t) = element_type {
                     cmd.push_str(&format!(" -T {}", shell_escape(t)));
+                }
+                if *fallback_frame {
+                    cmd.push_str(" --fallback-frame");
                 }
                 Some(cmd)
             }
@@ -289,6 +293,8 @@ mod tests {
             by_label: false,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
@@ -303,6 +309,8 @@ mod tests {
             by_label: true,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
@@ -317,10 +325,28 @@ mod tests {
             by_label: true,
             element_type: Some("Button".to_string()),
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex tap Submit --label -T Button".to_string())
+        );
+    }
+
+    #[test]
+    fn test_tap_fallback_frame_to_command() {
+        let action = ActionType::Tap {
+            selector: "Tap Me".to_string(),
+            by_label: true,
+            element_type: None,
+            timeout_ms: Some(5000),
+            fallback_frame: true,
+            report: true,
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex tap 'Tap Me' --label --fallback-frame".to_string())
         );
     }
 
@@ -331,6 +357,8 @@ mod tests {
             by_label: true,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
@@ -605,6 +633,8 @@ mod tests {
                 by_label: false,
                 element_type: None,
                 timeout_ms: None,
+                fallback_frame: false,
+                report: false,
             },
             ActionResult::Success,
             None,
@@ -661,6 +691,8 @@ mod tests {
                 by_label: false,
                 element_type: None,
                 timeout_ms: None,
+                fallback_frame: false,
+                report: false,
             },
             ActionResult::Success,
             None,
@@ -684,6 +716,8 @@ mod tests {
                 by_label: false,
                 element_type: None,
                 timeout_ms: None,
+                fallback_frame: false,
+                report: false,
             },
             Some("my tag"),
         )

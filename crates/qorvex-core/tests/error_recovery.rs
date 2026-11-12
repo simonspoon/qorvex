@@ -34,6 +34,8 @@ fn tap_action() -> ActionType {
         by_label: false,
         element_type: None,
         timeout_ms: None,
+        fallback_frame: false,
+        report: false,
     }
 }
 

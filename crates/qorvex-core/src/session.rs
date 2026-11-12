@@ -33,7 +33,7 @@
 //!         ActionType::Tap {
 //!             selector: "button".to_string(),
 //!             by_label: false,
-//!             element_type: None, timeout_ms: None,
+//!             element_type: None, timeout_ms: None, fallback_frame: false, report: false,
 //!         },
 //!         ActionResult::Success,
 //!         None,

@@ -84,6 +84,7 @@ done
 | `qorvex tap <selector>` | Tap by accessibility ID |
 | `qorvex tap <selector> --label` | Tap by label |
 | `qorvex tap <selector> -T Button` | Tap with type filter |
+| `qorvex tap <selector> --fallback-frame` | If the tap fails but the element has a frame, tap its centre (replaces tap, screen-info, tap-location) |
 | `qorvex tap-location <x> <y>` | Tap at coordinates |
 | `qorvex long-press <x> <y> [--duration <s>]` | Long press at coordinates (default 1.0s) |
 | `qorvex swipe <direction>` | Swipe up/down/left/right |

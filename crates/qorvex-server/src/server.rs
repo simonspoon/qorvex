@@ -3182,6 +3182,8 @@ mod tests {
             by_label: false,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         };
         match state.handle_execute(action, None).await {
             IpcResponse::Error { message } => {

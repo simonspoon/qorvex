@@ -81,7 +81,8 @@ The `wait_ms` and `tap_ms` fields provide per-phase timing breakdowns for tap ac
 
 ```rust
 enum ActionType {
-    Tap { selector: String, by_label: bool, element_type: Option<String> },
+    Tap { selector: String, by_label: bool, element_type: Option<String>, timeout_ms: Option<u64>,
+          fallback_frame: bool, report: bool }, // last two #[serde(default)]
     TapLocation { x: i32, y: i32 },
     Swipe { direction: String },
     LongPress { x: i32, y: i32, duration: f64 },

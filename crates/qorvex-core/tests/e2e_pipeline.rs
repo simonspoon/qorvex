@@ -38,6 +38,8 @@ async fn test_tap_via_ipc_to_mock_agent() {
                 by_label: false,
                 element_type: None,
                 timeout_ms: None,
+                fallback_frame: false,
+                report: false,
             },
             tag: None,
         })
@@ -193,6 +195,8 @@ async fn test_action_logged_after_ipc_execute() {
                 by_label: false,
                 element_type: None,
                 timeout_ms: None,
+                fallback_frame: false,
+                report: false,
             },
             tag: None,
         })
@@ -294,6 +298,8 @@ async fn test_multiple_sequential_actions_via_ipc() {
                 by_label: false,
                 element_type: None,
                 timeout_ms: None,
+                fallback_frame: false,
+                report: false,
             },
             tag: None,
         })

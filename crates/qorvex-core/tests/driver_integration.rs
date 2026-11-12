@@ -36,6 +36,8 @@ async fn test_executor_tap_element_via_agent_driver() {
             by_label: false,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         })
         .await;
 
@@ -64,6 +66,8 @@ async fn test_executor_tap_by_label_via_agent_driver() {
             by_label: true,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         })
         .await;
 
@@ -292,6 +296,8 @@ async fn test_executor_handles_agent_error() {
             by_label: false,
             element_type: None,
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         })
         .await;
 
@@ -366,6 +372,8 @@ async fn test_executor_tap_with_type_via_agent_driver() {
             by_label: true,
             element_type: Some("Button".to_string()),
             timeout_ms: None,
+            fallback_frame: false,
+            report: false,
         })
         .await;
 

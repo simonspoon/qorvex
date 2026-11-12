@@ -231,8 +231,12 @@ again the next time it asks.
 | `tap <selector> --no-wait` | Tap without waiting for element |
 | `tap <selector> --if-present` | Tap only if the element is in the tree right now; otherwise print `'<selector>' not present, skipped` to stderr and exit 0. One lookup, then a single tap attempt like `--no-wait` (same errors and exit codes). The lookup and the tap are two requests, so the element can vanish in between. Accepted together with `--no-wait` |
 | `tap <selector> --timeout 10000` | Tap with custom timeout |
+| `tap <selector> --fallback-frame` | If the normal tap fails (after its timeout) but the element is in the tree with a non-empty frame, tap the frame centre once (`tap-location` at x + width/2, y + height/2, rounded, clamped to >= 0). Exit 0 on success. Not found, zero-size frame, target app not in the foreground, or the fallback tap erroring: exit 1 with the original error plus a `fallback frame ...` note. The centre may land on a view covering the element; that is your choice with this flag (no occlusion check). Worst case: timeout + one target check + one lookup + one tap; `--no-wait --fallback-frame` is the fast form. Accepted with `--if-present` (probe first, then the tap with fallback) |
+| `tap <selector> --report` | Also report whether the UI changed: dumps the tree before the tap and after it settles (equal on two polls 100 ms apart, capped at 1000 ms), adds up to about 1.2 s. Always on with `-f json`. Text output appends `ui_changed:<true\|false\|null>\|` to the trace line |
 
-Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
+Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`). `--fallback-frame` and `--report` are CLI only.
+
+Tap result (`-f json` `data`): `{"elapsed_ms": N, "method": "element"|"frame_centre", "x": X, "y": Y, "ui_changed": true|false|null}`. `x`,`y` are the point tapped: for `element`, the centre of the element's frame looked up just after the tap (`null` if it has no frame or is gone, and `null` without `--report`/json since the lookup is skipped then); for `frame_centre`, the computed point. `ui_changed` is present only with `--report` or `-f json`; `null` when a tree dump failed (the tap result is not affected), `false` is information, not an error. Because `-f json` turns the report on, every `-f json tap` pays the two dumps (up to about 1.2 s); `elapsed_ms` times the tap itself, not the dumps. In text mode a frame-centre tap appends `fallback:frame_centre(x,y)|` to the trace line.
 
 Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On each poll, the element must be found and hittable, and its frame must be stable across 2 consecutive polls before the tap fires. After stability is confirmed, the element is re-queried and its frame validated against the stable position; any drift resets the check. This makes tap animation-aware — tapping immediately after a modal transition works without manual sleeps. Fails with timeout if the element never becomes tappable and stable. Use explicit `wait-for` if you need to assert stability before chaining other operations.
 
@@ -375,6 +379,7 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 - `status`: reports `session_id` and `has_screenshot`, plus readiness: text adds `Ready: yes` or `Ready: no (<reason>)`; `-f json` adds `ready`, `device`, `agent_connected`, `reason` (null when ready; otherwise `no device selected`, `no agent connected` or `agent not reachable: <error>`). Exit code is 0 whenever a session exists, ready or not. On a dead session it exits 2 with `session '<s>' is dead`.
 - `list-sessions`: lists live sessions only; sockets of dead sessions (connection refused) are removed.
 - `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`, `--tag <text>`
+- `tap` only: `--if-present`, `--fallback-frame`, `--report`
 - `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000), `--tag <text>`
 - `wait-stable`: `--for <ms>` (quiet period, default: 500), `-o, --timeout <ms>` (default: 5000), `--tag <text>`
 - `memory-info`: `--tag <text>` — annotates the JSONL log entry; the measured report is written into the entry itself

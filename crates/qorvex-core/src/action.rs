@@ -24,6 +24,8 @@
 //!     by_label: false,
 //!     element_type: None,
 //!     timeout_ms: None,
+//!     fallback_frame: false,
+//!     report: false,
 //! };
 //!
 //! // Create a log entry
@@ -106,6 +108,14 @@ pub enum ActionType {
         /// until this many milliseconds have elapsed. If `None`, attempt once.
         #[serde(default)]
         timeout_ms: Option<u64>,
+        /// If the normal tap fails but the element is in the tree with a
+        /// non-empty frame, tap the frame centre once with `tap_location`.
+        #[serde(default)]
+        fallback_frame: bool,
+        /// Dump the tree before and after (settled) the tap and report
+        /// `ui_changed`. Costs up to about 1.2 s extra.
+        #[serde(default)]
+        report: bool,
     },
 
     /// Tap at specific screen coordinates.
