@@ -244,6 +244,8 @@ again the next time it asks.
 | Bring running target app to front | `foreground-target` | `qorvex foreground-target` |
 | Target/device memory | `memory-info` | `qorvex memory-info` |
 
+On Android, `start-agent` scales its agent ready-wait (default 60 s) by host load when it starts: 1x up to 4x, by 1-minute load average per CPU (factor = clamp(load / CPUs, 1, 4)). At or below one load per CPU the wait is unchanged; the server logs an info line with load, CPUs, factor and effective timeout when it grows. `-o/--timeout` and iOS start-up are not affected.
+
 > **No agent needed to choose an app:** `set-target`, `start-target` and
 > `stop-target` all work with only a device selected — launching and terminating
 > go through `simctl`/`adb`, and `set-target` just records the id. So switching

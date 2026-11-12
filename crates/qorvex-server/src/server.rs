@@ -857,6 +857,8 @@ impl ServerState {
 
         let mut lc_config = AndroidLifecycleConfig::new(project_dir);
         lc_config.device_port = device_port;
+        lc_config.startup_timeout =
+            qorvex_core::android_lifecycle::load_scaled_startup_timeout(lc_config.startup_timeout);
         // Honor the JDK the *client* shell resolved: the daemon's own env was
         // frozen when it was spawned, so this is the only path by which a
         // freshly-exported QORVEX_ANDROID_JAVA_HOME reaches the Gradle build.

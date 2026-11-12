@@ -143,6 +143,53 @@ impl AndroidLifecycleConfig {
     }
 }
 
+/// Scale `base` by host load: factor = clamp(load1 / ncpu, 1.0, 4.0).
+///
+/// Never returns less than `base` or more than 4x `base`. A non-finite or
+/// negative `load1` returns `base`; `ncpu == 0` is treated as 1.
+pub fn scaled_timeout(base: Duration, load1: f64, ncpu: usize) -> Duration {
+    base.mul_f64(load_factor(load1, ncpu))
+}
+
+fn load_factor(load1: f64, ncpu: usize) -> f64 {
+    if !load1.is_finite() || load1 < 0.0 {
+        return 1.0;
+    }
+    (load1 / ncpu.max(1) as f64).clamp(1.0, 4.0)
+}
+
+/// Read the 1-minute load average and CPU count. `None` on any read failure.
+fn read_host_load() -> Option<(f64, usize)> {
+    let mut avg = [0f64; 1];
+    // SAFETY: `avg` is a valid buffer of length 1, matching `nelem`.
+    let n = unsafe { libc::getloadavg(avg.as_mut_ptr(), 1) };
+    if n < 1 {
+        return None;
+    }
+    let ncpu = std::thread::available_parallelism().ok()?.get();
+    Some((avg[0], ncpu))
+}
+
+/// Scale `base` by the current host load (see [`scaled_timeout`]); factor 1.0
+/// if the load cannot be read. Logs at info when the factor exceeds 1.0.
+pub fn load_scaled_startup_timeout(base: Duration) -> Duration {
+    let Some((load1, ncpu)) = read_host_load() else {
+        return base;
+    };
+    let factor = load_factor(load1, ncpu);
+    let effective = scaled_timeout(base, load1, ncpu);
+    if factor > 1.0 {
+        info!(
+            load1,
+            ncpu,
+            factor,
+            effective_timeout_secs = effective.as_secs_f64(),
+            "host load high: scaling android agent startup timeout"
+        );
+    }
+    effective
+}
+
 // ---------------------------------------------------------------------------
 // Errors — one distinct variant per failure mode (spec E2)
 // ---------------------------------------------------------------------------
@@ -940,6 +987,28 @@ fn tail_diagnostic(stderr: &str, status: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- load scaling ---
+
+    #[test]
+    fn scaled_timeout_factors() {
+        let b = Duration::from_secs(60);
+        assert_eq!(scaled_timeout(b, 2.0, 8), b);
+        assert_eq!(scaled_timeout(b, 8.0, 8), b);
+        assert_eq!(scaled_timeout(b, 16.0, 8), Duration::from_secs(120));
+        assert_eq!(scaled_timeout(b, 800.0, 8), Duration::from_secs(240));
+        assert_eq!(scaled_timeout(b, f64::NAN, 8), b);
+        assert_eq!(scaled_timeout(b, f64::INFINITY, 8), b);
+        assert_eq!(scaled_timeout(b, -3.0, 8), b);
+        assert_eq!(scaled_timeout(b, 16.0, 0), Duration::from_secs(240));
+    }
+
+    #[test]
+    fn load_scaled_startup_timeout_bounded() {
+        let b = Duration::from_secs(60);
+        let t = load_scaled_startup_timeout(b);
+        assert!(t >= b && t <= b * 4);
+    }
 
     // --- config ---
 

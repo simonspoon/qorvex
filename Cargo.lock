@@ -2012,6 +2012,7 @@ dependencies = [
  "chrono",
  "dirs",
  "idevice",
+ "libc",
  "regex",
  "rusqlite",
  "serde",
