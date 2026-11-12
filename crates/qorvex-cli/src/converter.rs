@@ -7,35 +7,59 @@ use qorvex_core::action::{ActionLog, ActionType, LabelMatch, LabelMatcher};
 pub struct LogConverter;
 
 impl LogConverter {
-    pub fn convert_file(path: &Path) -> Result<String, io::Error> {
+    pub fn convert_file(path: &Path, batch: bool) -> Result<String, io::Error> {
         let content = std::fs::read_to_string(path)?;
-        Self::convert_str(&content)
+        Self::convert_str_as(&content, batch)
     }
 
-    pub fn convert_stdin() -> Result<String, io::Error> {
+    pub fn convert_stdin(batch: bool) -> Result<String, io::Error> {
         let mut content = String::new();
         io::stdin().read_to_string(&mut content)?;
-        Self::convert_str(&content)
+        Self::convert_str_as(&content, batch)
     }
 
+    #[cfg(test)]
     fn convert_str(content: &str) -> Result<String, io::Error> {
-        let mut lines = vec![
-            "#!/usr/bin/env bash".to_string(),
-            "set -euo pipefail".to_string(),
-            String::new(),
-        ];
+        Self::convert_str_as(content, false)
+    }
 
+    /// Convert to a shell script, or with `batch` to a `qorvex batch` file:
+    /// no shebang or `set`, no `qorvex ` prefix, comments as real `comment`
+    /// lines. In batch mode a command that would span several lines is
+    /// refused, naming the 1-based JSONL entry.
+    fn convert_str_as(content: &str, batch: bool) -> Result<String, io::Error> {
+        let mut lines = if batch {
+            Vec::new()
+        } else {
+            vec![
+                "#!/usr/bin/env bash".to_string(),
+                "set -euo pipefail".to_string(),
+                String::new(),
+            ]
+        };
+
+        let mut entry = 0;
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
+            entry += 1;
 
             let log: ActionLog = serde_json::from_str(line).map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, format!("Invalid JSONL: {}", e))
             })?;
 
-            if let Some(cmd) = Self::action_to_command(&log.action, log.tag.as_deref()) {
+            if let Some(cmd) = Self::action_to_command_as(&log.action, log.tag.as_deref(), batch) {
+                if batch && cmd.contains(['\n', '\r']) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "entry {} contains a newline and cannot be one batch line",
+                            entry
+                        ),
+                    ));
+                }
                 lines.push(cmd);
             }
         }
@@ -43,7 +67,12 @@ impl LogConverter {
         Ok(lines.join("\n") + "\n")
     }
 
+    #[cfg(test)]
     fn action_to_command(action: &ActionType, tag: Option<&str>) -> Option<String> {
+        Self::action_to_command_as(action, tag, false)
+    }
+
+    fn action_to_command_as(action: &ActionType, tag: Option<&str>, batch: bool) -> Option<String> {
         let base = match action {
             ActionType::Tap {
                 selector,
@@ -310,6 +339,15 @@ impl LogConverter {
                     .join(" ")
             )),
             ActionType::OpenUrl { url } => Some(format!("qorvex open-url {}", shell_escape(url))),
+            ActionType::LogComment { message } if batch => {
+                // Quote an empty or `-`-leading message so clap reads it as the positional.
+                let text = if message.is_empty() || message.starts_with('-') {
+                    format!("'{}'", message.replace('\'', "'\\''"))
+                } else {
+                    shell_escape(message)
+                };
+                Some(format!("qorvex comment {}", text))
+            }
             ActionType::LogComment { message } => Some(format!("# {}", message)),
             // Skip session management actions
             ActionType::StartSession | ActionType::EndSession | ActionType::Quit => None,
@@ -318,6 +356,9 @@ impl LogConverter {
             Some(mut cmd) => {
                 if let Some(t) = tag {
                     cmd.push_str(&format!(" --tag {}", shell_escape(t)));
+                }
+                if batch {
+                    cmd = cmd.strip_prefix("qorvex ").unwrap_or(&cmd).to_string();
                 }
                 Some(cmd)
             }
@@ -791,6 +832,67 @@ mod tests {
             LogConverter::action_to_command(&action, None),
             Some("# test step".to_string())
         );
+    }
+
+    fn batch(jsonl: &str) -> Result<String, io::Error> {
+        LogConverter::convert_str_as(jsonl, true)
+    }
+
+    #[test]
+    fn test_batch_strips_prefix_and_header() {
+        let jsonl = r#"{"id":"00000000000000000000000000000001","timestamp":"2025-01-01T00:00:00Z","action":{"type":"TapLocation","x":200,"y":400},"result":"Success","screenshot":null,"tag":"t1"}
+{"id":"00000000000000000000000000000002","timestamp":"2025-01-01T00:00:01Z","action":{"type":"StartSession"},"result":"Success","screenshot":null}
+"#;
+        let out = batch(jsonl).unwrap();
+        assert!(!out.contains("#!/"));
+        assert!(!out.contains("set -e"));
+        assert!(!out.contains("qorvex"));
+        assert_eq!(
+            out,
+            format!(
+                "{}\n",
+                LogConverter::action_to_command(
+                    &ActionType::TapLocation { x: 200, y: 400 },
+                    Some("t1")
+                )
+                .unwrap()
+                .strip_prefix("qorvex ")
+                .unwrap()
+            )
+        );
+        assert!(out.contains("--tag t1"));
+    }
+
+    #[test]
+    fn test_batch_comment_is_real_line() {
+        let jsonl = r#"{"id":"00000000000000000000000000000001","timestamp":"2025-01-01T00:00:00Z","action":{"type":"LogComment","message":"it's two"},"result":"Success","screenshot":null}
+"#;
+        assert_eq!(batch(jsonl).unwrap(), "comment 'it'\\''s two'\n");
+        assert_eq!(
+            crate::converter::LogConverter::convert_str(jsonl).unwrap(),
+            "#!/usr/bin/env bash\nset -euo pipefail\n\n# it's two\n"
+        );
+    }
+
+    #[test]
+    fn test_batch_comment_empty_and_dash_are_quoted() {
+        for (msg, want) in [("", "comment ''\n"), ("-x", "comment '-x'\n")] {
+            let jsonl = format!(
+                r#"{{"id":"00000000000000000000000000000001","timestamp":"2025-01-01T00:00:00Z","action":{{"type":"LogComment","message":"{msg}"}},"result":"Success","screenshot":null}}"#
+            );
+            assert_eq!(batch(&jsonl).unwrap(), want);
+        }
+    }
+
+    #[test]
+    fn test_batch_rejects_newline_with_entry_number() {
+        let jsonl = r#"{"id":"00000000000000000000000000000001","timestamp":"2025-01-01T00:00:00Z","action":{"type":"LogComment","message":"ok"},"result":"Success","screenshot":null}
+
+{"id":"00000000000000000000000000000002","timestamp":"2025-01-01T00:00:00Z","action":{"type":"LogComment","message":"a\nb"},"result":"Success","screenshot":null}
+"#;
+        let err = batch(jsonl).unwrap_err().to_string();
+        assert!(err.contains("entry 2"), "{err}");
+        assert!(LogConverter::convert_str(jsonl).is_ok());
     }
 
     #[test]

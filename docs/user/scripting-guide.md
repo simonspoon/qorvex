@@ -19,6 +19,16 @@ qorvex convert < session.jsonl
 
 The output is a valid bash script with `#!/usr/bin/env bash` and `set -euo pipefail`.
 
+### Replay in one process
+
+`--batch` emits a `qorvex batch` file (one command per line, no shebang, `comment` lines instead of `# ...`) so the log replays in a single process, stopping at the first failing line:
+
+```bash
+qorvex -s S log -f json | qorvex convert --batch > replay.txt
+qorvex -s S batch replay.txt
+# or: qorvex convert --batch < session.jsonl | qorvex -s S batch -
+```
+
 ## Running Scripts
 
 Scripts are standard bash — run them directly:

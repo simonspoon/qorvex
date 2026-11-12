@@ -939,10 +939,14 @@ enum Command {
         action: SimsAction,
     },
 
-    /// Convert a JSONL action log to a shell script
+    /// Convert a JSONL action log to a shell script (or a `batch` file)
     Convert {
         /// Path to the JSONL log file (reads from stdin if omitted)
         log: Option<PathBuf>,
+        /// Emit a `qorvex batch` file (one command per line, no shebang, no
+        /// `qorvex ` prefix, comments as `comment` lines) instead of a bash script
+        #[arg(long)]
+        batch: bool,
     },
 
     /// Get current session state
@@ -1840,11 +1844,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
             return Ok(());
         }
-        Command::Convert { ref log } => {
+        Command::Convert { ref log, batch } => {
             let result = match log {
-                Some(path) => converter::LogConverter::convert_file(path)
+                Some(path) => converter::LogConverter::convert_file(path, batch)
                     .map_err(|e| CliError::ActionFailed(format!("Failed to convert log: {}", e))),
-                None => converter::LogConverter::convert_stdin().map_err(|e| {
+                None => converter::LogConverter::convert_stdin(batch).map_err(|e| {
                     CliError::ActionFailed(format!("Failed to convert from stdin: {}", e))
                 }),
             };

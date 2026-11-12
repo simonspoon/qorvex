@@ -585,6 +585,7 @@ printf 'comment x\n' | qorvex -s demo batch -
 |---------|-------------|
 | CLI: `qorvex convert <log.jsonl>` | Convert JSONL log file to shell script |
 | CLI: `qorvex convert` | Convert from stdin |
+| CLI: `qorvex convert --batch [log.jsonl]` | Emit a [`qorvex batch`](#batch) file instead of a bash script: no shebang, no `qorvex ` prefix, comments as `comment` lines. An entry containing a newline is refused (exit 1, names the entry number) |
 
 See [scripting-guide.md](scripting-guide.md) for full scripting details.
 
