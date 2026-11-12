@@ -193,6 +193,11 @@ again the next time it asks.
 > a second script attaches to the first one's mutated state. Either pass
 > `--force`, or `stop-target` before `start-target`.
 
+> **Target state:** `qorvex --format json target-info` reports `state` as one of
+> `running_foreground`, `running_background`, `suspended` (iOS only),
+> `not_running` or `unknown` (iOS only). Android reports `running_background`
+> when the app has a live process but another app is in front.
+
 > **Physical devices:** `start-target` and `stop-target` use `xcrun simctl` and only work for simulators. To launch or terminate an app on a physical device:
 > ```bash
 > xcrun devicectl device process launch --device <udid> <bundle_id>

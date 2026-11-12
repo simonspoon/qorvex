@@ -2276,7 +2276,21 @@ impl ServerState {
 
         match executor {
             Some(executor) => {
-                let result = executor.execute(action.clone()).await;
+                let mut result = executor.execute(action.clone()).await;
+
+                // A failure is often the target app being gone, not the
+                // selector; ask once (failures only) so the message says so.
+                if !result.success {
+                    if let Some(bundle) = self.target_bundle_id.clone() {
+                        if let Ok(info) = executor.driver().get_target_info().await {
+                            if let Some(msg) =
+                                target_lost_message(&bundle, &info.state, &result.message)
+                            {
+                                result.message = msg;
+                            }
+                        }
+                    }
+                }
 
                 // Log to session
                 let action_result = if result.success {
@@ -2589,9 +2603,121 @@ fn start_target_report(
     (message, data)
 }
 
+/// Rewrites a failed action's message when the target app explains the
+/// failure: it is not running, not in the foreground, or it is in the
+/// foreground but the agent reported no window. Returns `None` to keep the
+/// original message (including when `state` is empty — an agent that could
+/// not tell). The original message is always kept in full as a suffix.
+fn target_lost_message(bundle_id: &str, state: &str, original: &str) -> Option<String> {
+    match state {
+        "" => None,
+        "running_foreground" if original.contains("no active window") => Some(format!(
+            "No accessibility window although '{}' is in the foreground (agent window binding is stale); run `qorvex stop-agent` then `qorvex start-agent`. Original error: {}",
+            bundle_id, original
+        )),
+        "running_foreground" => None,
+        "not_running" => Some(format!(
+            "Target app '{}' is not running; run `qorvex start-target`. Original error: {}",
+            bundle_id, original
+        )),
+        other => Some(format!(
+            "Target app '{}' is not in the foreground (state: {}); run `qorvex start-target`. Original error: {}",
+            bundle_id, other, original
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- target-lost failure messages ---
+
+    #[test]
+    fn target_lost_not_running() {
+        let orig = "Command failed: Failed to capture accessibility tree: snapshot returned nil";
+        let msg = target_lost_message("com.example.App", "not_running", orig).unwrap();
+        assert!(
+            msg.starts_with("Target app 'com.example.App' is not running; run `qorvex start-target`. Original error: "),
+            "{msg}"
+        );
+        assert!(msg.ends_with(orig), "{msg}");
+    }
+
+    #[test]
+    fn target_lost_background() {
+        let orig = "Timeout after 2021ms: Command failed: Element with label 'General' not found";
+        let msg = target_lost_message("com.example.App", "running_background", orig).unwrap();
+        assert!(
+            msg.starts_with("Target app 'com.example.App' is not in the foreground (state: running_background); run `qorvex start-target`. Original error: "),
+            "{msg}"
+        );
+        assert!(msg.ends_with(orig), "{msg}");
+    }
+
+    #[test]
+    fn target_lost_foreground_no_window_blames_binding() {
+        let orig = "Command failed: Target application is not running: no active window to dump";
+        let msg = target_lost_message("com.example.App", "running_foreground", orig).unwrap();
+        assert!(
+            msg.starts_with("No accessibility window although 'com.example.App' is in the foreground (agent window binding is stale); run `qorvex stop-agent` then `qorvex start-agent`. Original error: "),
+            "{msg}"
+        );
+        assert!(msg.ends_with(orig), "{msg}");
+    }
+
+    #[test]
+    fn target_lost_foreground_other_failure_unchanged() {
+        assert_eq!(
+            target_lost_message(
+                "com.example.App",
+                "running_foreground",
+                "Element with label 'X' not found"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn target_lost_empty_state_unchanged() {
+        assert_eq!(
+            target_lost_message("com.example.App", "", "no active window"),
+            None
+        );
+    }
+
+    /// With an unreachable agent `get_target_info` fails too, so the
+    /// driver's own failure comes back untouched.
+    #[tokio::test]
+    async fn execute_failure_with_unreachable_agent_keeps_message() {
+        let mut state = unreachable_agent_state().await;
+        state.target_bundle_id = Some("com.example.App".to_string());
+        match state.handle_execute(ActionType::GetScreenInfo, None).await {
+            IpcResponse::ActionResult {
+                success, message, ..
+            } => {
+                assert!(!success);
+                assert!(!message.contains("Target app"), "{message}");
+                assert!(!message.contains("Original error"), "{message}");
+            }
+            other => panic!("expected ActionResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_failure_without_target_keeps_message() {
+        let mut state = unreachable_agent_state().await;
+        state.target_bundle_id = None;
+        match state.handle_execute(ActionType::GetScreenInfo, None).await {
+            IpcResponse::ActionResult {
+                success, message, ..
+            } => {
+                assert!(!success);
+                assert!(!message.contains("Original error"), "{message}");
+            }
+            other => panic!("expected ActionResult, got {other:?}"),
+        }
+    }
 
     // --- agent port resolution ---
 

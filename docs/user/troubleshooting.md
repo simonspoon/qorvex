@@ -72,6 +72,24 @@ If a read timeout occurs, the next command will report "Not connected". For mana
 6. **`get-value` with a dynamic label (e.g., "Tapped: 3"):** Label matching requires an exact match — `get-value -l "Tapped:"` won't find `"Tapped: 3"`. Use `screen-info` and grep for the current text, or use the element's accessibility ID instead.
 7. **Tapping a label doesn't focus the input field:** Tapping a `StaticText` element (e.g., the "Password" label above a text field) does not focus the associated field. Tap the field itself by its accessibility ID — use `screen-info` to find it (look for `TextField` or `SecureTextField` type).
 
+## Target App Not Running
+
+**Symptoms:** a failed command starts with `Target app '<bundle>' is not running`
+or `Target app '<bundle>' is not in the foreground (state: ...)`
+
+**What this means:** the command failed and, when asked afterwards, the target
+recorded with `set-target` was gone (crashed, killed, reinstalled) or behind
+another app. The agent itself is fine; the text after `Original error:` is the
+failure the command hit (`not found`, `snapshot returned nil`, `no active
+window`, `Timeout after ...`).
+
+**Fix:** `qorvex start-target`. No `stop-agent`/`start-agent` is needed; the
+next command works against the relaunched app.
+
+**`No accessibility window although '<bundle>' is in the foreground`** (Android):
+the app is in front but the agent sees no window. Run `qorvex stop-agent` then
+`qorvex start-agent`.
+
 ## Element Not Hittable
 
 **Symptoms:** "element exists but is not hittable" timeout from `tap` or `wait-for`

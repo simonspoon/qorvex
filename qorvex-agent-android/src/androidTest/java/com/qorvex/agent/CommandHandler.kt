@@ -535,6 +535,7 @@ class CommandHandler {
         val state = when {
             !installed -> "not_running"
             running -> "running_foreground"
+            hasProcess(pkg) -> "running_background"
             else -> "not_running"
         }
 
@@ -548,6 +549,13 @@ class CommandHandler {
             append('}')
         }
         return AgentResponse.TargetInfo(json)
+    }
+
+    /** True when `pidof` finds a live process for [pkg]; false if it can't tell. */
+    private fun hasProcess(pkg: String): Boolean = try {
+        uiDevice.executeShellCommand("pidof $pkg").trim().isNotEmpty()
+    } catch (e: Exception) {
+        false
     }
 
     @Suppress("DEPRECATION")

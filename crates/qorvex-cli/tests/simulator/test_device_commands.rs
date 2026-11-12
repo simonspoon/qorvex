@@ -303,3 +303,21 @@ fn test_device_log_rejects_a_udid_argument() {
         "device-log must reject a UDID argument: {output}"
     );
 }
+
+/// A failed command against a target that is gone says so, keeping the
+/// driver's own error after `Original error:`.
+#[test]
+#[ignore]
+fn test_failure_names_target_not_running() {
+    harness();
+    run(&["stop-target"]);
+    let output = run_fail(&["screen-info"]);
+    // Later tests need the testapp frontmost, even if the assert fails.
+    relaunch_testapp();
+    assert!(
+        output.contains(&format!(
+            "Target app '{TESTAPP_BUNDLE_ID}' is not running; run `qorvex start-target`. Original error: "
+        )),
+        "screen-info on a terminated target should name it: {output}"
+    );
+}
