@@ -1,4 +1,4 @@
-use super::harness::{go_to_tab, harness, run, run_fail, run_json, settle};
+use super::harness::{go_to_tab, harness, qorvex_cmd, run, run_fail, run_json, settle};
 
 #[test]
 #[ignore]
@@ -22,6 +22,26 @@ fn test_screen_info_returns_elements() {
         output.contains("controls-") || output.contains("Button") || output.contains("StaticText"),
         "screen-info should contain UI elements: {output}"
     );
+}
+
+#[test]
+#[ignore]
+fn test_screen_info_default_has_empty_stderr() {
+    go_to_tab("Controls");
+    let h = harness();
+    let out = qorvex_cmd()
+        .args(["-s", &h.session, "screen-info"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        out.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(!v.as_array().expect("array").is_empty());
 }
 
 #[test]

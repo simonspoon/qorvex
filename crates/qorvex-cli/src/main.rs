@@ -762,10 +762,15 @@ async fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
+    let screen_info_json =
+        matches!(cli.command, Command::ScreenInfo { .. }) && cli.format == OutputFormat::Json;
 
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            if screen_info_json {
+                println!("{}", screen_info_error_json(&e));
+            }
             eprintln!("Error: {}", e);
             e.exit_code()
         }
@@ -1676,6 +1681,46 @@ fn format_element_pretty(elem: &UIElement) -> String {
     parts.join(" ")
 }
 
+/// Render `screen-info` element data as stdout text, plus the element count
+/// to report on stderr (`--pretty` only).
+fn render_screen_info(
+    data_str: &str,
+    full: bool,
+    pretty: bool,
+) -> Result<(String, Option<usize>), CliError> {
+    if full {
+        // Original behavior: dump raw JSON
+        return Ok((format!("{}\n", data_str), None));
+    }
+    let elements: Vec<UIElement> = serde_json::from_str(data_str)
+        .map_err(|e| CliError::Protocol(format!("Failed to parse elements: {}", e)))?;
+    let actionable = collect_actionable(&elements);
+    if pretty {
+        // REPL-style formatted output
+        let mut out = String::new();
+        for elem in &actionable {
+            out.push_str(&format_element_pretty(elem));
+            out.push('\n');
+        }
+        Ok((out, Some(actionable.len())))
+    } else {
+        // Default: concise JSON, actionable only, no nulls, rounded frames
+        let concise: Vec<serde_json::Value> = actionable
+            .iter()
+            .map(|e| element_to_concise_json(e))
+            .collect();
+        Ok((
+            format!("{}\n", serde_json::to_string_pretty(&concise).unwrap()),
+            None,
+        ))
+    }
+}
+
+/// The `-f json` failure object printed on stdout by `screen-info`.
+fn screen_info_error_json(err: &CliError) -> serde_json::Value {
+    serde_json::json!({ "success": false, "message": err.to_string() })
+}
+
 async fn execute_screen_info(
     client: &mut IpcClient,
     cli: &Cli,
@@ -1703,33 +1748,13 @@ async fn execute_screen_info(
                 return Err(CliError::ActionFailed(message));
             }
             let data_str = data.as_deref().unwrap_or("[]");
-
-            if full {
-                // Original behavior: dump raw JSON
-                println!("{}", data_str);
-            } else if pretty {
-                // REPL-style formatted output
-                let elements: Vec<UIElement> = serde_json::from_str(data_str)
-                    .map_err(|e| CliError::Protocol(format!("Failed to parse elements: {}", e)))?;
-                let actionable = collect_actionable(&elements);
-                for elem in &actionable {
-                    println!("{}", format_element_pretty(elem));
-                }
+            let (out, count) = render_screen_info(data_str, full, pretty)?;
+            print!("{}", out);
+            // Only --pretty (the human mode) reports a count; default stays
+            // pure JSON even when stdout and stderr are merged.
+            if let Some(n) = count {
                 if !cli.quiet {
-                    eprintln!("{} elements", actionable.len());
-                }
-            } else {
-                // Default: concise JSON, actionable only, no nulls, rounded frames
-                let elements: Vec<UIElement> = serde_json::from_str(data_str)
-                    .map_err(|e| CliError::Protocol(format!("Failed to parse elements: {}", e)))?;
-                let actionable = collect_actionable(&elements);
-                let concise: Vec<serde_json::Value> = actionable
-                    .iter()
-                    .map(|e| element_to_concise_json(e))
-                    .collect();
-                println!("{}", serde_json::to_string_pretty(&concise).unwrap());
-                if !cli.quiet {
-                    eprintln!("{} elements", actionable.len());
+                    eprintln!("{} elements", n);
                 }
             }
 
@@ -2254,6 +2279,47 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 mod tests {
     use super::*;
     use std::fs::{self, File};
+
+    #[test]
+    fn screen_info_default_is_array_without_count() {
+        let data = r#"[{"AXUniqueId":"a","AXLabel":"A"},{"AXUniqueId":null}]"#;
+        let (out, count) = render_screen_info(data, false, false).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&out)
+            .unwrap()
+            .is_array());
+        assert_eq!(count, None);
+    }
+
+    #[test]
+    fn screen_info_empty_is_empty_array() {
+        let (out, count) = render_screen_info("[]", false, false).unwrap();
+        assert_eq!(out.trim(), "[]");
+        assert_eq!(count, None);
+    }
+
+    #[test]
+    fn screen_info_pretty_reports_count() {
+        let data = r#"[{"AXUniqueId":"a","AXLabel":"A"}]"#;
+        let (out, count) = render_screen_info(data, false, true).unwrap();
+        assert_eq!(out.lines().count(), 1);
+        assert_eq!(count, Some(1));
+    }
+
+    #[test]
+    fn screen_info_full_is_raw() {
+        let (out, count) = render_screen_info("[1]", true, false).unwrap();
+        assert_eq!(out, "[1]\n");
+        assert_eq!(count, None);
+    }
+
+    #[test]
+    fn screen_info_error_object_shape() {
+        let v = screen_info_error_json(&CliError::ActionFailed("x".into()));
+        let o = v.as_object().unwrap();
+        assert_eq!(o.len(), 2);
+        assert_eq!(o["success"], false);
+        assert_eq!(o["message"], "Action failed: x");
+    }
 
     fn swipe_parse(args: &[&str]) -> Result<Cli, clap::Error> {
         let mut argv = vec!["qorvex", "swipe"];

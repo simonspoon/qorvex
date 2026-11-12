@@ -276,7 +276,7 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 | Screen info | `get-screen-info` | `qorvex screen-info` |
 | List elements | `list-elements` | — |
 
-`qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. `qorvex get-value` prints the element value to stdout. Status messages go to stderr in pipe-delimited format: `|timestamp|Action|target|elapsed_ms|` for all actions.
+`qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. Default and `--full` write nothing to stderr, so `2>&1 | jq` works (use `| jq length` for the count); only `--pretty` prints `<N> elements` on stderr. With `-f json`, a failing `screen-info` prints `{"success": false, "message": "..."}` on stdout (stderr and exit code unchanged). `qorvex get-value` prints the element value to stdout. Status messages go to stderr in pipe-delimited format: `|timestamp|Action|target|elapsed_ms|` for all actions.
 
 ## Values
 

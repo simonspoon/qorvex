@@ -186,3 +186,39 @@ fn test_broken_pipe_does_not_panic() {
     // The writer should die from SIGPIPE (signal 13), never a Rust panic (101).
     assert_ne!(status.code(), Some(101), "process panicked on broken pipe");
 }
+
+#[test]
+fn test_screen_info_json_failure_is_json_object() {
+    let home = std::env::temp_dir().join("qorvex_screen_info_json_home");
+    std::fs::create_dir_all(&home).unwrap();
+    let out = Command::cargo_bin("qorvex")
+        .unwrap()
+        .env("QORVEX_HOME", &home)
+        .args(["-s", "nosuch", "-f", "json", "screen-info"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Error:"))
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["success"], false);
+    assert!(v["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("Connection error:"));
+}
+
+#[test]
+fn test_screen_info_failure_without_json_has_empty_stdout() {
+    let home = std::env::temp_dir().join("qorvex_screen_info_json_home");
+    std::fs::create_dir_all(&home).unwrap();
+    Command::cargo_bin("qorvex")
+        .unwrap()
+        .env("QORVEX_HOME", &home)
+        .args(["-s", "nosuch", "screen-info"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicate::str::contains("Error:"));
+}

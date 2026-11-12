@@ -192,14 +192,17 @@ qorvex send-keys "hello world"
 # Get screenshot (base64)
 qorvex screenshot > screen.b64
 
-# Get screen info (concise actionable elements)
+# Get screen info (concise actionable elements; pure JSON, safe with 2>&1 | jq)
 qorvex screen-info
 
 # Get full raw JSON
 qorvex screen-info --full
 
-# Get REPL-style formatted list
+# Get REPL-style formatted list (prints "<N> elements" on stderr)
 qorvex screen-info --pretty
+
+# On failure, -f json prints {"success": false, "message": ...} on stdout
+qorvex -f json screen-info
 
 # Get element value by ID (waits for element by default)
 qorvex get-value username-field
