@@ -186,6 +186,24 @@ impl AppearanceArg {
     }
 }
 
+/// The simulated biometric results `biometric` can send.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+enum BiometricArg {
+    /// The face or finger is recognised.
+    Match,
+    /// The face or finger is not recognised.
+    Nomatch,
+}
+
+impl BiometricArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            BiometricArg::Match => "match",
+            BiometricArg::Nomatch => "nomatch",
+        }
+    }
+}
+
 /// The Dynamic Type sizes `simctl ui <udid> content_size` accepts.
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum ContentSizeArg {
@@ -813,6 +831,18 @@ enum Command {
         service: PrivacyServiceArg,
         /// Bundle identifier (e.g., com.example.MyApp)
         bundle_id: String,
+    },
+
+    /// Simulate a Face ID (or Touch ID) match or non-match on the selected
+    /// iOS simulator. Only posts the notification: no enrolment, and nothing
+    /// checks that an app is waiting for it.
+    Biometric {
+        /// Result to simulate
+        #[arg(value_enum)]
+        kind: BiometricArg,
+        /// Simulate Touch ID instead of Face ID
+        #[arg(long)]
+        touch_id: bool,
     },
 
     /// Add media files to the selected simulator's libraries
@@ -2211,6 +2241,38 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 &cli,
             )
             .await
+        }
+        Command::Biometric { kind, touch_id } => {
+            let request = IpcRequest::Biometric {
+                kind: kind.as_str().to_string(),
+                touch_id,
+            };
+            let response = client
+                .send(&request)
+                .await
+                .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+            match response {
+                IpcResponse::CommandResult {
+                    success: true,
+                    message,
+                } => {
+                    if cli.format == OutputFormat::Json {
+                        let out = serde_json::json!({
+                            "biometric": kind.as_str(),
+                            "sensor": if touch_id { "touch" } else { "face" },
+                            "sent": true,
+                        });
+                        println!("{}", with_duration_ms(&out.to_string()));
+                    } else if !cli.quiet {
+                        println!("{}", message);
+                    }
+                    Ok(())
+                }
+                IpcResponse::CommandResult { message, .. } | IpcResponse::Error { message } => {
+                    Err(CliError::ActionFailed(message))
+                }
+                _ => Err(CliError::Protocol("Unexpected response".to_string())),
+            }
         }
         Command::AddMedia { ref files } => {
             // Same reason as install-app: the server is a long-lived daemon
@@ -3626,6 +3688,35 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_biometric_parse() {
+        let cli = Cli::try_parse_from(["qorvex", "biometric", "match"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Biometric {
+                kind: BiometricArg::Match,
+                touch_id: false
+            }
+        ));
+        let cli = Cli::try_parse_from(["qorvex", "biometric", "nomatch", "--touch-id"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Biometric {
+                kind: BiometricArg::Nomatch,
+                touch_id: true
+            }
+        ));
+        for args in [
+            &["qorvex", "biometric"][..],
+            &["qorvex", "biometric", "maybe"],
+        ] {
+            match Cli::try_parse_from(args) {
+                Ok(_) => panic!("{:?} should not parse", args),
+                Err(e) => assert_eq!(e.exit_code(), 2, "{:?}", args),
+            }
+        }
+    }
     use std::fs;
 
     #[test]

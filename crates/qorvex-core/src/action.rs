@@ -489,6 +489,14 @@ pub enum ActionType {
         bundle_id: String,
     },
 
+    /// Post a simulated Face ID / Touch ID result to the selected simulator.
+    Biometric {
+        /// `match` or `nomatch`.
+        kind: String,
+        /// Touch ID (`fingerTouch.*`) instead of Face ID (`pearl.*`).
+        touch_id: bool,
+    },
+
     /// Add media files to the selected simulator's libraries.
     AddMedia {
         /// Absolute paths of the media files that were added.
@@ -599,6 +607,7 @@ impl ActionType {
             ActionType::SetAppearance { .. } => "set_appearance",
             ActionType::SetContentSize { .. } => "set_content_size",
             ActionType::GrantPermission { .. } => "grant_permission",
+            ActionType::Biometric { .. } => "biometric",
             ActionType::AddMedia { .. } => "add_media",
             ActionType::OpenUrl { .. } => "open_url",
             ActionType::StartSession => "start_session",
@@ -645,6 +654,7 @@ impl ActionType {
             ActionType::SetAppearance { .. } => "SetAppearance",
             ActionType::SetContentSize { .. } => "SetContentSize",
             ActionType::GrantPermission { .. } => "GrantPermission",
+            ActionType::Biometric { .. } => "Biometric",
             ActionType::AddMedia { .. } => "AddMedia",
             ActionType::OpenUrl { .. } => "OpenUrl",
             ActionType::StartSession => "Start",
@@ -761,6 +771,7 @@ impl ActionType {
                 service,
                 bundle_id,
             } => format!("{} {} {}", verb, service, bundle_id),
+            ActionType::Biometric { kind, .. } => kind.clone(),
             ActionType::AddMedia { paths } => paths.join(" "),
             ActionType::OpenUrl { url } => url.clone(),
             ActionType::StartTarget { .. }

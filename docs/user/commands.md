@@ -29,6 +29,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Quiet `mediaanalysisd` | `quiet-device` | `qorvex quiet-device <udid>` |
 | Set appearance | `set-appearance <dark\|light>` | `qorvex set-appearance <dark\|light>` |
 | Set content size | `set-content-size <size>` | `qorvex set-content-size <size>` |
+| Simulate Face ID / Touch ID result | — | `qorvex biometric <match\|nomatch> [--touch-id]` |
 | Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>] [--max-bytes <N>]` |
 | Lock the device (iOS only for now) | `lock` | `qorvex lock` |
 
@@ -115,6 +116,24 @@ a UDID because it also serves build scripts with no qorvex server running, while
 the REPL form uses the session's device like everything else here. Device
 selection already quiets `mediaanalysisd` once; this is for the daemon coming
 back on a long-lived session.
+
+### Biometrics (iOS simulator only)
+
+```bash
+$ qorvex biometric nomatch
+Biometric: nomatch sent
+```
+
+`biometric match|nomatch` simulates a Face ID result on the session's iOS
+simulator by posting `com.apple.BiometricKit_Sim.pearl.match` / `.nomatch`
+(`simctl spawn <udid> notifyutil -p`); `--touch-id` posts
+`com.apple.BiometricKit_Sim.fingerTouch.match` / `.nomatch` instead. It only
+*posts the notification*: it does not enrol Face ID and does not check that an
+app is showing the biometric sheet (a notification nobody is waiting for is
+silently ignored). `-f json` prints
+`{"biometric":"nomatch","sensor":"face","sent":true}`. On an Android device or a
+physical iPhone it fails with exit 1 (`biometric is only supported on an iOS
+simulator`) and sends nothing.
 
 ### Appearance, Dynamic Type and logs
 

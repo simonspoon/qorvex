@@ -292,6 +292,11 @@ impl LogConverter {
                 shell_escape(service),
                 shell_escape(bundle_id)
             )),
+            ActionType::Biometric { kind, touch_id } => Some(format!(
+                "qorvex biometric {}{}",
+                shell_escape(kind),
+                if *touch_id { " --touch-id" } else { "" }
+            )),
             ActionType::AddMedia { paths } => Some(format!(
                 "qorvex add-media {}",
                 paths

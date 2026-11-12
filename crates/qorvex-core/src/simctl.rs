@@ -600,6 +600,26 @@ impl Simctl {
         Self::simctl_ui(udid, "content_size", size)
     }
 
+    /// Posts a Darwin notification inside a simulator
+    /// (`simctl spawn <udid> notifyutil -p <name>`).
+    ///
+    /// # Errors
+    ///
+    /// - [`SimctlError::Io`] if the command fails to execute
+    /// - [`SimctlError::CommandFailed`] if simctl returns an error
+    pub fn post_notification(udid: &str, name: &str) -> Result<(), SimctlError> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "spawn", udid, "notifyutil", "-p", name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SimctlError::CommandFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Shared body of the `simctl ui <udid> <setting> <value>` wrappers.
     fn simctl_ui(udid: &str, setting: &str, value: &str) -> Result<(), SimctlError> {
         let output = Command::new("xcrun")
@@ -1289,9 +1309,40 @@ impl Simctl {
     }
 }
 
+/// The BiometricKit_Sim notification that simulates a Face ID (`pearl`) or
+/// Touch ID (`fingerTouch`) match or non-match on a simulator.
+pub fn biometric_notification(matched: bool, touch_id: bool) -> &'static str {
+    match (touch_id, matched) {
+        (false, true) => "com.apple.BiometricKit_Sim.pearl.match",
+        (false, false) => "com.apple.BiometricKit_Sim.pearl.nomatch",
+        (true, true) => "com.apple.BiometricKit_Sim.fingerTouch.match",
+        (true, false) => "com.apple.BiometricKit_Sim.fingerTouch.nomatch",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_biometric_notification_names() {
+        assert_eq!(
+            biometric_notification(true, false),
+            "com.apple.BiometricKit_Sim.pearl.match"
+        );
+        assert_eq!(
+            biometric_notification(false, false),
+            "com.apple.BiometricKit_Sim.pearl.nomatch"
+        );
+        assert_eq!(
+            biometric_notification(true, true),
+            "com.apple.BiometricKit_Sim.fingerTouch.match"
+        );
+        assert_eq!(
+            biometric_notification(false, true),
+            "com.apple.BiometricKit_Sim.fingerTouch.nomatch"
+        );
+    }
 
     // Sample JSON matching actual simctl output format
     const SAMPLE_DEVICE_LIST: &str = r#"{

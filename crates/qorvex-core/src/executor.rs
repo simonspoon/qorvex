@@ -1168,6 +1168,7 @@ impl ActionExecutor {
             | ActionType::SetAppearance { .. }
             | ActionType::SetContentSize { .. }
             | ActionType::GrantPermission { .. }
+            | ActionType::Biometric { .. }
             | ActionType::AddMedia { .. }
             | ActionType::OpenUrl { .. }
             | ActionType::MemoryInfo { .. } => {

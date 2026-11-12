@@ -234,6 +234,14 @@ pub enum IpcRequest {
         service: String,
         bundle_id: String,
     },
+    /// Post a simulated Face ID / Touch ID result (`match` or `nomatch`) to
+    /// the selected simulator. iOS simulator only.
+    Biometric {
+        kind: String,
+        /// Touch ID instead of Face ID.
+        #[serde(default)]
+        touch_id: bool,
+    },
     /// Add media files to the selected simulator's libraries.
     ///
     /// Paths must already be absolute: like [`IpcRequest::InstallApp`], the

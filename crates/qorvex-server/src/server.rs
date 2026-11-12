@@ -20,7 +20,9 @@ use qorvex_core::driver::{flatten_elements, AutomationDriver, DriverError};
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{agent_port_path, IpcRequest, IpcResponse, Platform};
 use qorvex_core::session::Session;
-use qorvex_core::simctl::{QuietOutcome, Simctl, SimctlError, SimulatorDevice};
+use qorvex_core::simctl::{
+    biometric_notification, QuietOutcome, Simctl, SimctlError, SimulatorDevice,
+};
 
 /// Backend state for the automation server.
 ///
@@ -194,6 +196,9 @@ impl ServerState {
             } => {
                 self.handle_grant_permission(&verb, &service, &bundle_id)
                     .await
+            }
+            IpcRequest::Biometric { kind, touch_id } => {
+                self.handle_biometric(&kind, touch_id).await
             }
             IpcRequest::AddMedia { paths } => self.handle_add_media(paths).await,
             IpcRequest::OpenUrl { url } => self.handle_open_url(&url).await,
@@ -2108,6 +2113,66 @@ impl ServerState {
                 verb: verb.to_string(),
                 service: service.to_string(),
                 bundle_id: bundle_id.to_string(),
+            },
+            action_result,
+            None,
+            None,
+        )
+        .await;
+        response
+    }
+
+    async fn handle_biometric(&self, kind: &str, touch_id: bool) -> IpcResponse {
+        if self.is_physical_device || self.android_serial.is_some() {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "biometric is only supported on an iOS simulator".to_string(),
+            };
+        }
+        let matched = match kind {
+            "match" => true,
+            "nomatch" => false,
+            _ => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: format!("biometric: unknown kind '{}' (match|nomatch)", kind),
+                }
+            }
+        };
+        let udid = match self.selected_simulator() {
+            Ok(udid) => udid,
+            Err(message) => {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message,
+                }
+            }
+        };
+        let name = biometric_notification(matched, touch_id);
+        let result = Self::run_simctl(move || Simctl::post_notification(&udid, name)).await;
+        let (response, action_result) = match result {
+            Ok(()) => (
+                IpcResponse::CommandResult {
+                    success: true,
+                    message: format!("Biometric: {} sent", kind),
+                },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                let msg = format!("Failed to send biometric {}: {}", kind, e);
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(
+            ActionType::Biometric {
+                kind: kind.to_string(),
+                touch_id,
             },
             action_result,
             None,
