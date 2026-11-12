@@ -669,3 +669,129 @@ fn test_batch_reads_stdin() {
     }
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Records every request; `UseDevice` answers with a `CommandResult` that
+/// fails when the udid contains "BAD", everything else succeeds.
+fn device_server(name: &str) -> (PathBuf, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    let home = PathBuf::from(format!("/tmp/qvx_{}_{}", name, std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let sock = home.join(format!("qorvex_{}.sock", name));
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(sock).unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut writer = stream.try_clone().unwrap();
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                let reply = if line.contains("UseDevice") {
+                    let ok = !line.contains("BAD");
+                    format!(
+                        r#"{{"type":"CommandResult","success":{},"message":"{}"}}"#,
+                        ok,
+                        if ok { "selected" } else { "no such device" }
+                    )
+                } else {
+                    r#"{"type":"ActionResult","success":true,"message":"ok","screenshot":null,"data":null}"#
+                        .to_string()
+                };
+                log.lock().unwrap().push(line);
+                let _ = writeln!(writer, "{}", reply);
+            }
+        }
+    });
+    (home, seen)
+}
+
+/// One short label per recorded request: `use:<udid>` or `msg:<comment>`.
+fn device_trace(seen: &std::sync::Mutex<Vec<String>>) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            if v["type"] == "UseDevice" {
+                format!("use:{}", v["udid"].as_str().unwrap())
+            } else {
+                format!("msg:{}", v["action"]["message"].as_str().unwrap_or(""))
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn test_device_flag_selects_before_command() {
+    let (home, seen) = device_server("devsel");
+    let (out, _) = run_hung(
+        &home,
+        &[],
+        &["-s", "devsel", "--device", "A", "comment", "x"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    // After the subcommand works too; no flag means no UseDevice.
+    let (out, _) = run_hung(
+        &home,
+        &[],
+        &["-s", "devsel", "comment", "y", "--device", "B"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    let (out, _) = run_hung(&home, &[], &["-s", "devsel", "comment", "z"]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    assert_eq!(
+        device_trace(&seen),
+        ["use:A", "msg:x", "use:B", "msg:y", "msg:z"]
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn test_device_flag_failure_skips_command() {
+    let (home, seen) = device_server("devbad");
+    let (out, _) = run_hung(
+        &home,
+        &[],
+        &["-s", "devbad", "--device", "BAD1", "comment", "x"],
+    );
+    assert_eq!(out.status.code(), Some(1), "{:?}", out);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no such device"));
+    assert_eq!(device_trace(&seen), ["use:BAD1"]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn test_batch_device_per_line_and_global() {
+    let (home, seen) = device_server("devbat");
+    let file = batch_file(
+        &home,
+        "--device A comment one\n--device B comment two\ncomment three\n",
+    );
+    let (out, _) = run_hung(&home, &[], &["-s", "devbat", "batch", &file]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    // Batch-level --device applies to lines without their own.
+    let (out, _) = run_hung(
+        &home,
+        &[],
+        &["-s", "devbat", "--device", "G", "batch", &file],
+    );
+    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    assert_eq!(
+        device_trace(&seen),
+        [
+            "use:A",
+            "msg:one",
+            "use:B",
+            "msg:two",
+            "msg:three",
+            "use:A",
+            "msg:one",
+            "use:B",
+            "msg:two",
+            "use:G",
+            "msg:three"
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}

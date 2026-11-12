@@ -99,6 +99,13 @@ struct Cli {
     #[arg(short = 'o', long, global = true)]
     timeout: Option<u64>,
 
+    /// Select this device (simulator UDID or adb serial) in the session
+    /// before the command runs (`use-device` then the command). The
+    /// selection persists afterwards; switching iOS <-> Android may need
+    /// `start-agent`. Not used by `stop`, `list-sessions` or host-only commands
+    #[arg(long, global = true, value_name = "ID")]
+    device: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -978,7 +985,8 @@ enum Command {
     /// Start server, session, and agent in one step
     Start {
         /// Device UDID (simulator or physical) to use for this session
-        #[arg(short, long)]
+        /// (also `--device <ID>`)
+        #[arg(short = 'd', id = "start_device")]
         device: Option<String>,
 
         /// Exit 1 unless the session is ready (device selected, agent answering)
@@ -1224,6 +1232,7 @@ fn batch_parse(batch: &Cli, tokens: Vec<String>) -> Result<Cli, clap::Error> {
     }
     cli.quiet |= batch.quiet;
     cli.timeout = cli.timeout.or(batch.timeout);
+    cli.device = cli.device.or_else(|| batch.device.clone());
     Ok(cli)
 }
 
@@ -1864,7 +1873,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref device,
             wait_ready,
         } => {
-            return start_all(&cli, device.clone(), wait_ready).await;
+            return start_all(
+                &cli,
+                device.clone().or_else(|| cli.device.clone()),
+                wait_ready,
+            )
+            .await;
         }
         Command::Completions { shell } => {
             use clap::CommandFactory;
@@ -1878,6 +1892,23 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 
     // Connect to the IPC server
     let mut client = connect_to_session(&cli.session).await?;
+
+    // Global `--device`: select it first; a failed selection stops the command.
+    if let Some(ref udid) = cli.device {
+        if !matches!(cli.command, Command::Stop) {
+            let response = client
+                .send(&IpcRequest::UseDevice { udid: udid.clone() })
+                .await
+                .map_err(|e| CliError::Protocol(format!("Failed to select device: {}", e)))?;
+            match response {
+                IpcResponse::CommandResult { success: true, .. } => {}
+                IpcResponse::CommandResult { message, .. } | IpcResponse::Error { message } => {
+                    return Err(CliError::ActionFailed(message));
+                }
+                _ => return Err(CliError::Protocol("Unexpected response".to_string())),
+            }
+        }
+    }
 
     match cli.command {
         Command::Tap {
@@ -5360,6 +5391,26 @@ mod tests {
         assert_eq!(probe_socket(&dir.join("none.sock")), SocketProbe::Missing);
         assert!(live.exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn device_flag_parses_everywhere() {
+        let cli = Cli::try_parse_from(["qorvex", "--device", "X", "status"]).unwrap();
+        assert_eq!(cli.device.as_deref(), Some("X"));
+        let cli = Cli::try_parse_from(["qorvex", "status", "--device", "X"]).unwrap();
+        assert_eq!(cli.device.as_deref(), Some("X"));
+        let cli = Cli::try_parse_from(["qorvex", "start", "-d", "X"]).unwrap();
+        assert!(matches!(cli.command, Command::Start { device: Some(ref d), .. } if d == "X"));
+        let cli = Cli::try_parse_from(["qorvex", "start", "--device", "X"]).unwrap();
+        assert_eq!(cli.device.as_deref(), Some("X"));
+        let batch = Cli::try_parse_from(["qorvex", "--device", "G", "batch", "f"]).unwrap();
+        assert_eq!(line(&batch, "comment x").device.as_deref(), Some("G"));
+        assert_eq!(
+            line(&batch, "--device L comment x").device.as_deref(),
+            Some("L")
+        );
+        let plain = Cli::try_parse_from(["qorvex", "batch", "f"]).unwrap();
+        assert_eq!(line(&plain, "comment x").device, None);
     }
 
     #[test]

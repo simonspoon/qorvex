@@ -29,6 +29,17 @@ qorvex -s S batch replay.txt
 # or: qorvex convert --batch < session.jsonl | qorvex -s S batch -
 ```
 
+### Two devices from one session
+
+`--device <id>` selects that device (`use-device`) before the line runs; the selection persists, so each line should name its device. A `--device` before `batch` applies to lines that do not carry their own:
+
+```bash
+printf '%s\n' \
+  '--device 1A2B3C4D-... comment "on the simulator"' \
+  '--device 1WMHH820XM0366 comment "on the Quest"' > two.txt
+qorvex -s S batch two.txt
+```
+
 ## Running Scripts
 
 Scripts are standard bash — run them directly:

@@ -85,8 +85,10 @@ the `CoreSimulator/Caches` size without deleting it, and points at
 > **The device commands are session-scoped:** none of them takes a UDID. They
 > act on the simulator this session selected with `use-device`, `boot-device`
 > or `create-device` and on nothing else, so one session can never shut down or
-> delete another session's simulator. There is no multi-device form; to act on
-> a different simulator, select it first.
+> delete another session's simulator. To act on
+> a different device, select it first, or pass the global `--device <id>`
+> (`qorvex --device <id> <command>` = `use-device <id>` then the command; the
+> selection stays in the session afterwards).
 > ```bash
 > $ qorvex use-device <udid>
 > $ qorvex shutdown-device
@@ -558,7 +560,7 @@ Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 `qorvex batch` saves the process spawn per action: each line runs through the same code as the standalone command, in this one process (each line still opens its own connection to the session). It is not a script language: no variables, loops, conditionals or `sleep`.
 
 - **Line format:** one qorvex command per line, without the leading `qorvex`, e.g. `comment "step one"` or `tap-location 200 400`. Lines are split shell-style (single and double quotes, backslash escapes). Blank lines and lines whose first non-space character is `#` are skipped.
-- **Global flags:** `-s`, `-f`, `-q` and `-o` given before `batch` apply to every line unless the line passes the same flag itself (`-s other comment x`, `tap Login -o 3000`).
+- **Global flags:** `-s`, `-f`, `-q`, `-o` and `--device` given before `batch` apply to every line unless the line passes the same flag itself (`-s other comment x`, `tap Login -o 3000`).
 - **Output:** each line prints exactly what the standalone command prints (stdout and stderr, text or `-f json`; `duration_ms` is timed per line).
 - **Stop on first failure:** lines run in order. The first line that fails stops the batch: it prints `batch: line <N>: <error>` on stderr (in place of the usual `Error: ...` line; also for exit 4 `element not present` and exit 5 `assertion failed`, which print no `Error:` line standalone) and `qorvex batch` exits with that line's own exit code (2 for a usage/parse error, otherwise the command's code, e.g. 1 action failed, 4 `exists` not present). Later lines are not run. All lines succeeding exits 0; an empty file prints nothing and exits 0.
 - **Not allowed / not applied:** `batch` inside a batch is refused (exit 2). There is **no per-line hard deadline**: `batch` arms no watchdog and `-o`/`QORVEX_COMMAND_TIMEOUT` do not end a line (`QORVEX_COMMAND_TIMEOUT` is not even validated); element timeouts on `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable` still apply. `doctor` exits the process directly when a check fails, so a failing `doctor` line ends the whole batch (exit 1) without the `batch: line` message.
@@ -629,6 +631,7 @@ With `-f json`, every command whose stdout is a JSON object adds a last key `"du
 - `-s, --session <name>` -- Connect to named session (default: "default", or `$QORVEX_SESSION`)
 - `-f, --format <text|json>` -- Output format
 - `-q, --quiet` -- Suppress non-essential output
+- `--device <id>` -- Accepted on every session command: sends `use-device <id>` first (iOS simulator UDID or adb serial) and runs the command only if that succeeds (else exit 1). The selection persists in the session; it is not a one-shot override. Switching iOS <-> Android may need `start-agent`. `start -d <id>` / `start --device <id>` are unchanged.
 - `-o, --timeout <ms>` -- Accepted on every command, after the subcommand name. On `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable` it is the element timeout (default 5000, `$QORVEX_TIMEOUT`; unchanged, exit 1 on expiry). On every other command it is a hard wall-clock deadline for the whole process: default 600000 ms, `$QORVEX_COMMAND_TIMEOUT` overrides the default, the flag overrides both, `0` disables it. When it passes, the process prints `Error: Timed out after <ms>ms: <command>; the session server may still be working (check \`qorvex status\`)` and exits 124 (`start` also names the phase reached). The server is not stopped and its work is not cancelled. For these five wait commands the deadline is `max(600000 or $QORVEX_COMMAND_TIMEOUT, element timeout + 20000)`. A slow interactive signing build in `start -d <physical iPhone>` can exceed 600 s: pass `--timeout 0`.
 - `start`: `-d, --device <udid>` -- Select a device (simulator or physical) before starting the session; equivalent to sending `use-device` then `start-session` in sequence. `start` recovers a dead session (removes the stale socket and spawns a new server, noting `Removed stale socket for dead session '<s>'`). It is idempotent: if the session is already ready (and `-d` is absent or names the session's device) it prints `Session already running (ready)` and exits 0 without creating a new session, so the session id and action log are kept; to clear the log, run `stop` then `start`. `--wait-ready` -- after starting, exit 1 with `session started but not ready: <reason>` unless the session is ready (single check, no polling).
 - `status`: reports `session_id` and `has_screenshot`, plus readiness: text adds `Ready: yes` or `Ready: no (<reason>)`; `-f json` adds `ready`, `device`, `agent_connected`, `reason` (null when ready; otherwise `no device selected`, `no agent connected` or `agent not reachable: <error>`). Exit code is 0 whenever a session exists, ready or not. On a dead session it exits 2 with `session '<s>' is dead`.
