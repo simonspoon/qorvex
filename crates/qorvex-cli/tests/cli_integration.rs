@@ -456,3 +456,70 @@ fn test_screen_info_all_with_full_is_usage_error() {
         .code(2)
         .stderr(predicate::str::contains("cannot be used with"));
 }
+
+/// Short temp dir holding `qorvex_<name>.sock`, a server that answers every
+/// request line with `reply`.
+fn canned_server(name: &str, reply: &'static str) -> PathBuf {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    let home = PathBuf::from(format!("/tmp/qvx_{}_{}", name, std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let sock = home.join(format!("qorvex_{}.sock", name));
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(sock).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut writer = stream.try_clone().unwrap();
+            for line in BufReader::new(stream).lines() {
+                if line.is_err() {
+                    break;
+                }
+                let _ = writeln!(writer, "{}", reply);
+            }
+        }
+    });
+    home
+}
+
+const STOPPED_WITH_EVENTS: &str = r#"{"type":"RecordStopped","file":"/tmp/v.mp4","bytes":42,"events_file":"/tmp/v.mp4.events.json","event_count":3}"#;
+const STOPPED_WARNED: &str = r#"{"type":"RecordStopped","file":"/tmp/v.mp4","bytes":42,"events_warning":"could not write events file /tmp/v.mp4.events.json: Is a directory"}"#;
+
+#[test]
+fn test_record_stop_prints_events_line() {
+    let home = canned_server("rsev", STOPPED_WITH_EVENTS);
+    let (out, _) = run_hung(&home, &[], &["-s", "rsev", "record", "stop"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Recording saved: /tmp/v.mp4 (42 bytes)\nEvents: /tmp/v.mp4.events.json (3 events)\n"
+    );
+    let (out, _) = run_hung(&home, &[], &["-s", "rsev", "-f", "json", "record", "stop"]);
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["file"], "/tmp/v.mp4");
+    assert_eq!(v["events_file"], "/tmp/v.mp4.events.json");
+    assert_eq!(v["event_count"], 3);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn test_record_stop_sidecar_warning() {
+    let home = canned_server("rswn", STOPPED_WARNED);
+    let (out, _) = run_hung(&home, &[], &["-s", "rswn", "record", "stop"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Recording saved: /tmp/v.mp4 (42 bytes)\n"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Warning: could not write events file /tmp/v.mp4.events.json"),
+        "{stderr}"
+    );
+    let (out, _) = run_hung(&home, &[], &["-s", "rswn", "-f", "json", "record", "stop"]);
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v.get("events_file").is_none());
+    assert!(v.get("event_count").is_none());
+    let _ = std::fs::remove_dir_all(&home);
+}

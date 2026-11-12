@@ -2289,12 +2289,28 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     }
                     Ok(())
                 }
-                IpcResponse::RecordStopped { file, bytes } => {
+                IpcResponse::RecordStopped {
+                    file,
+                    bytes,
+                    events_file,
+                    event_count,
+                    events_warning,
+                } => {
+                    if let Some(warning) = &events_warning {
+                        eprintln!("Warning: {}", warning);
+                    }
                     if cli.format == OutputFormat::Json {
-                        let out = serde_json::json!({ "record": "stopped", "file": file, "bytes": bytes });
+                        let mut out = serde_json::json!({ "record": "stopped", "file": file, "bytes": bytes });
+                        if let (Some(path), Some(n)) = (&events_file, event_count) {
+                            out["events_file"] = serde_json::json!(path);
+                            out["event_count"] = serde_json::json!(n);
+                        }
                         println!("{}", with_duration_ms(&out.to_string()));
                     } else if !cli.quiet {
                         println!("Recording saved: {} ({} bytes)", file, bytes);
+                        if let (Some(path), Some(n)) = (&events_file, event_count) {
+                            println!("Events: {} ({} events)", path, n);
+                        }
                     }
                     Ok(())
                 }

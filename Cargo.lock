@@ -2047,6 +2047,7 @@ dependencies = [
 name = "qorvex-server"
 version = "0.7.0"
 dependencies = [
+ "chrono",
  "clap",
  "libc",
  "qorvex-core",

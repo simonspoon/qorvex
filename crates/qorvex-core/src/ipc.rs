@@ -505,6 +505,15 @@ pub enum IpcResponse {
         file: String,
         /// Size of the file in bytes.
         bytes: u64,
+        /// Path of the events sidecar (`<file>.events.json`), when written.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        events_file: Option<String>,
+        /// Number of events in the sidecar, when written.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        event_count: Option<usize>,
+        /// Why the sidecar could not be written (the video is still fine).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        events_warning: Option<String>,
     },
 
     /// UDID of a simulator just created by `create-device`.
@@ -1120,6 +1129,9 @@ mod platform_tests {
         let stopped = IpcResponse::RecordStopped {
             file: "/tmp/x.mp4".into(),
             bytes: 42,
+            events_file: None,
+            event_count: None,
+            events_warning: None,
         };
         let json = serde_json::to_string(&stopped).unwrap();
         assert_eq!(
@@ -1128,7 +1140,33 @@ mod platform_tests {
         );
         assert!(matches!(
             serde_json::from_str::<IpcResponse>(&json).unwrap(),
-            IpcResponse::RecordStopped { file, bytes: 42 } if file == "/tmp/x.mp4"
+            IpcResponse::RecordStopped { file, bytes: 42, .. } if file == "/tmp/x.mp4"
+        ));
+
+        let with_events = IpcResponse::RecordStopped {
+            file: "/tmp/x.mp4".into(),
+            bytes: 42,
+            events_file: Some("/tmp/x.mp4.events.json".into()),
+            event_count: Some(3),
+            events_warning: None,
+        };
+        let json = serde_json::to_string(&with_events).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"RecordStopped","file":"/tmp/x.mp4","bytes":42,"events_file":"/tmp/x.mp4.events.json","event_count":3}"#
+        );
+        assert!(matches!(
+            serde_json::from_str::<IpcResponse>(&json).unwrap(),
+            IpcResponse::RecordStopped { events_file: Some(f), event_count: Some(3), events_warning: None, .. }
+                if f == "/tmp/x.mp4.events.json"
+        ));
+
+        let warned =
+            r#"{"type":"RecordStopped","file":"/tmp/x.mp4","bytes":42,"events_warning":"boom"}"#;
+        assert!(matches!(
+            serde_json::from_str::<IpcResponse>(warned).unwrap(),
+            IpcResponse::RecordStopped { events_file: None, event_count: None, events_warning: Some(w), .. }
+                if w == "boom"
         ));
     }
 }

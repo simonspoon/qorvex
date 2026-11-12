@@ -12,6 +12,7 @@ categories.workspace = true
 qorvex-core = { path = "../qorvex-core" }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
+chrono = "0.4"
 libc = "0.2"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = { workspace = true }

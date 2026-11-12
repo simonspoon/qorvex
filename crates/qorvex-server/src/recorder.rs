@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+use qorvex_core::action::{ActionLog, ActionResult, ActionType};
+use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
@@ -33,6 +36,9 @@ pub struct Recording {
     child: Child,
     file: PathBuf,
     target: RecordTarget,
+    /// When the recorder was confirmed running (end of the start grace);
+    /// the zero point of the events sidecar's offsets.
+    started_at: DateTime<Utc>,
     /// `stop` has already dealt with the Android device file (removed it after
     /// a pull, or kept it because the pull failed); `Drop` leaves it alone.
     device_file_handled: bool,
@@ -111,6 +117,7 @@ impl Recording {
             child,
             file,
             target,
+            started_at: Utc::now(),
             device_file_handled: false,
         };
         tokio::time::sleep(START_GRACE).await;
@@ -123,6 +130,7 @@ impl Recording {
                         let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
                     });
                 }
+                rec.started_at = Utc::now();
                 info!(file = %rec.file.display(), target = ?rec.target, "Recording started");
                 Ok(rec)
             }
@@ -137,6 +145,11 @@ impl Recording {
     /// The host file this recording writes.
     pub fn file(&self) -> &Path {
         &self.file
+    }
+
+    /// When the recorder was confirmed running.
+    pub fn started_at(&self) -> DateTime<Utc> {
+        self.started_at
     }
 
     /// End the recording cleanly and return the size of the host file in bytes.
@@ -266,9 +279,59 @@ impl Recording {
             child,
             file,
             target,
+            started_at: Utc::now(),
             device_file_handled: false,
         }
     }
+}
+
+/// The events sidecar written next to `video`: `<video>.events.json`.
+pub fn sidecar_path(video: &Path) -> PathBuf {
+    let mut name = video.as_os_str().to_owned();
+    name.push(".events.json");
+    PathBuf::from(name)
+}
+
+/// The events sidecar for a recording of `video` that ran from `started_at`
+/// to `stopped_at`: every `log` entry timestamped inside that window, in
+/// order, with its offset from `started_at`.
+pub fn build_sidecar(
+    video: &str,
+    started_at: DateTime<Utc>,
+    stopped_at: DateTime<Utc>,
+    log: &[ActionLog],
+) -> Value {
+    let events: Vec<Value> = log
+        .iter()
+        .filter(|e| e.timestamp >= started_at && e.timestamp <= stopped_at)
+        .map(|e| event_json(e, started_at))
+        .collect();
+    json!({
+        "video": video,
+        "started_at": started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "duration_ms": (stopped_at - started_at).num_milliseconds().max(0),
+        "events": events,
+    })
+}
+
+/// One sidecar event: offset, kind, the action's own fields, success.
+fn event_json(entry: &ActionLog, started_at: DateTime<Utc>) -> Value {
+    let mut event = match &entry.action {
+        ActionType::LogComment { message } => json!({ "kind": "comment", "message": message }),
+        ActionType::TapLocation { x, y } => json!({ "kind": "tap_location", "x": x, "y": y }),
+        ActionType::Swipe { direction, .. } => json!({ "kind": "swipe", "direction": direction }),
+        // The logged action carries no element centre, so no x,y.
+        ActionType::SwipeFromElement { direction, .. } => {
+            json!({ "kind": "swipe_from_element", "direction": direction.as_str() })
+        }
+        ActionType::Tap {
+            selector, by_label, ..
+        } => json!({ "kind": "tap", "selector": selector, "by_label": by_label }),
+        other => json!({ "kind": "other", "action": other.name() }),
+    };
+    event["offset_ms"] = json!((entry.timestamp - started_at).num_milliseconds().max(0));
+    event["success"] = json!(matches!(entry.result, ActionResult::Success));
+    event
 }
 
 #[cfg(test)]
@@ -288,6 +351,133 @@ mod tests {
             err,
             "record: parent directory does not exist: /nonexistent-qorvex-dir"
         );
+    }
+
+    fn entry(action: ActionType, at: DateTime<Utc>, ok: bool) -> ActionLog {
+        let result = if ok {
+            ActionResult::Success
+        } else {
+            ActionResult::Failure("nope".into())
+        };
+        let mut log = ActionLog::new(action, result, None, None, None);
+        log.timestamp = at;
+        log
+    }
+
+    fn t0() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-11-12T10:00:00.000Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn ms(n: i64) -> chrono::Duration {
+        chrono::Duration::milliseconds(n)
+    }
+
+    #[test]
+    fn sidecar_path_appends_suffix() {
+        assert_eq!(
+            sidecar_path(Path::new("/tmp/run.mp4")),
+            PathBuf::from("/tmp/run.mp4.events.json")
+        );
+    }
+
+    #[test]
+    fn sidecar_header_and_empty_events() {
+        let doc = build_sidecar("/tmp/v.mp4", t0(), t0() + ms(8250), &[]);
+        assert_eq!(
+            doc,
+            json!({
+                "video": "/tmp/v.mp4",
+                "started_at": "2026-11-12T10:00:00.000Z",
+                "duration_ms": 8250,
+                "events": [],
+            })
+        );
+    }
+
+    /// Entries outside [start, stop] are dropped; the rest keep log order
+    /// with offsets from the start; each kind maps to its fields.
+    #[test]
+    fn sidecar_filters_window_and_maps_kinds() {
+        let start = t0();
+        let stop = start + ms(10_000);
+        let log = vec![
+            entry(
+                ActionType::LogComment {
+                    message: "before".into(),
+                },
+                start - ms(1),
+                true,
+            ),
+            entry(
+                ActionType::LogComment {
+                    message: "step one".into(),
+                },
+                start,
+                true,
+            ),
+            entry(
+                ActionType::TapLocation { x: 200, y: 400 },
+                start + ms(1500),
+                true,
+            ),
+            entry(
+                ActionType::Swipe {
+                    direction: "up".into(),
+                    duration_ms: Some(300),
+                },
+                start + ms(3000),
+                false,
+            ),
+            entry(
+                ActionType::SwipeFromElement {
+                    selector: "list".into(),
+                    by_label: false,
+                    element_type: None,
+                    label_match: None,
+                    direction: qorvex_core::action::ScrollDirection::Left,
+                    duration_ms: None,
+                },
+                start + ms(4000),
+                true,
+            ),
+            entry(
+                ActionType::Tap {
+                    selector: "Login".into(),
+                    by_label: true,
+                    element_type: None,
+                    timeout_ms: None,
+                    fallback_frame: false,
+                    report: false,
+                },
+                start + ms(5000),
+                true,
+            ),
+            entry(ActionType::GetScreenshot, start + ms(6000), true),
+            entry(ActionType::Lock, stop, true),
+            entry(
+                ActionType::LogComment {
+                    message: "after".into(),
+                },
+                stop + ms(1),
+                true,
+            ),
+        ];
+        let doc = build_sidecar("/tmp/v.mp4", start, stop, &log);
+        assert_eq!(
+            doc["events"],
+            json!([
+                {"offset_ms": 0, "kind": "comment", "message": "step one", "success": true},
+                {"offset_ms": 1500, "kind": "tap_location", "x": 200, "y": 400, "success": true},
+                {"offset_ms": 3000, "kind": "swipe", "direction": "up", "success": false},
+                {"offset_ms": 4000, "kind": "swipe_from_element", "direction": "left", "success": true},
+                {"offset_ms": 5000, "kind": "tap", "selector": "Login", "by_label": true, "success": true},
+                {"offset_ms": 6000, "kind": "other", "action": "get_screenshot", "success": true},
+                {"offset_ms": 10000, "kind": "other", "action": "lock", "success": true},
+            ])
+        );
+        assert_eq!(doc["duration_ms"], 10_000);
     }
 
     #[test]

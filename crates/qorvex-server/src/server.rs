@@ -1926,8 +1926,37 @@ impl ServerState {
             };
         };
         let file = rec.file().display().to_string();
+        let started_at = rec.started_at();
+        let stopped_at = chrono::Utc::now();
+        let sidecar = recorder::sidecar_path(rec.file());
         match rec.stop().await {
-            Ok(bytes) => IpcResponse::RecordStopped { file, bytes },
+            Ok(bytes) => {
+                let log = match &self.session {
+                    Some(session) => session.get_action_log().await,
+                    None => Vec::new(),
+                };
+                let doc = recorder::build_sidecar(&file, started_at, stopped_at, &log);
+                let count = doc["events"].as_array().map_or(0, |e| e.len());
+                let written = serde_json::to_vec_pretty(&doc)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| std::fs::write(&sidecar, bytes).map_err(|e| e.to_string()));
+                let (events_file, event_count, events_warning) = match written {
+                    Ok(()) => (Some(sidecar.display().to_string()), Some(count), None),
+                    Err(e) => {
+                        warn!(path = %sidecar.display(), error = %e, "Could not write events sidecar");
+                        let warning =
+                            format!("could not write events file {}: {}", sidecar.display(), e);
+                        (None, None, Some(warning))
+                    }
+                };
+                IpcResponse::RecordStopped {
+                    file,
+                    bytes,
+                    events_file,
+                    event_count,
+                    events_warning,
+                }
+            }
             Err(message) => IpcResponse::CommandResult {
                 success: false,
                 message,
@@ -3318,6 +3347,95 @@ mod tests {
         let mut state = ServerState::new("test".into());
         let msg = failure_message(state.handle_request(IpcRequest::RecordStop).await);
         assert_eq!(msg, "No recording is active");
+    }
+
+    /// A session with an active fake recording (a `sleep` child) of `video`.
+    fn state_recording(video: &Path, dir: &Path) -> ServerState {
+        let mut state = ServerState::new("test".into());
+        state.session = Some(Session::new_with_log_dir(None, "test", dir.join("logs")));
+        std::fs::write(video, b"12345").unwrap();
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        state.recording = Some(Recording::from_child(
+            child,
+            video.to_path_buf(),
+            RecordTarget::Simulator { udid: "t".into() },
+        ));
+        state
+    }
+
+    /// `record stop` writes `<file>.events.json` with the comments logged
+    /// while recording, and reports its path and event count.
+    #[tokio::test]
+    async fn record_stop_writes_events_sidecar() {
+        let dir = std::env::temp_dir().join(format!("qvx-sidecar-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("v.mp4");
+        let mut state = state_recording(&video, &dir);
+        for message in ["one", "two"] {
+            state
+                .handle_request(IpcRequest::Execute {
+                    action: ActionType::LogComment {
+                        message: message.into(),
+                    },
+                    tag: None,
+                })
+                .await;
+        }
+        let resp = state.handle_request(IpcRequest::RecordStop).await;
+        let sidecar = dir.join("v.mp4.events.json");
+        match resp {
+            IpcResponse::RecordStopped {
+                bytes,
+                events_file,
+                event_count,
+                events_warning,
+                ..
+            } => {
+                assert_eq!(bytes, 5);
+                assert_eq!(events_file, Some(sidecar.display().to_string()));
+                assert_eq!(event_count, Some(2));
+                assert_eq!(events_warning, None);
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+        let doc: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+        assert_eq!(doc["video"], video.display().to_string());
+        let events = doc["events"].as_array().unwrap();
+        assert_eq!(events[0]["message"], "one");
+        assert_eq!(events[1]["message"], "two");
+        assert_eq!(events[0]["kind"], "comment");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sidecar that cannot be written does not fail the stop: the video is
+    /// reported and the events fields are replaced by a warning.
+    #[tokio::test]
+    async fn record_stop_unwritable_sidecar_warns() {
+        let dir = std::env::temp_dir().join(format!("qvx-sidecar-bad-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("v.mp4.events.json")).unwrap();
+        let video = dir.join("v.mp4");
+        let mut state = state_recording(&video, &dir);
+        match state.handle_request(IpcRequest::RecordStop).await {
+            IpcResponse::RecordStopped {
+                bytes,
+                events_file,
+                event_count,
+                events_warning,
+                ..
+            } => {
+                assert_eq!(bytes, 5);
+                assert_eq!(events_file, None);
+                assert_eq!(event_count, None);
+                let warning = events_warning.unwrap();
+                assert!(warning.contains("v.mp4.events.json"), "{warning}");
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A second `record start` while one is active fails and leaves the

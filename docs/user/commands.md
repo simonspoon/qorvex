@@ -451,7 +451,7 @@ Each dump uses the agent's normal 30 s read timeout, so a stalled agent can hold
 | Syntax | Description |
 |--------|-------------|
 | `qorvex record start <file>` | Start recording the session device's screen to `<file>` (mp4, overwritten if it exists; relative paths are resolved client-side) |
-| `qorvex record stop` | Stop the recording, finish the file and print its path and size |
+| `qorvex record stop` | Stop the recording, finish the file and print its path and size; also write the `<file>.events.json` sidecar |
 
 The recorder runs as a child of the session's server, so the CLI can exit
 between `start` and `stop`. On an iOS simulator it is `xcrun simctl io <udid>
@@ -475,18 +475,58 @@ shell input keyevent KEYCODE_WAKEUP`). Stopping the server
 is left running; that recording's file is not reported (on Android it is not
 pulled).
 
+**Events sidecar.** `stop` also writes `<file>.events.json` next to the video
+(overwriting any existing one), listing the session's logged actions whose log
+time falls between start and stop, in order:
+
+```json
+{
+  "video": "/tmp/run.mp4",
+  "started_at": "2026-11-12T10:00:00.000Z",
+  "duration_ms": 8250,
+  "events": [
+    {"offset_ms": 1200, "kind": "comment", "message": "step one", "success": true},
+    {"offset_ms": 2950, "kind": "tap_location", "x": 200, "y": 400, "success": true},
+    {"offset_ms": 4100, "kind": "swipe", "direction": "up", "success": true},
+    {"offset_ms": 5000, "kind": "swipe_from_element", "direction": "left", "success": true},
+    {"offset_ms": 6300, "kind": "tap", "selector": "Login", "by_label": true, "success": false},
+    {"offset_ms": 7000, "kind": "other", "action": "get_screenshot", "success": true}
+  ]
+}
+```
+
+Kinds: `comment` {message}, `tap_location` {x, y}, `swipe` {direction},
+`swipe_from_element` {direction}, `tap` {selector, by_label}; any other action
+is `{"kind":"other","action":"<name>"}`. Coordinates are the screen points the
+action used, as sent (not scaled to video pixels); selector taps and
+`swipe_from_element` carry no coordinates. `duration_ms` is the wall time from
+`started_at` to when `stop` was received. `started_at` is when the recorder
+was confirmed running (about 1 s after `start` is sent), and `offset_ms` is
+measured from it to when the action was logged (on completion). Recorder
+startup skew means event offsets can be a few hundred ms off against the
+video's first frame; this is not corrected. No screen size is recorded. The
+session keeps its last 1000 actions, so a recording with more loses its
+earliest events.
+
+`stop` prints a second line `Events: <file>.events.json (<N> events)`; `-f
+json` adds `"events_file"` and `"event_count"`. If the sidecar cannot be
+written, `stop` still exits 0 for the video, prints `Warning: could not write
+events file <path>: <cause>` on stderr, and omits the events line/fields.
+
 **Limits** (this is a basic wrapper around the platform tools): no constant
 frame rate (both tools emit frames only when the screen changes, so a static
 screen yields few frames); resolution and any encoder size limit are the
-tool's own (`screenrecord` can refuse very large displays); timestamps are not
-aligned to the action log; one recording per session; no audio; not in the
-REPL; Android emulators and physical iPhones are untested/unsupported.
+tool's own (`screenrecord` can refuse very large displays); the events
+sidecar's offsets are not corrected for recorder startup skew; one recording
+per session; no audio; not in the REPL; Android emulators and physical iPhones
+are untested/unsupported.
 
 ```bash
 $ qorvex record start /tmp/run.mp4
 Recording started: /tmp/run.mp4
 $ qorvex record stop
 Recording saved: /tmp/run.mp4 (1843200 bytes)
+Events: /tmp/run.mp4.events.json (4 events)
 ```
 
 ## Values
