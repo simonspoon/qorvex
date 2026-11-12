@@ -66,7 +66,9 @@ pub fn lease(
     if json {
         println!(
             "{}",
-            serde_json::to_string(&l).map_err(|e| CliError::Protocol(e.to_string()))?
+            crate::with_duration_ms(
+                &serde_json::to_string(&l).map_err(|e| CliError::Protocol(e.to_string()))?
+            )
         );
     } else {
         println!("{}", l.udid);
@@ -104,7 +106,10 @@ pub fn list(json: bool) -> Result<(), CliError> {
                 v
             })
             .collect();
-        println!("{}", serde_json::json!({ "leases": rows }));
+        println!(
+            "{}",
+            crate::with_duration_ms(&serde_json::json!({ "leases": rows }).to_string())
+        );
     } else if leases.is_empty() {
         eprintln!("No leases");
     } else {
@@ -281,14 +286,17 @@ pub fn reclaim(older_than: Option<&str>, yes: bool, json: bool) -> Result<(), Cl
         let skipped: Vec<_> = plan.skipped_booted.iter().map(|d| &d.udid).collect();
         println!(
             "{}",
-            serde_json::json!({
-                "candidates": rows,
-                "total_bytes": total,
-                "deleted": deleted,
-                "freed_bytes": freed,
-                "skipped_booted": skipped,
-                "caches_bytes": caches,
-            })
+            crate::with_duration_ms(
+                &serde_json::json!({
+                    "candidates": rows,
+                    "total_bytes": total,
+                    "deleted": deleted,
+                    "freed_bytes": freed,
+                    "skipped_booted": skipped,
+                    "caches_bytes": caches,
+                })
+                .to_string()
+            )
         );
     } else {
         for (c, b) in &sized {

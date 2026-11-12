@@ -698,12 +698,19 @@ impl IpcServer {
             match request {
                 IpcRequest::Execute { action, tag } => {
                     debug!(action = %action.name(), "executing action via IPC");
+                    let started = std::time::Instant::now();
                     // Execute the action using the ActionExecutor
                     // LogComment doesn't require a driver
                     let response = if let ActionType::LogComment { ref message } = action {
                         let msg = format!("Logged: {}", message);
                         session
-                            .log_action(action, ActionResult::Success, None, None, tag)
+                            .log_action(
+                                action,
+                                ActionResult::Success,
+                                None,
+                                Some(started.elapsed().as_millis() as u64),
+                                tag,
+                            )
                             .await;
 
                         IpcResponse::ActionResult {
@@ -730,7 +737,8 @@ impl IpcServer {
                                     .data
                                     .as_ref()
                                     .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                                    .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()));
+                                    .and_then(|v| v.get("elapsed_ms").and_then(|e| e.as_u64()))
+                                    .or_else(|| Some(started.elapsed().as_millis() as u64));
                                 session
                                     .log_action(
                                         action,

@@ -400,6 +400,10 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 |---------|------|-----|
 | Add comment | `log-comment <text>` | `qorvex comment "text"` |
 
+Every action the server logs carries `duration_ms`. It is the agent's own `elapsed_ms` where the result reports one (e.g. `tap` times the tap itself, not the `--report` dumps), the command's own timer for `memory-info`, and otherwise the server's wall-clock time from when it starts handling the request to logging it. `qorvex log` text lines end with ` - <N>ms` (`[HH:MM:SS] <action> - <result> - <N>ms`); `qorvex log -f json` entries have a `duration_ms` key. Entries written before this field existed have no duration and print without the suffix.
+
+With `-f json`, every command whose stdout is a JSON object adds a last key `"duration_ms": <N>`: the CLI's wall-clock time from process start to printing, so it includes connecting to the session and is at least the logged `duration_ms`. Existing keys and their order are unchanged, and text output is unchanged. Not covered: array output (`screen-info` success, `log`, `list-devices`, `list-physical-devices`, `list-apps`) and commands that print no JSON under `-f json` (the lifecycle and device commands answered with a message on stderr, e.g. `stop-target`, `foreground-target`, `install-app`, `use-device`).
+
 ## CLI-Specific Options
 
 - `-s, --session <name>` -- Connect to named session (default: "default", or `$QORVEX_SESSION`)

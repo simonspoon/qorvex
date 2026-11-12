@@ -56,7 +56,7 @@ mod lease;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use qorvex_core::action::{
-    parse_coordinate, parse_max_swipes, parse_swipe_duration_ms, ActionType, LabelMatch,
+    parse_coordinate, parse_max_swipes, parse_swipe_duration_ms, ActionLog, ActionType, LabelMatch,
     LabelMatcher, ScrollDirection, DEFAULT_MAX_SWIPES,
 };
 use qorvex_core::adb_device::Adb;
@@ -908,8 +908,40 @@ fn reset_sigpipe() {
 #[cfg(not(unix))]
 fn reset_sigpipe() {}
 
+/// When this command started; `-f json` objects report the time since then.
+static COMMAND_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Adds `"duration_ms"` (wall-clock milliseconds since this command started)
+/// as the last key of a `-f json` object. Anything else comes back unchanged.
+fn with_duration_ms(json: &str) -> String {
+    let ms = COMMAND_STARTED
+        .get()
+        .map_or(0, |started| started.elapsed().as_millis() as u64);
+    insert_duration_ms(json, ms)
+}
+
+/// Appends `"duration_ms": ms` to a JSON object's text, keeping its existing
+/// keys, their order and its compact/pretty layout. Non-objects (arrays, plain
+/// text) and objects that already carry `duration_ms` are returned unchanged.
+fn insert_duration_ms(json: &str, ms: u64) -> String {
+    let trimmed = json.trim_end();
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(serde_json::Value::Object(map)) if !map.contains_key("duration_ms") => {
+            let body = trimmed[..trimmed.len() - 1].trim_end();
+            let sep = if map.is_empty() { "" } else { "," };
+            if trimmed.contains('\n') {
+                format!("{}{}\n  \"duration_ms\": {}\n}}", body, sep, ms)
+            } else {
+                format!("{}{}\"duration_ms\":{}}}", body, sep, ms)
+            }
+        }
+        _ => json.to_string(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    let _ = COMMAND_STARTED.set(std::time::Instant::now());
     reset_sigpipe();
 
     tracing_subscriber::fmt()
@@ -966,7 +998,10 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             if screen_info_json {
-                println!("{}", screen_info_error_json(&e));
+                println!(
+                    "{}",
+                    with_duration_ms(&screen_info_error_json(&e).to_string())
+                );
             }
             if !matches!(e, CliError::Absent) {
                 eprintln!("Error: {}", e);
@@ -1108,7 +1143,9 @@ fn arm_watchdog(deadline: std::time::Duration, name: String, screen_info_json: b
             let _ = writeln!(
                 std::io::stdout(),
                 "{}",
-                serde_json::json!({ "success": false, "message": message })
+                with_duration_ms(
+                    &serde_json::json!({ "success": false, "message": message }).to_string()
+                )
             );
         }
         std::process::exit(124);
@@ -1333,7 +1370,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     .iter()
                     .map(|(name, port)| serde_json::json!({ "name": name, "agent_port": port }))
                     .collect();
-                println!("{}", serde_json::json!({ "sessions": sessions }));
+                println!(
+                    "{}",
+                    with_duration_ms(&serde_json::json!({ "sessions": sessions }).to_string())
+                );
             } else {
                 if sessions.is_empty() {
                     eprintln!("No running sessions found");
@@ -1355,7 +1395,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
             let checks = doctor::run();
             if cli.format == OutputFormat::Json {
-                println!("{}", doctor::to_json(&checks));
+                println!(
+                    "{}",
+                    with_duration_ms(&doctor::to_json(&checks).to_string())
+                );
             } else {
                 for c in &checks {
                     println!("{}", c.line());
@@ -1430,7 +1473,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Platform::Ios => match Simctl::boot(udid) {
                     Ok(()) => {
                         if cli.format == OutputFormat::Json {
-                            println!("{}", serde_json::json!({ "success": true, "udid": udid }));
+                            println!(
+                                "{}",
+                                with_duration_ms(
+                                    &serde_json::json!({ "success": true, "udid": udid })
+                                        .to_string()
+                                )
+                            );
                         } else {
                             eprintln!("Booted device {}", udid);
                         }
@@ -1467,11 +1516,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     if cli.format == OutputFormat::Json {
                         println!(
                             "{}",
-                            serde_json::json!({
-                                "success": true,
-                                "udid": udid,
-                                "outcome": format!("{:?}", outcome),
-                            })
+                            with_duration_ms(
+                                &serde_json::json!({
+                                    "success": true,
+                                    "udid": udid,
+                                    "outcome": format!("{:?}", outcome),
+                                })
+                                .to_string()
+                            )
                         );
                     } else {
                         match outcome {
@@ -1666,10 +1718,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 label_match: label_match.to_match(),
             };
             let found = query_exists(&mut client, probe, tag.clone()).await?;
-            println!(
-                "{}",
-                exists_output(&found, cli.format == OutputFormat::Json)
-            );
+            let out = exists_output(&found, cli.format == OutputFormat::Json);
+            if cli.format == OutputFormat::Json {
+                println!("{}", with_duration_ms(&out));
+            } else {
+                println!("{}", out);
+            }
             if found.exists {
                 Ok(())
             } else {
@@ -1702,7 +1756,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 cli.format == OutputFormat::Json,
             )
             .await?;
-            println!("{}", message);
+            if cli.format == OutputFormat::Json {
+                println!("{}", with_duration_ms(&message));
+            } else {
+                println!("{}", message);
+            }
             if found {
                 Ok(())
             } else {
@@ -2153,7 +2211,10 @@ async fn execute_action(
                     "screenshot": if is_screenshot_action { screenshot.as_ref().map(|s| s.as_ref()) } else { None },
                     "data": data.as_ref().and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok()),
                 });
-                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                println!(
+                    "{}",
+                    with_duration_ms(&serde_json::to_string_pretty(&output).unwrap())
+                );
             } else {
                 // Text format - output depends on the action
                 if success {
@@ -2248,8 +2309,11 @@ async fn execute_start_target(
             }
             if cli.format == OutputFormat::Json {
                 match data {
-                    Some(ref d) => println!("{}", d),
-                    None => println!("{}", serde_json::json!({ "message": message })),
+                    Some(ref d) => println!("{}", with_duration_ms(d)),
+                    None => println!(
+                        "{}",
+                        with_duration_ms(&serde_json::json!({ "message": message }).to_string())
+                    ),
                 }
             } else if !cli.quiet {
                 eprintln!("{}", message);
@@ -2289,7 +2353,7 @@ async fn execute_target_info(client: &mut IpcClient, cli: &Cli) -> Result<(), Cl
             }
             if cli.format == OutputFormat::Json {
                 if let Some(ref d) = data {
-                    println!("{}", d);
+                    println!("{}", with_duration_ms(d));
                 }
             } else if let Some(ref d) = data {
                 if let Ok(info) = serde_json::from_str::<serde_json::Value>(d) {
@@ -2633,7 +2697,10 @@ async fn get_status(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
                     "agent_connected": agent_connected,
                     "reason": reason,
                 });
-                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                println!(
+                    "{}",
+                    with_duration_ms(&serde_json::to_string_pretty(&output).unwrap())
+                );
             } else {
                 println!("Session ID: {}", session_id);
                 println!("Has screenshot: {}", screenshot.is_some());
@@ -2647,6 +2714,20 @@ async fn get_status(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
         }
         IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// One `qorvex log` text line; the duration is appended when the entry has one.
+fn log_entry_line(entry: &ActionLog) -> String {
+    let line = format!(
+        "[{}] {:?} - {:?}",
+        entry.timestamp.format("%H:%M:%S"),
+        entry.action,
+        entry.result
+    );
+    match entry.duration_ms {
+        Some(ms) => format!("{} - {}ms", line, ms),
+        None => line,
     }
 }
 
@@ -2665,12 +2746,7 @@ async fn get_log(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
                     println!("No actions logged");
                 } else {
                     for entry in entries {
-                        println!(
-                            "[{}] {:?} - {:?}",
-                            entry.timestamp.format("%H:%M:%S"),
-                            entry.action,
-                            entry.result
-                        );
+                        println!("{}", log_entry_line(&entry));
                     }
                 }
             }
@@ -2705,7 +2781,7 @@ async fn execute_memory_info(
                 return Ok(());
             };
             if cli.format == OutputFormat::Json {
-                println!("{}", d);
+                println!("{}", with_duration_ms(d));
             } else {
                 match serde_json::from_str::<MemoryInfo>(d) {
                     Ok(info) => print_memory_info(&info),
@@ -3057,7 +3133,10 @@ async fn app_container(
     match response {
         IpcResponse::AppContainer { path } => {
             if cli.format == OutputFormat::Json {
-                println!("{}", serde_json::json!({ "path": path }));
+                println!(
+                    "{}",
+                    with_duration_ms(&serde_json::json!({ "path": path }).to_string())
+                );
             } else {
                 println!("{}", path);
             }
@@ -3122,7 +3201,10 @@ async fn create_device(
     match response {
         IpcResponse::CreatedDevice { udid } => {
             if cli.format == OutputFormat::Json {
-                println!("{}", serde_json::json!({ "udid": udid }));
+                println!(
+                    "{}",
+                    with_duration_ms(&serde_json::json!({ "udid": udid }).to_string())
+                );
             } else {
                 println!("{}", udid);
             }
@@ -3149,7 +3231,10 @@ async fn device_log(
     match response {
         IpcResponse::DeviceLog { log } => {
             if cli.format == OutputFormat::Json {
-                println!("{}", serde_json::json!({ "log": log }));
+                println!(
+                    "{}",
+                    with_duration_ms(&serde_json::json!({ "log": log }).to_string())
+                );
             } else {
                 print!("{}", log);
             }
@@ -3711,6 +3796,83 @@ mod tests {
         );
         assert!(parse_scroll_to("m", "garbage", false).is_err());
         assert!(parse_scroll_to("m", "{}", false).is_err());
+    }
+
+    #[test]
+    fn duration_ms_is_appended_to_json_objects_only() {
+        // Compact objects: every old key kept, in order, duration last.
+        let (line, _) = parse_scroll_to("m", r#"{"found":false,"swipes":3}"#, true).unwrap();
+        assert_eq!(
+            insert_duration_ms(&line, 42),
+            r#"{"found":false,"swipes":3,"duration_ms":42}"#
+        );
+        let exists = exists_output(
+            &ExistsAnswer {
+                exists: true,
+                hittable: Some(false),
+            },
+            true,
+        );
+        assert_eq!(
+            insert_duration_ms(&exists, 7),
+            r#"{"exists":true,"hittable":false,"duration_ms":7}"#
+        );
+        assert_eq!(
+            insert_duration_ms(&screen_info_error_json(&CliError::Absent).to_string(), 5),
+            format!(
+                r#"{{"message":"{}","success":false,"duration_ms":5}}"#,
+                CliError::Absent
+            )
+        );
+        // Pretty objects stay pretty.
+        let pretty =
+            serde_json::to_string_pretty(&serde_json::json!({"success": true, "data": null}))
+                .unwrap();
+        let out = insert_duration_ms(&pretty, 9);
+        assert_eq!(
+            out,
+            "{\n  \"data\": null,\n  \"success\": true,\n  \"duration_ms\": 9\n}"
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok());
+        // Empty object, and an object that already has the key.
+        assert_eq!(insert_duration_ms("{}", 1), r#"{"duration_ms":1}"#);
+        assert_eq!(
+            insert_duration_ms(r#"{"duration_ms":3}"#, 1),
+            r#"{"duration_ms":3}"#
+        );
+        // Arrays (screen-info, log, list-*) and text are left alone.
+        let screen_info = render_screen_info("[]", false, false).unwrap().0;
+        assert_eq!(insert_duration_ms(&screen_info, 1), screen_info);
+        assert_eq!(insert_duration_ms("true", 1), "true");
+        assert_eq!(insert_duration_ms("Found it", 1), "Found it");
+        // Text-mode exists output is unchanged.
+        assert_eq!(
+            exists_output(
+                &ExistsAnswer {
+                    exists: true,
+                    hittable: None
+                },
+                false
+            ),
+            "true"
+        );
+    }
+
+    #[test]
+    fn log_text_line_shows_duration_when_present() {
+        let mut entry = ActionLog::new(
+            ActionType::Key {
+                name: "home".parse().unwrap(),
+            },
+            qorvex_core::action::ActionResult::Success,
+            None,
+            Some(123),
+            None,
+        );
+        let line = log_entry_line(&entry);
+        assert!(line.ends_with(" - Success - 123ms"), "{line}");
+        entry.duration_ms = None;
+        assert!(log_entry_line(&entry).ends_with(" - Success"));
     }
 
     #[test]

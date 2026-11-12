@@ -966,4 +966,23 @@ mod tests {
         let old: ActionType = serde_json::from_str(r#"{"type":"StopTarget"}"#).unwrap();
         assert!(matches!(old, ActionType::StopTarget));
     }
+
+    #[test]
+    fn action_log_without_duration_still_deserializes() {
+        let log = ActionLog::new(
+            ActionType::GetScreenInfo,
+            ActionResult::Success,
+            None,
+            None,
+            None,
+        );
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(!json.contains("duration_ms"), "{}", json);
+        let back: ActionLog = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.duration_ms, None);
+        // A hand-written entry from before every action carried a duration.
+        let legacy = r#"{"id":"00000000-0000-0000-0000-000000000001","timestamp":"2026-01-01T00:00:00Z","action":{"type":"GetScreenInfo"},"result":"Success","screenshot":null}"#;
+        let old: ActionLog = serde_json::from_str(legacy).unwrap();
+        assert_eq!(old.duration_ms, None);
+    }
 }

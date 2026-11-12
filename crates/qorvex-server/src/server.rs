@@ -82,6 +82,9 @@ pub struct ServerState {
     /// adb, so there is no competing-removal hazard. Released in
     /// `handle_stop_agent`.
     pub android_forward: Option<AdbForward>,
+    /// When the request being handled arrived. `log_action` falls back to
+    /// the time since then for entries with no measured duration of their own.
+    pub request_started: Option<std::time::Instant>,
 }
 
 impl ServerState {
@@ -130,6 +133,7 @@ impl ServerState {
             android_serial: None,
             android_lifecycle: None,
             android_forward: None,
+            request_started: None,
         }
     }
 
@@ -151,7 +155,8 @@ impl ServerState {
     /// `Subscribe` is **not** handled here — it must be handled by the caller
     /// because it is a streaming operation.
     pub async fn handle_request(&mut self, request: IpcRequest) -> IpcResponse {
-        match request {
+        self.request_started = Some(std::time::Instant::now());
+        let response = match request {
             // ── Session Management ──────────────────────────────────────
             IpcRequest::StartSession => self.handle_start_session().await,
             IpcRequest::EndSession => self.handle_end_session(),
@@ -268,7 +273,9 @@ impl ServerState {
             IpcRequest::Shutdown => IpcResponse::Error {
                 message: "Shutdown is handled by the server loop".to_string(),
             },
-        }
+        };
+        self.request_started = None;
+        response
     }
 
     // ── Session ─────────────────────────────────────────────────────────
@@ -2557,6 +2564,10 @@ impl ServerState {
     }
 
     /// Log an action to the current session.
+    ///
+    /// A `duration_ms` the caller measured (the agent's `elapsed_ms`, or a
+    /// handler's own timer) wins; otherwise the entry gets the wall-clock time
+    /// since the request arrived, so every entry carries a duration.
     pub async fn log_action(
         &self,
         action: ActionType,
@@ -2566,6 +2577,10 @@ impl ServerState {
     ) {
         if let Some(session) = &self.session {
             let screenshot = None;
+            let duration_ms = duration_ms.or_else(|| {
+                self.request_started
+                    .map(|started| started.elapsed().as_millis() as u64)
+            });
             session
                 .log_action(action, result, screenshot, duration_ms, tag)
                 .await;
@@ -3325,5 +3340,41 @@ mod tests {
             other => panic!("expected Error, got {other:?}"),
         }
         assert!(state.target_bundle_id.is_none());
+    }
+
+    /// Every logged action carries a duration, even when the executor's
+    /// result has no `elapsed_ms` (here: a key press that fails with no agent,
+    /// and two agentless commands); a caller-measured duration still wins.
+    #[tokio::test]
+    async fn every_logged_action_has_a_duration() {
+        let mut state = with_session(unreachable_agent_state().await).await;
+        for action in [
+            ActionType::LogComment {
+                message: "hi".into(),
+            },
+            ActionType::SetTarget {
+                bundle_id: "com.example.app".into(),
+            },
+            ActionType::Key {
+                name: "home".parse().unwrap(),
+            },
+        ] {
+            state
+                .handle_request(IpcRequest::Execute { action, tag: None })
+                .await;
+        }
+        state
+            .log_action(
+                ActionType::GetScreenInfo,
+                ActionResult::Success,
+                Some(4242),
+                None,
+            )
+            .await;
+        let log = state.session.as_ref().unwrap().get_action_log().await;
+        assert_eq!(log.len(), 4);
+        assert!(matches!(log[2].result, ActionResult::Failure(_)));
+        assert!(log.iter().all(|e| e.duration_ms.is_some()), "{log:?}");
+        assert_eq!(log[3].duration_ms, Some(4242));
     }
 }
