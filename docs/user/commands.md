@@ -32,6 +32,20 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>]` |
 | Lock the device (iOS only for now) | `lock` | `qorvex lock` |
 
+### Android setup check (`doctor`)
+
+`qorvex doctor [--platform android|ios]` is a read-only preflight for Android
+(the default). It runs entirely in the CLI (no server is contacted or started)
+and prints one line per check: `[ok] name: detail`, `[FAIL] name: problem. Fix: action`,
+`[warn] ...` or `[skip] ...`. Checks: `adb` (on PATH), `ANDROID_HOME`
+(or `ANDROID_SDK_ROOT`, config `android_sdk_root`, `local.properties` `sdk.dir`),
+`JDK` (the one `start-agent` pins for Gradle, Java 17-23), `agent project`
+(a directory containing `gradlew`), `devices` (`adb devices -l`; `unauthorized`
+and `offline` fail) and `server` (`qorvex-server` on PATH). Checks needing adb
+print `[skip]` when adb is missing. Exit code is 1 if any check failed, else 0.
+`qorvex -f json doctor` prints `{"ok":bool,"checks":[{"name","status","detail","fix"}]}`.
+`--platform ios` has no checks yet: it prints a notice and exits 0.
+
 ### Simulator leases and disk reclamation
 
 These commands need no running session. A lease is a throwaway simulator cloned

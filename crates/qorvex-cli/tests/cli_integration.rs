@@ -416,3 +416,33 @@ fn test_start_help_lists_wait_ready() {
         .success()
         .stdout(predicate::str::contains("--wait-ready"));
 }
+
+#[test]
+fn test_doctor_without_adb_fails() {
+    // Empty env, PATH limited to system dirs; HOME points at a missing dir so the
+    // result does not depend on a real ~/Library/Android/sdk.
+    let home = "/nonexistent-qorvex-doctor-home";
+    let run = |args: &[&str]| {
+        Command::cargo_bin("qorvex")
+            .unwrap()
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", home)
+            .args(args)
+            .assert()
+            .code(1)
+            .get_output()
+            .clone()
+    };
+
+    let text = run(&["doctor"]);
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    assert!(stdout.contains("[FAIL] adb"), "{stdout}");
+    assert!(stdout.contains("[skip] devices"), "{stdout}");
+
+    let json = run(&["-f", "json", "doctor"]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["checks"][0]["name"], "adb");
+    assert_eq!(v["checks"][0]["status"], "fail");
+}

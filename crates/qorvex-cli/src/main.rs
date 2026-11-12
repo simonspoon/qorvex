@@ -51,6 +51,7 @@
 //! ```
 
 mod converter;
+mod doctor;
 mod lease;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -501,6 +502,13 @@ enum Command {
     ListDevices {
         /// Target platform
         #[arg(long, value_enum, default_value_t = PlatformArg::Ios)]
+        platform: PlatformArg,
+    },
+
+    /// Check this machine's Android setup (adb, SDK, JDK, agent project, devices)
+    Doctor {
+        /// Target platform (`ios` has no checks yet and exits 0)
+        #[arg(long, value_enum, default_value_t = PlatformArg::Android)]
         platform: PlatformArg,
     },
 
@@ -1121,6 +1129,26 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
             return Ok(());
         }
+        Command::Doctor { platform } => {
+            if platform == PlatformArg::Ios {
+                println!("doctor: iOS checks are not implemented");
+                return Ok(());
+            }
+            let checks = doctor::run();
+            if cli.format == OutputFormat::Json {
+                println!("{}", doctor::to_json(&checks));
+            } else {
+                for c in &checks {
+                    println!("{}", c.line());
+                }
+            }
+            if !doctor::all_ok(&checks) {
+                // Exit 1 directly: returning an error would add an
+                // "Error: ..." line to stderr after the report.
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         Command::ListDevices { platform } => {
             match Platform::from(platform) {
                 Platform::Ios => match Simctl::list_devices() {
@@ -1624,6 +1652,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         | Command::Reap { .. }
         | Command::Sims { .. }
         | Command::ListDevices { .. }
+        | Command::Doctor { .. }
         | Command::BootDevice { .. }
         | Command::Convert { .. }
         | Command::QuietDevice { .. }

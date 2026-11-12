@@ -789,7 +789,7 @@ const MAX_BUILD_JAVA: u32 = 23;
 /// Returns `None` if no compatible JDK can be pinned, in which case the build
 /// falls back to the ambient `JAVA_HOME` (and `build_agent` adds a hint on
 /// failure).
-fn resolve_build_java_home(client_override: Option<&Path>) -> Option<PathBuf> {
+pub fn resolve_build_java_home(client_override: Option<&Path>) -> Option<PathBuf> {
     let candidates = build_java_home_candidates(
         client_override,
         std::env::var_os("QORVEX_ANDROID_JAVA_HOME").map(PathBuf::from),
@@ -880,7 +880,7 @@ pub fn client_java_home_override() -> Option<String> {
 /// Run `<java_home>/bin/java -version` and parse the major version (e.g. 17, 23,
 /// or 8 from a legacy `1.8.0` string). Returns `None` if the binary is missing
 /// or its output can't be parsed.
-fn java_major_version(java_home: &Path) -> Option<u32> {
+pub fn java_major_version(java_home: &Path) -> Option<u32> {
     let java_bin = java_home.join("bin").join("java");
     if !java_bin.exists() {
         return None;

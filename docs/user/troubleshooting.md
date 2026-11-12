@@ -26,6 +26,12 @@
 
 **"Agent started but connection failed":** The agent process launched successfully but the server could not establish a TCP connection. Check that nothing else is using port 8080 and that the simulator is booted.
 
+## Android Setup
+
+**Symptoms:** `start-agent` fails on Android with `SDK location not found`, a Gradle/JDK error, `adb` not found, or no device.
+
+**Check:** run `qorvex doctor`. It checks adb, `ANDROID_HOME`, the JDK Gradle will use, the agent project, attached devices and `qorvex-server`, and prints the exact fix for each failure. See [commands.md](commands.md).
+
 ## Agent Won't Connect
 
 **Symptoms:** "Not connected to automation backend", "Connection lost"
