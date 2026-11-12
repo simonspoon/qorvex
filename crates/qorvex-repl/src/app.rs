@@ -1938,6 +1938,9 @@ fn swipe_action(args: &ParsedArgs) -> Result<ActionType, String> {
         .map(parse_swipe_duration_ms)
         .transpose()?;
     if let Some(selector) = &args.from_element {
+        if selector.is_empty() {
+            return Err("swipe: --from-element requires a selector".to_string());
+        }
         if args.from.is_some() || args.to.is_some() {
             return Err("swipe: --from-element cannot be combined with --from/--to".to_string());
         }
@@ -2211,7 +2214,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
                 args.to = iter.next();
             }
             "--from-element" if cmd == "swipe" => {
-                args.from_element = iter.next();
+                args.from_element = Some(iter.next().unwrap_or_default());
             }
             "--direction" if cmd == "scroll-to" => {
                 args.direction = iter.next();
@@ -2317,6 +2320,8 @@ mod tests {
                 ..
             })
         ));
+        let (_, a) = parse_command("swipe up --from-element");
+        assert!(swipe_action(&a).is_err());
         let (_, a) = parse_command("swipe up --from-element box --from 1,2 --to 3,4");
         assert!(swipe_action(&a).is_err());
     }

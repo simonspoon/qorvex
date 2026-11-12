@@ -121,8 +121,6 @@ fn compile_label_match(
         .map_err(ExecutionResult::failure)
 }
 
-/// Swipe duration passed to the driver, in seconds: `ms / 1000.0`, or the
-/// 0.3 s default when no duration was given.
 /// Swipe start and end for a direction, from `(x, y)`. Distances are the ones
 /// the plain direction swipe uses (300 vertical, 210 horizontal); the end
 /// point is clamped at 0 because negative coordinates are rejected.
@@ -137,6 +135,8 @@ fn swipe_from_point(direction: &str, x: i32, y: i32) -> Option<(i32, i32)> {
     Some(((x + dx).max(0), (y + dy).max(0)))
 }
 
+/// Swipe duration passed to the driver, in seconds: `ms / 1000.0`, or the
+/// 0.3 s default when no duration was given.
 fn swipe_secs(duration_ms: Option<u32>) -> Option<f64> {
     Some(duration_ms.map_or(0.3, |ms| f64::from(ms) / 1000.0))
 }
@@ -568,6 +568,15 @@ impl ActionExecutor {
                 };
                 let (to_x, to_y) = swipe_from_point(direction.as_str(), from_x, from_y)
                     .expect("ScrollDirection is always a valid swipe direction");
+                if (to_x, to_y) == (from_x, from_y) {
+                    return ExecutionResult::failure(format!(
+                        "Swipe {} from '{}' at ({}, {}) would have zero length (element at the screen edge)",
+                        direction.as_str(),
+                        selector,
+                        from_x,
+                        from_y
+                    ));
+                }
                 match self
                     .driver
                     .swipe(from_x, from_y, to_x, to_y, swipe_secs(duration_ms))
