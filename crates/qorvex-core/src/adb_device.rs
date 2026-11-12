@@ -382,7 +382,8 @@ impl Adb {
     /// android.intent.category.LAUNCHER 1`, which resolves and starts the
     /// package's MAIN/LAUNCHER activity without the caller needing to know the
     /// component name. This is the Android analogue of
-    /// [`crate::simctl::Simctl::launch_app`] and backs `start-target`.
+    /// [`crate::simctl::Simctl::launch_app`] and backs `start-target` and
+    /// `foreground-target`.
     ///
     /// `monkey` exits non-zero and prints `No activities found` when the
     /// package has no launchable activity (or is not installed), which surfaces

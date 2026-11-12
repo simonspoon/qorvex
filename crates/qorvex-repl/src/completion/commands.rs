@@ -171,6 +171,12 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[],
     },
     CommandDef {
+        name: "foreground-target",
+        description: "Bring the running target application to the front",
+        args: &[],
+        options: &[],
+    },
+    CommandDef {
         name: "set-timeout",
         description: "Set default wait timeout (ms)",
         args: &[ArgSpec {

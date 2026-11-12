@@ -623,6 +623,11 @@ enum Command {
     /// Terminate the target application
     StopTarget,
 
+    /// Bring the running target application to the front without relaunching
+    /// it (state and pid are kept). Fails if the app is not running; use
+    /// start-target for that.
+    ForegroundTarget,
+
     /// Get metadata about the target application
     TargetInfo,
 
@@ -1845,6 +1850,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Command::StartTarget { force } => execute_start_target(&mut client, &cli, force).await,
         Command::StopTarget => send_command(&mut client, IpcRequest::StopTarget, &cli).await,
+        Command::ForegroundTarget => {
+            send_command(&mut client, IpcRequest::ForegroundTarget, &cli).await
+        }
         Command::TargetInfo => execute_target_info(&mut client, &cli).await,
         Command::MemoryInfo { ref tag } => {
             execute_memory_info(&mut client, &cli, tag.clone()).await
@@ -3531,6 +3539,14 @@ mod tests {
             "{}",
             msg
         );
+    }
+
+    #[test]
+    fn foreground_target_parses_without_args() {
+        let cli = Cli::try_parse_from(["qorvex", "foreground-target"]).unwrap();
+        assert!(matches!(cli.command, Command::ForegroundTarget));
+        assert!(Cli::try_parse_from(["qorvex", "foreground-target", "x"]).is_err());
+        assert!(Cli::try_parse_from(["qorvex", "-o", "500", "foreground-target"]).is_ok());
     }
 
     #[test]

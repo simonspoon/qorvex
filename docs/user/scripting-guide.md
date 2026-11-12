@@ -99,6 +99,7 @@ done
 | `qorvex set-target <bundle_id>` | Set target app bundle ID |
 | `qorvex start-target [--force]` | Launch the target app (`--force` restarts one that is already running) |
 | `qorvex stop-target` | Terminate the target app |
+| `qorvex foreground-target` | Bring the running target app to the front (no relaunch; exit 1 if not running) |
 | `qorvex comment 'text'` | Log a comment |
 | `qorvex boot-device <udid>` | Boot a simulator |
 | `qorvex list-devices` | List simulator devices |

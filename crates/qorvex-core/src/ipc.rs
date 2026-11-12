@@ -276,6 +276,10 @@ pub enum IpcRequest {
     },
     /// Terminate the target application on the simulator.
     StopTarget,
+    /// Bring the already-running target application to the front, keeping its
+    /// process and state. Fails rather than cold-starting when it is not
+    /// running.
+    ForegroundTarget,
 
     /// Get metadata about the currently targeted application.
     GetTargetInfo,

@@ -208,6 +208,7 @@ impl ServerState {
             // ── Target App Lifecycle ────────────────────────────────────
             IpcRequest::StartTarget { force } => self.handle_start_target(force).await,
             IpcRequest::StopTarget => self.handle_stop_target().await,
+            IpcRequest::ForegroundTarget => self.handle_foreground_target().await,
 
             // ── Target Info ─────────────────────────────────────────────
             IpcRequest::GetTargetInfo => self.handle_get_target_info().await,
@@ -1242,6 +1243,73 @@ impl ServerState {
         Adb::launch_app(serial, package)?;
         let pid = Adb::app_pid(serial, package)?;
         Ok((was_running, pid))
+    }
+
+    /// Brings the already-running target app to the front without relaunching
+    /// it, so its process and in-memory state survive.
+    ///
+    /// Running state is probed the same way `start-target` decides "already
+    /// running"; a stopped app is reported as an error instead of being
+    /// cold-started, since a fresh launch would silently lose the state the
+    /// caller is returning to.
+    async fn handle_foreground_target(&self) -> IpcResponse {
+        let Some(ref bundle_id) = self.target_bundle_id else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No target set. Use set-target first.".to_string(),
+            };
+        };
+        let result: Result<Option<Option<u32>>, String> =
+            if let Some(ref serial) = self.android_serial {
+                Self::foreground_target_android(serial, bundle_id).map_err(|e| e.to_string())
+            } else if let Some(ref udid) = self.simulator_udid {
+                Self::foreground_target_ios(udid, bundle_id).map_err(|e| e.to_string())
+            } else {
+                return IpcResponse::CommandResult {
+                    success: false,
+                    message: "No device selected.".to_string(),
+                };
+            };
+        let (success, message) = match result {
+            Ok(outcome) => foreground_target_report(bundle_id, outcome),
+            Err(e) => (false, format!("Failed to bring app to the front: {}", e)),
+        };
+        let action_result = if success {
+            ActionResult::Success
+        } else {
+            ActionResult::Failure(message.clone())
+        };
+        self.log_action(ActionType::ForegroundTarget, action_result, None, None)
+            .await;
+        IpcResponse::CommandResult { success, message }
+    }
+
+    /// iOS leg of [`Self::handle_foreground_target`]: `None` when the app is
+    /// not running (nothing launched), else the pid after foregrounding.
+    /// `simctl launch` without `--terminate-running-process` raises the
+    /// existing process instead of starting a new one.
+    fn foreground_target_ios(
+        udid: &str,
+        bundle_id: &str,
+    ) -> Result<Option<Option<u32>>, qorvex_core::simctl::SimctlError> {
+        if Simctl::app_pid(udid, bundle_id)?.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Simctl::launch_app(udid, bundle_id, false)?))
+    }
+
+    /// Android leg of [`Self::handle_foreground_target`]. A LAUNCHER intent
+    /// to a package with a live task resumes that task rather than starting
+    /// a new process.
+    fn foreground_target_android(
+        serial: &str,
+        package: &str,
+    ) -> Result<Option<Option<u32>>, qorvex_core::adb_device::AdbError> {
+        if Adb::app_pid(serial, package)?.is_none() {
+            return Ok(None);
+        }
+        Adb::launch_app(serial, package)?;
+        Ok(Some(Adb::app_pid(serial, package)?))
     }
 
     async fn handle_stop_target(&self) -> IpcResponse {
@@ -2655,6 +2723,26 @@ fn start_target_report(
     (message, data)
 }
 
+/// Builds `foreground-target`'s `(success, message)` from the outcome:
+/// `None` means the app was not running (and was not launched); `Some(pid)`
+/// means it was raised, with the pid if it could be read.
+fn foreground_target_report(bundle_id: &str, outcome: Option<Option<u32>>) -> (bool, String) {
+    match outcome {
+        None => (
+            false,
+            format!(
+                "{} is not running; use start-target to launch it",
+                bundle_id
+            ),
+        ),
+        Some(Some(pid)) => (
+            true,
+            format!("Brought {} to the front (pid {})", bundle_id, pid),
+        ),
+        Some(None) => (true, format!("Brought {} to the front", bundle_id)),
+    }
+}
+
 /// Rewrites a failed action's message when the target app explains the
 /// failure: it is not running, not in the foreground, or it is in the
 /// foreground but the agent reported no window. Returns `None` to keep the
@@ -2834,6 +2922,28 @@ mod tests {
             "8080"
         );
         std::fs::remove_file(&path).ok();
+    }
+
+    // --- foreground-target outcome reporting ---
+
+    #[test]
+    fn foreground_target_report_not_running_fails_and_points_at_start_target() {
+        let (ok, msg) = foreground_target_report("com.example.App", None);
+        assert!(!ok);
+        assert_eq!(
+            msg,
+            "com.example.App is not running; use start-target to launch it"
+        );
+    }
+
+    #[test]
+    fn foreground_target_report_running_succeeds_with_pid() {
+        let (ok, msg) = foreground_target_report("com.example.App", Some(Some(42)));
+        assert!(ok);
+        assert_eq!(msg, "Brought com.example.App to the front (pid 42)");
+        let (ok, msg) = foreground_target_report("com.example.App", Some(None));
+        assert!(ok);
+        assert_eq!(msg, "Brought com.example.App to the front");
     }
 
     // --- start-target outcome reporting ---

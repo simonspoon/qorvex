@@ -1149,6 +1149,7 @@ impl ActionExecutor {
             | ActionType::Quit
             | ActionType::StartTarget { .. }
             | ActionType::StopTarget
+            | ActionType::ForegroundTarget
             | ActionType::GetTargetInfo => ExecutionResult::failure(
                 "Session management actions must be handled by the session manager",
             ),

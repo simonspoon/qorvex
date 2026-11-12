@@ -235,6 +235,7 @@ impl LogConverter {
                 "qorvex start-target".to_string()
             }),
             ActionType::StopTarget => Some("qorvex stop-target".to_string()),
+            ActionType::ForegroundTarget => Some("qorvex foreground-target".to_string()),
             ActionType::GetTargetInfo => Some("qorvex get-target-info".to_string()),
             ActionType::MemoryInfo { .. } => Some("qorvex memory-info".to_string()),
             ActionType::ShutdownDevice => Some("qorvex shutdown-device".to_string()),
@@ -920,6 +921,14 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&ActionType::StopTarget, None),
             Some("qorvex stop-target".to_string())
+        );
+    }
+
+    #[test]
+    fn test_foreground_target_to_command() {
+        assert_eq!(
+            LogConverter::action_to_command(&ActionType::ForegroundTarget, None),
+            Some("qorvex foreground-target".to_string())
         );
     }
 }

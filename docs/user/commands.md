@@ -172,6 +172,7 @@ again the next time it asks.
 | Get target app info | `get-target-info` | `qorvex target-info` |
 | Launch target app | `start-target [--force]` | `qorvex start-target [--force]` |
 | Terminate target app | `stop-target` | `qorvex stop-target` |
+| Bring running target app to front | `foreground-target` | `qorvex foreground-target` |
 | Target/device memory | `memory-info` | `qorvex memory-info` |
 
 > **No agent needed to choose an app:** `set-target`, `start-target` and
@@ -206,6 +207,16 @@ again the next time it asks.
 > This matters for a suite whose fixtures reset **on launch** — without `--force`
 > a second script attaches to the first one's mutated state. Either pass
 > `--force`, or `stop-target` before `start-target`.
+
+> **Returning to a backgrounded app:** `start-target` does not raise an app that
+> is already running. `foreground-target` does: it brings the running target
+> back to the front with the same process and state (no relaunch), and fails
+> with exit 1 if the app is not running rather than cold-starting it:
+> ```bash
+> $ qorvex key home
+> $ qorvex foreground-target
+> Brought com.example.App to the front (pid 34955)
+> ```
 
 > **Target state:** `qorvex --format json target-info` reports `state` as one of
 > `running_foreground`, `running_background`, `suspended` (iOS only),

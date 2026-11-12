@@ -723,6 +723,7 @@ impl App {
             },
             "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
+            "foreground-target" => IpcRequest::ForegroundTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
             "memory-info" => IpcRequest::GetMemoryInfo {
                 tag: args.tag.clone(),
@@ -1284,6 +1285,7 @@ impl App {
             },
             "start-target" => IpcRequest::StartTarget { force: args.force },
             "stop-target" => IpcRequest::StopTarget,
+            "foreground-target" => IpcRequest::ForegroundTarget,
             "get-target-info" => IpcRequest::GetTargetInfo,
             "memory-info" => IpcRequest::GetMemoryInfo {
                 tag: args.tag.clone(),
@@ -1817,6 +1819,7 @@ impl App {
             "  memory-info              Report target app and device memory",
             "  start-target             Launch the target application",
             "  stop-target              Terminate the target application",
+            "  foreground-target        Bring the running target app to the front",
             "  set-timeout [ms]         Set/get default wait timeout",
             "",
             "Device / App management (all act on the selected device):",

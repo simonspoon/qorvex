@@ -398,6 +398,9 @@ pub enum ActionType {
     /// Terminate the target application.
     StopTarget,
 
+    /// Bring the already-running target application to the front.
+    ForegroundTarget,
+
     /// Get metadata about the currently targeted application.
     GetTargetInfo,
 
@@ -581,6 +584,7 @@ impl ActionType {
             ActionType::SetTarget { .. } => "set_target",
             ActionType::StartTarget { .. } => "start_target",
             ActionType::StopTarget => "stop_target",
+            ActionType::ForegroundTarget => "foreground_target",
             ActionType::GetTargetInfo => "get_target_info",
             ActionType::MemoryInfo { .. } => "memory_info",
             ActionType::ShutdownDevice => "shutdown_device",
@@ -626,6 +630,7 @@ impl ActionType {
             ActionType::SetTarget { .. } => "Target",
             ActionType::StartTarget { .. } => "StartTarget",
             ActionType::StopTarget => "StopTarget",
+            ActionType::ForegroundTarget => "ForegroundTarget",
             ActionType::GetTargetInfo => "TargetInfo",
             ActionType::MemoryInfo { .. } => "MemoryInfo",
             ActionType::ShutdownDevice => "ShutdownDevice",
@@ -760,6 +765,7 @@ impl ActionType {
             ActionType::OpenUrl { url } => url.clone(),
             ActionType::StartTarget { .. }
             | ActionType::StopTarget
+            | ActionType::ForegroundTarget
             | ActionType::Lock
             | ActionType::GetTargetInfo
             | ActionType::MemoryInfo { .. }
@@ -948,5 +954,16 @@ mod tests {
             ActionType::StartTarget { force } => assert!(!force),
             other => panic!("expected StartTarget, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn foreground_target_serde_round_trip() {
+        let json = serde_json::to_string(&ActionType::ForegroundTarget).unwrap();
+        assert_eq!(json, r#"{"type":"ForegroundTarget"}"#);
+        let back: ActionType = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ActionType::ForegroundTarget));
+        // Logs written before the variant existed still parse.
+        let old: ActionType = serde_json::from_str(r#"{"type":"StopTarget"}"#).unwrap();
+        assert!(matches!(old, ActionType::StopTarget));
     }
 }
