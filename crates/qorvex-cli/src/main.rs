@@ -859,6 +859,18 @@ enum Command {
         since: Option<DateTime<Utc>>,
     },
 
+    /// List host crash reports (`*.ips`, `*.crash` in ~/Library/Logs/DiagnosticReports), newest first. Lists only; does not decode
+    #[command(name = "crash-log")]
+    CrashLog {
+        /// Only reports modified at or after this time: an RFC3339 timestamp
+        /// (`2026-11-12T08:58:40Z`) or an age `<n>s`, `<n>m` or `<n>h`
+        #[arg(long, value_name = "T", value_parser = parse_since)]
+        since: Option<DateTime<Utc>>,
+        /// Only reports whose file name contains this substring (case-sensitive)
+        #[arg(long, value_name = "SUBSTR")]
+        process: Option<String>,
+    },
+
     /// List all running qorvex sessions
     ListSessions,
 
@@ -1372,6 +1384,40 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 },
         } => {
             return lease::reclaim(older_than.as_deref(), yes, cli.format == OutputFormat::Json);
+        }
+        Command::CrashLog { since, ref process } => {
+            let reports = match std::env::var_os("HOME") {
+                Some(home) => list_crash_reports(
+                    &PathBuf::from(home).join("Library/Logs/DiagnosticReports"),
+                    since,
+                    process.as_deref(),
+                ),
+                None => Vec::new(),
+            };
+            if cli.format == OutputFormat::Json {
+                let items: Vec<_> = reports
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "file": r.file,
+                            "path": r.path,
+                            "mtime": r.mtime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                            "size": r.size,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&items).unwrap());
+            } else {
+                for r in &reports {
+                    println!(
+                        "{}  {}  {}",
+                        r.mtime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        r.size,
+                        r.file
+                    );
+                }
+            }
+            return Ok(());
         }
         Command::ListSessions => {
             let sessions = discover_sessions();
@@ -2078,6 +2124,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         // These commands are handled before IPC connection above
         Command::ListSessions
+        | Command::CrashLog { .. }
         | Command::Lease { .. }
         | Command::Release { .. }
         | Command::Reap { .. }
@@ -2778,6 +2825,55 @@ fn parse_since(s: &str) -> Result<DateTime<Utc>, String> {
     let age =
         chrono::Duration::try_seconds(i64::from(n) * i64::from(secs_per_unit)).ok_or_else(bad)?;
     Utc::now().checked_sub_signed(age).ok_or_else(bad)
+}
+
+/// One host crash report file, as listed by `crash-log`.
+struct CrashReport {
+    file: String,
+    path: String,
+    mtime: DateTime<Utc>,
+    size: u64,
+}
+
+/// `*.ips` / `*.crash` files directly in `dir` (non-recursive), newest first,
+/// optionally limited to mtime >= `since` and names containing `process`.
+/// Never opens a file; a missing or unreadable dir yields an empty list.
+fn list_crash_reports(
+    dir: &std::path::Path,
+    since: Option<DateTime<Utc>>,
+    process: Option<&str>,
+) -> Vec<CrashReport> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<CrashReport> = rd
+        .flatten()
+        .filter_map(|e| {
+            let file = e.file_name().to_string_lossy().into_owned();
+            if !(file.ends_with(".ips") || file.ends_with(".crash")) {
+                return None;
+            }
+            if process.is_some_and(|p| !file.contains(p)) {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            let mtime: DateTime<Utc> = meta.modified().ok()?.into();
+            if since.is_some_and(|cut| mtime < cut) {
+                return None;
+            }
+            Some(CrashReport {
+                path: e.path().to_string_lossy().into_owned(),
+                file,
+                mtime,
+                size: meta.len(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.mtime.cmp(&a.mtime).then_with(|| a.file.cmp(&b.file)));
+    out
 }
 
 /// Keep only entries whose timestamp is at or after `since` (all when `None`).
@@ -4116,6 +4212,70 @@ mod tests {
             "{}",
             err
         );
+    }
+
+    #[test]
+    fn crash_log_lists_filters_and_sorts() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!("qorvex-crashlog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Retired.ips")).unwrap();
+        let base = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        for (name, off) in [
+            ("MyApp-1.ips", 0u64),
+            ("MyApp-2.crash", 100),
+            ("Other-3.ips", 200),
+            ("MyApp-4.txt", 300),
+        ] {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_modified(base + Duration::from_secs(off)).unwrap();
+        }
+        let names = |v: Vec<CrashReport>| v.into_iter().map(|r| r.file).collect::<Vec<_>>();
+        let at = |off: u64| -> DateTime<Utc> { (base + Duration::from_secs(off)).into() };
+
+        // newest first; .txt and the directory are ignored
+        let all = list_crash_reports(&dir, None, None);
+        assert_eq!(all[0].path, dir.join("Other-3.ips").to_string_lossy());
+        assert_eq!(names(all), ["Other-3.ips", "MyApp-2.crash", "MyApp-1.ips"]);
+        // since boundary is inclusive
+        assert_eq!(
+            names(list_crash_reports(&dir, Some(at(100)), None)),
+            ["Other-3.ips", "MyApp-2.crash"]
+        );
+        assert!(list_crash_reports(&dir, Some(at(201)), None).is_empty());
+        // process match / miss / case-sensitive / AND with since
+        assert_eq!(
+            names(list_crash_reports(&dir, None, Some("MyApp"))),
+            ["MyApp-2.crash", "MyApp-1.ips"]
+        );
+        assert!(list_crash_reports(&dir, None, Some("myapp")).is_empty());
+        assert!(list_crash_reports(&dir, None, Some("zzz-none")).is_empty());
+        assert_eq!(
+            names(list_crash_reports(&dir, Some(at(100)), Some("MyApp"))),
+            ["MyApp-2.crash"]
+        );
+        // missing dir
+        assert!(list_crash_reports(&dir.join("nope"), None, None).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crash_log_since_is_a_usage_error_when_bad() {
+        match Cli::try_parse_from(["qorvex", "crash-log", "--since", "1h", "--process", "X"])
+            .unwrap()
+            .command
+        {
+            Command::CrashLog { since, process } => {
+                assert!(since.is_some());
+                assert_eq!(process.as_deref(), Some("X"));
+            }
+            _ => panic!("expected CrashLog"),
+        }
+        let Err(err) = Cli::try_parse_from(["qorvex", "crash-log", "--since", "abc"]) else {
+            panic!("bad --since should be rejected")
+        };
+        assert_eq!(err.exit_code(), 2);
+        assert!(err.to_string().contains("invalid --since 'abc'"), "{}", err);
     }
 
     #[test]
