@@ -106,6 +106,9 @@ final class CommandHandler {
 
         case .lock:
             return handleLock()
+
+        case .pressKey(let key):
+            return handlePressKey(key)
         }
     }
 
@@ -140,6 +143,26 @@ final class CommandHandler {
             return .error(message: "Lock failed: \(msg)")
         }
         return .ok
+    }
+
+    // MARK: - System keys
+
+    /// Press a system key. iOS has a home button but no back key.
+    private func handlePressKey(_ key: KeyName) -> AgentResponse {
+        switch key {
+        case .back:
+            return .error(message: "key 'back' is not supported on iOS")
+        case .home:
+            var objcError: NSError?
+            let caught = QVXTryCatch({
+                XCUIDevice.shared.press(.home)
+            }, &objcError)
+            if !caught {
+                let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+                return .error(message: "Press key 'home' failed: \(msg)")
+            }
+            return .ok
+        }
     }
 
     // MARK: - Tap coordinate

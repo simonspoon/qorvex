@@ -260,6 +260,15 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 | `swipe` or `swipe <direction>` | Swipe (default: up in the REPL; the CLI requires a direction or `--from/--to`). Directions: up, down, left, right |
 | `swipe --from <x,y> --to <x,y>` | Swipe between two coordinates (non-negative integers); cannot be combined with a direction (REPL and CLI) |
 
+### System Keys
+
+| Syntax | Description |
+|--------|-------------|
+| `key home` | Press the home key (iOS: `XCUIDevice.press(.home)`; Android: `GLOBAL_ACTION_HOME`). The target app goes to the background (REPL and CLI) |
+| `key back` | Press the back key (Android only: `GLOBAL_ACTION_BACK`; dismisses a dialog or the keyboard, or goes back a screen). On iOS it fails with exit 1: `key 'back' is not supported on iOS` |
+
+Any other key name is a usage error (exit 2) listing the allowed names. Use `qorvex key back|home` instead of `adb shell input keyevent KEYCODE_BACK|KEYCODE_HOME`.
+
 ### Send Keys
 
 | Syntax | Description |

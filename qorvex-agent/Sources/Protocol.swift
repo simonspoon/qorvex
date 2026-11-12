@@ -26,6 +26,7 @@ enum OpCode: UInt8 {
     case getTargetInfo = 0x14
     case deviceUdid = 0x16
     case lock       = 0x17
+    case pressKey   = 0x18
     case error      = 0x99
     case response   = 0xA0
 }
@@ -63,6 +64,13 @@ enum AgentRequest {
     case getTargetInfo
     case deviceUdid
     case lock
+    case pressKey(key: KeyName)
+}
+
+/// System key for `pressKey`; raw value is the wire key code.
+enum KeyName: UInt8 {
+    case back = 0
+    case home = 1
 }
 
 // MARK: - Response
@@ -275,6 +283,13 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
 
     case .lock:
         return .lock
+
+    case .pressKey:
+        let code = try cursor.readUInt8()
+        guard let key = KeyName(rawValue: code) else {
+            throw ProtocolError.invalidPayload("unknown key code \(code)")
+        }
+        return .pressKey(key: key)
 
     case .error, .response:
         throw ProtocolError.invalidPayload(

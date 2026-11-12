@@ -585,6 +585,10 @@ pub trait AutomationDriver: Send + Sync {
     /// Lock the device (press the lock button).
     async fn lock(&self) -> Result<(), DriverError>;
 
+    /// Press a system key (back, home). Fails when the platform does not
+    /// support the key (iOS has no back key).
+    async fn press_key(&self, key: crate::protocol::KeyName) -> Result<(), DriverError>;
+
     /// Perform a long press at specific screen coordinates.
     ///
     /// # Arguments

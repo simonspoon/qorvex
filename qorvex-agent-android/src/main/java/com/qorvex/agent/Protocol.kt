@@ -35,6 +35,7 @@ enum class OpCode(val value: Int) {
     FIND_ELEMENT(0x13),
     GET_TARGET_INFO(0x14),
     BRIDGE_HEALTH(0x15),
+    PRESS_KEY(0x18),
     ERROR(0x99),
     RESPONSE(0xA0);
 
@@ -95,6 +96,19 @@ sealed class AgentRequest {
     ) : AgentRequest()
     object GetTargetInfo : AgentRequest()
     object BridgeHealth : AgentRequest()
+    data class PressKey(val key: KeyName) : AgentRequest()
+}
+
+/** System key for [AgentRequest.PressKey]; [code] is the wire key code. */
+enum class KeyName(val code: Int) {
+    BACK(0),
+    HOME(1);
+
+    companion object {
+        fun fromCode(code: Int): KeyName =
+            entries.firstOrNull { it.code == code }
+                ?: throw ProtocolException.InvalidPayload("unknown key code $code")
+    }
 }
 
 /** A response to send back to the Rust host. */
@@ -280,6 +294,8 @@ fun decodeRequest(data: ByteArray): AgentRequest {
         OpCode.GET_TARGET_INFO -> AgentRequest.GetTargetInfo
 
         OpCode.BRIDGE_HEALTH -> AgentRequest.BridgeHealth
+
+        OpCode.PRESS_KEY -> AgentRequest.PressKey(KeyName.fromCode(cursor.readUInt8()))
 
         OpCode.ERROR, OpCode.RESPONSE ->
             throw ProtocolException.InvalidPayload(

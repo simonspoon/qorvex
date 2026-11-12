@@ -262,6 +262,20 @@ class ProtocolWireTest {
         decodeRequest(byteArrayOf(0xFF.toByte()))
     }
 
+    @Test
+    fun decodePressKey() {
+        // opcode 0x18 + u8 key code (0 = back, 1 = home)
+        val back = decodeRequest(byteArrayOf(0x18, 0)) as AgentRequest.PressKey
+        assertEquals(KeyName.BACK, back.key)
+        val home = decodeRequest(byteArrayOf(0x18, 1)) as AgentRequest.PressKey
+        assertEquals(KeyName.HOME, home.key)
+    }
+
+    @Test(expected = ProtocolException.InvalidPayload::class)
+    fun decodePressKeyUnknownCodeFails() {
+        decodeRequest(byteArrayOf(0x18, 7))
+    }
+
     @Test(expected = ProtocolException.InsufficientData::class)
     fun decodeTruncatedPayload() {
         // TapCoord needs 8 bytes after opcode; give only 4.

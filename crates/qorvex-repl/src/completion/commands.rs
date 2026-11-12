@@ -411,6 +411,15 @@ pub static COMMANDS: &[CommandDef] = &[
         options: &[],
     },
     CommandDef {
+        name: "key",
+        description: "Press a system key: back (Android only) or home",
+        args: &[ArgSpec {
+            name: "name",
+            completion: ArgCompletion::None,
+        }],
+        options: &[],
+    },
+    CommandDef {
         name: "tap-location",
         description: "Tap at screen coordinates",
         args: &[

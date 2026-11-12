@@ -78,6 +78,7 @@ impl LogConverter {
                 from_x, from_y, to_x, to_y
             )),
             ActionType::Lock => Some("qorvex lock".to_string()),
+            ActionType::Key { name } => Some(format!("qorvex key {}", name.as_str())),
             ActionType::SendKeys { text, replace } => Some(format!(
                 "qorvex send-keys {}{}",
                 if *replace { "--replace " } else { "" },
@@ -408,6 +409,20 @@ mod tests {
             LogConverter::action_to_command(&ActionType::Lock, None),
             Some("qorvex lock".to_string())
         );
+    }
+
+    #[test]
+    fn test_key_to_command() {
+        use qorvex_core::protocol::KeyName;
+        for (name, want) in [
+            (KeyName::Back, "qorvex key back"),
+            (KeyName::Home, "qorvex key home"),
+        ] {
+            assert_eq!(
+                LogConverter::action_to_command(&ActionType::Key { name }, None),
+                Some(want.to_string())
+            );
+        }
     }
 
     #[test]

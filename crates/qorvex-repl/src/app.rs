@@ -847,6 +847,13 @@ impl App {
                 action: ActionType::Lock,
                 tag: args.tag.clone(),
             },
+            "key" => IpcRequest::Execute {
+                // validate_enum_args has already rejected a missing or unknown key.
+                action: ActionType::Key {
+                    name: args.positional[0].parse().expect("validated key name"),
+                },
+                tag: args.tag.clone(),
+            },
             "tap-location" => {
                 if args.positional.len() < 2 {
                     self.add_output(format_result(
@@ -1383,6 +1390,13 @@ impl App {
                 action: ActionType::Lock,
                 tag: args.tag.clone(),
             },
+            "key" => IpcRequest::Execute {
+                // validate_enum_args has already rejected a missing or unknown key.
+                action: ActionType::Key {
+                    name: args.positional[0].parse().expect("validated key name"),
+                },
+                tag: args.tag.clone(),
+            },
             "tap-location" => {
                 if args.positional.len() < 2 {
                     self.add_output(format_result(
@@ -1807,6 +1821,7 @@ impl App {
             "  swipe [direction]        Swipe: up, down, left, right",
             "  swipe --from x,y --to x,y  Swipe between two coordinates",
             "  lock                     Lock the selected device",
+            "  key <back|home>          Press a system key (back: Android only)",
             "  tap-location <x> <y>    Tap at screen coordinates",
             "  get-value <sel> [--label] [--type T] [--no-wait]",
             "  wait-for <sel> [--label] [--type T] [--timeout ms]",
@@ -1918,6 +1933,8 @@ fn absolute_arg(path: &str) -> String {
 
 /// Valid `app-container` container kinds (CLI `ContainerArg`).
 const CONTAINER_KINDS: &[&str] = &["app", "data", "groups"];
+/// Valid `key` names (CLI `KeyArg`).
+const KEYS: &[&str] = &["back", "home"];
 /// Valid `set-appearance` values (CLI `AppearanceArg`).
 const APPEARANCES: &[&str] = &["dark", "light"];
 /// Valid `set-content-size` values (CLI `ContentSizeArg`).
@@ -1969,7 +1986,7 @@ fn check_enum(label: &str, value: &str, valid: &[&str]) -> Option<String> {
     }
 }
 
-/// Validate the enum-typed positionals of `app-container`, `set-appearance`,
+/// Validate the enum-typed positionals of `app-container`, `key`, `set-appearance`,
 /// `set-content-size` and `grant-permission` against the values the CLI
 /// accepts. Returns an error message, or `None` if the args are valid (or the
 /// command has no enum args). A missing required value is invalid.
@@ -1980,6 +1997,7 @@ fn validate_enum_args(cmd: &str, positional: &[String]) -> Option<String> {
         "app-container" => positional
             .get(1)
             .and_then(|v| check_enum("container", v, CONTAINER_KINDS)),
+        "key" => check_enum("key", arg(0), KEYS),
         "set-appearance" => check_enum("appearance", arg(0), APPEARANCES),
         "set-content-size" => check_enum("content size", arg(0), CONTENT_SIZES),
         "grant-permission" => check_enum("verb", arg(0), PRIVACY_VERBS)
@@ -2247,6 +2265,17 @@ mod tests {
     #[test]
     fn test_validate_other_commands_unaffected() {
         assert!(validate_enum_args("tap", &pos(&["bogus"])).is_none());
+    }
+
+    #[test]
+    fn test_validate_key() {
+        for k in ["back", "home"] {
+            assert!(validate_enum_args("key", &pos(&[k])).is_none());
+            assert!(k.parse::<qorvex_core::protocol::KeyName>().is_ok());
+        }
+        let msg = validate_enum_args("key", &pos(&["bogus"])).unwrap();
+        assert!(msg.contains("back, home"), "{msg}");
+        assert!(validate_enum_args("key", &[]).is_some());
     }
 
     // --- parse_command tests (updated for new CLI-style syntax) ---

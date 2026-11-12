@@ -63,6 +63,7 @@ use qorvex_core::ipc::{
     agent_port_path, qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform,
 };
 use qorvex_core::memory::MemoryInfo;
+use qorvex_core::protocol::KeyName;
 use qorvex_core::simctl::{QuietOutcome, Simctl};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -118,6 +119,25 @@ impl From<PlatformArg> for Platform {
         match p {
             PlatformArg::Ios => Platform::Ios,
             PlatformArg::Android => Platform::Android,
+        }
+    }
+}
+
+/// System key for `qorvex key` (CLI-facing; maps to
+/// [`qorvex_core::protocol::KeyName`]).
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum KeyArg {
+    /// Back (Android only)
+    Back,
+    /// Home
+    Home,
+}
+
+impl From<KeyArg> for KeyName {
+    fn from(k: KeyArg) -> Self {
+        match k {
+            KeyArg::Back => KeyName::Back,
+            KeyArg::Home => KeyName::Home,
         }
     }
 }
@@ -512,6 +532,16 @@ enum Command {
 
     /// Lock the selected device (press the lock button)
     Lock {
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Press a system key: back (Android only) or home
+    Key {
+        /// Key to press
+        #[arg(value_enum)]
+        name: KeyArg,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1613,6 +1643,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Command::Lock { ref tag } => {
             execute_action(&mut client, ActionType::Lock, tag.clone(), &cli).await
+        }
+        Command::Key { name, ref tag } => {
+            let action = ActionType::Key { name: name.into() };
+            execute_action(&mut client, action, tag.clone(), &cli).await
         }
         Command::SetTarget {
             ref bundle_id,
@@ -3528,6 +3562,32 @@ mod tests {
     fn lock_parses() {
         let cli = Cli::try_parse_from(["qorvex", "lock"]).unwrap();
         assert!(matches!(cli.command, Command::Lock { .. }));
+    }
+
+    #[test]
+    fn key_parses_each_name() {
+        for (arg, want) in [("back", KeyName::Back), ("home", KeyName::Home)] {
+            let cli = Cli::try_parse_from(["qorvex", "key", arg]).unwrap();
+            let Command::Key { name, .. } = cli.command else {
+                panic!("expected Command::Key for {arg}")
+            };
+            assert_eq!(KeyName::from(name), want);
+        }
+    }
+
+    #[test]
+    fn key_rejects_unknown_name_with_usage_error() {
+        for args in [&["qorvex", "key", "bogus"][..], &["qorvex", "key"][..]] {
+            let Err(err) = Cli::try_parse_from(args) else {
+                panic!("{:?} should be rejected", args)
+            };
+            assert_eq!(err.exit_code(), 2, "{:?}", args);
+        }
+        let Err(err) = Cli::try_parse_from(["qorvex", "key", "bogus"]) else {
+            panic!("bogus key should be rejected")
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("back") && msg.contains("home"), "{msg}");
     }
 
     #[test]

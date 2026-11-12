@@ -55,6 +55,7 @@ Both sides use a sequential reader pattern (`ProtocolCursor` in Rust, equivalent
 | FindElement | `0x13` | `String selector`, `Bool by_label`, `Optional String element_type` | Find single element with live hittability |
 | GetTargetInfo | `0x14` | (none) | Get metadata (state, version, build, display name) for the current target app |
 | Lock | `0x17` | (none) | Lock the device (iOS agent: `XCUIDevice.pressLockButton`); replies `Ok`. iOS-only for now: the Android agent does not implement 0x17 |
+| PressKey | `0x18` | `u8 key` (`0` = back, `1` = home) | Press a system key; replies `Ok`, or `Error` when the platform call fails or the key is unsupported (iOS has no back key). Decoders reject any other key code with an invalid-payload error |
 
 ### Special OpCodes (Agent-initiated)
 

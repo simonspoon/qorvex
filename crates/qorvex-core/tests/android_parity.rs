@@ -50,7 +50,7 @@ use common::{connected_android_executor, connected_executor};
 
 use qorvex_core::action::ActionType;
 use qorvex_core::executor::ExecutionResult;
-use qorvex_core::protocol::Response;
+use qorvex_core::protocol::{KeyName, Response};
 
 /// Normalize an `ExecutionResult::data` payload for cross-backend comparison by
 /// stripping the wall-clock `elapsed_ms` field. That field is measured
@@ -245,6 +245,45 @@ async fn parity_swipe_coords() {
 #[tokio::test]
 async fn parity_lock() {
     run_parity("lock", ActionType::Lock, vec![Response::Ok, Response::Ok]).await;
+}
+
+// --- Key ---
+#[tokio::test]
+async fn parity_key() {
+    for name in [KeyName::Back, KeyName::Home] {
+        run_parity(
+            "key",
+            ActionType::Key { name },
+            vec![Response::Ok, Response::Ok],
+        )
+        .await;
+    }
+    run_parity(
+        "key-error",
+        ActionType::Key {
+            name: KeyName::Back,
+        },
+        vec![
+            Response::Ok,
+            Response::Error {
+                message: "key 'back' is not supported on iOS".to_string(),
+            },
+        ],
+    )
+    .await;
+}
+
+// The executor reports which key was pressed.
+#[tokio::test]
+async fn key_result_message() {
+    let exec = connected_executor(vec![Response::Ok, Response::Ok]).await;
+    let result = exec
+        .execute(ActionType::Key {
+            name: KeyName::Back,
+        })
+        .await;
+    assert!(result.success, "{}", result.message);
+    assert_eq!(result.message, "Pressed key: back");
 }
 
 // --- LongPress ---
@@ -578,6 +617,7 @@ fn matrix_covers_every_action_type() {
         "swipe",
         "swipe_coords",
         "lock",
+        "key",
         "long_press",
         "send_keys",
         "get_screen_info",
@@ -630,6 +670,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::Swipe { .. }
             | ActionType::SwipeCoords { .. }
             | ActionType::Lock
+            | ActionType::Key { .. }
             | ActionType::LongPress { .. }
             | ActionType::SendKeys { .. }
             | ActionType::GetScreenInfo
@@ -685,7 +726,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        38,
+        39,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

@@ -379,6 +379,11 @@ impl<T: AgentTransport> AutomationDriver for AgentSession<T> {
         expect_ok(response)
     }
 
+    async fn press_key(&self, key: crate::protocol::KeyName) -> Result<(), DriverError> {
+        let response = self.send(&Request::PressKey { key }).await?;
+        expect_ok(response)
+    }
+
     async fn long_press(&self, x: i32, y: i32, duration: f64) -> Result<(), DriverError> {
         let response = self.send(&Request::LongPress { x, y, duration }).await?;
         expect_ok(response)

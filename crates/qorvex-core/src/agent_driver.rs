@@ -576,6 +576,34 @@ mod tests {
         driver.lock().await.unwrap();
     }
 
+    #[tokio::test]
+    async fn press_key_sends_request() {
+        let addr = mock_server_with_connect(Response::Ok).await;
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        driver.connect().await.unwrap();
+
+        driver
+            .press_key(crate::protocol::KeyName::Home)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn press_key_surfaces_agent_error() {
+        let addr = mock_server_with_connect(Response::Error {
+            message: "key 'back' is not supported on iOS".to_string(),
+        })
+        .await;
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        driver.connect().await.unwrap();
+
+        let err = driver
+            .press_key(crate::protocol::KeyName::Back)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported on iOS"), "{err}");
+    }
+
     // -----------------------------------------------------------------------
     // Long press
     // -----------------------------------------------------------------------

@@ -526,6 +526,11 @@ impl ActionExecutor {
                 Err(e) => ExecutionResult::failure(e.to_string()),
             },
 
+            ActionType::Key { name } => match self.driver.press_key(name).await {
+                Ok(_) => ExecutionResult::success(format!("Pressed key: {}", name.as_str())),
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
+
             ActionType::LongPress { x, y, duration } => {
                 match self.driver.long_press(x, y, duration).await {
                     Ok(_) => ExecutionResult::success(format!(

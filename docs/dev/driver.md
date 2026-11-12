@@ -40,6 +40,7 @@ All methods grouped by category. The trait has 23 async methods and 1 sync metho
 |--------|-------------|
 | `async fn swipe(&self, start_x: i32, start_y: i32, end_x: i32, end_y: i32, duration: Option<f64>) -> Result<(), DriverError>` | Swipe gesture with optional duration |
 | `async fn lock(&self) -> Result<(), DriverError>` | Lock the device (lock button) |
+| `async fn press_key(&self, key: KeyName) -> Result<(), DriverError>` | Press a system key (back, home); fails where the platform lacks the key |
 | `async fn long_press(&self, x: i32, y: i32, duration: f64) -> Result<(), DriverError>` | Long press at coordinates |
 
 ### Input

@@ -7,6 +7,7 @@
 
 package com.qorvex.agent
 
+import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.UiAutomation
 import android.os.SystemClock
@@ -74,6 +75,7 @@ class CommandHandler {
             is AgentRequest.FindElement ->
                 handleFindElement(request.selector, request.byLabel, request.elementType)
             is AgentRequest.GetTargetInfo -> handleGetTargetInfo()
+            is AgentRequest.PressKey -> handlePressKey(request.key)
         }
     } catch (e: Exception) {
         AgentResponse.Error("Internal agent error: ${e.message ?: e.javaClass.simpleName}")
@@ -266,6 +268,19 @@ class CommandHandler {
         }
 
     // -- Tap coordinate -----------------------------------------------------
+
+    private fun handlePressKey(key: KeyName): AgentResponse {
+        val action = when (key) {
+            KeyName.BACK -> AccessibilityService.GLOBAL_ACTION_BACK
+            KeyName.HOME -> AccessibilityService.GLOBAL_ACTION_HOME
+        }
+        val name = key.name.lowercase()
+        return if (uiAutomation.performGlobalAction(action)) {
+            AgentResponse.Ok
+        } else {
+            AgentResponse.Error("Press key '$name' failed: performGlobalAction returned false")
+        }
+    }
 
     private fun handleTapCoord(x: Int, y: Int): AgentResponse {
         return if (uiDevice.click(x, y)) AgentResponse.Ok

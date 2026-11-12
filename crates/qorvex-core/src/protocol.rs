@@ -110,6 +110,8 @@ pub enum OpCode {
     DeviceUdid = 0x16,
     /// Lock the device via the lock button (no payload).
     Lock = 0x17,
+    /// Press a system key (u8 key code: 0 = back, 1 = home; see [`KeyName`]).
+    PressKey = 0x18,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -137,6 +139,7 @@ impl OpCode {
             0x15 => Ok(OpCode::BridgeHealth),
             0x16 => Ok(OpCode::DeviceUdid),
             0x17 => Ok(OpCode::Lock),
+            0x18 => Ok(OpCode::PressKey),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -214,6 +217,58 @@ pub enum Request {
     DeviceUdid,
     /// Lock the device (press the lock button).
     Lock,
+    /// Press a system key.
+    PressKey { key: KeyName },
+}
+
+/// A system key for [`Request::PressKey`].
+///
+/// Wire encoding is one byte: `0` = back, `1` = home. Serialized (action log,
+/// IPC) as the lowercase name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyName {
+    /// The Android back key. Not supported on iOS.
+    Back = 0,
+    /// The home key.
+    Home = 1,
+}
+
+impl KeyName {
+    /// The lowercase key name used on the command line.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeyName::Back => "back",
+            KeyName::Home => "home",
+        }
+    }
+
+    /// Decode a wire key code.
+    pub fn from_code(code: u8) -> Result<Self, ProtocolError> {
+        match code {
+            0 => Ok(KeyName::Back),
+            1 => Ok(KeyName::Home),
+            other => Err(ProtocolError::InvalidPayload(format!(
+                "unknown key code {}",
+                other
+            ))),
+        }
+    }
+}
+
+impl std::str::FromStr for KeyName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "back" => Ok(KeyName::Back),
+            "home" => Ok(KeyName::Home),
+            other => Err(format!(
+                "unknown key '{}': expected one of: back, home",
+                other
+            )),
+        }
+    }
 }
 
 impl Request {
@@ -238,6 +293,7 @@ impl Request {
             Request::BridgeHealth => "bridge_health",
             Request::DeviceUdid => "device_udid",
             Request::Lock => "lock",
+            Request::PressKey { .. } => "press_key",
         }
     }
 }
@@ -602,6 +658,10 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
         Request::Lock => {
             payload.push(OpCode::Lock as u8);
         }
+        Request::PressKey { key } => {
+            payload.push(OpCode::PressKey as u8);
+            payload.push(*key as u8);
+        }
     }
 
     encode_frame(&payload)
@@ -729,6 +789,11 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
         OpCode::DeviceUdid => Ok(Request::DeviceUdid),
 
         OpCode::Lock => Ok(Request::Lock),
+
+        OpCode::PressKey => {
+            let key = KeyName::from_code(cur.read_u8()?)?;
+            Ok(Request::PressKey { key })
+        }
 
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
@@ -1150,6 +1215,37 @@ mod tests {
         let wire = encode_request(&Request::Lock);
         // 4-byte header with length=1, then opcode 0x17
         assert_eq!(wire, vec![1, 0, 0, 0, 0x17]);
+    }
+
+    #[test]
+    fn request_press_key() {
+        round_trip_request(&Request::PressKey { key: KeyName::Back });
+        round_trip_request(&Request::PressKey { key: KeyName::Home });
+    }
+
+    #[test]
+    fn press_key_wire_format() {
+        // 4-byte header with length=2, opcode 0x18, key code byte
+        let back = encode_request(&Request::PressKey { key: KeyName::Back });
+        assert_eq!(back, vec![2, 0, 0, 0, 0x18, 0]);
+        let home = encode_request(&Request::PressKey { key: KeyName::Home });
+        assert_eq!(home, vec![2, 0, 0, 0, 0x18, 1]);
+    }
+
+    #[test]
+    fn press_key_unknown_code_rejected() {
+        let err = decode_request(&[0x18, 7]).unwrap_err();
+        assert_eq!(
+            err,
+            ProtocolError::InvalidPayload("unknown key code 7".to_string())
+        );
+    }
+
+    #[test]
+    fn key_name_from_str() {
+        assert_eq!("back".parse::<KeyName>(), Ok(KeyName::Back));
+        assert_eq!("home".parse::<KeyName>(), Ok(KeyName::Home));
+        assert!("bogus".parse::<KeyName>().is_err());
     }
 
     #[test]

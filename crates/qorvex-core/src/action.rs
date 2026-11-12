@@ -147,6 +147,12 @@ pub enum ActionType {
     /// Lock the device (press the lock button).
     Lock,
 
+    /// Press a system key (back, home).
+    Key {
+        /// The key to press.
+        name: crate::protocol::KeyName,
+    },
+
     /// Long press at specific screen coordinates.
     LongPress {
         /// The x-coordinate in screen points.
@@ -422,6 +428,7 @@ impl ActionType {
             ActionType::Swipe { .. } => "swipe",
             ActionType::SwipeCoords { .. } => "swipe_coords",
             ActionType::Lock => "lock",
+            ActionType::Key { .. } => "key",
             ActionType::LongPress { .. } => "long_press",
             ActionType::LogComment { .. } => "log_comment",
             ActionType::GetScreenshot => "get_screenshot",
@@ -464,6 +471,7 @@ impl ActionType {
             ActionType::Tap { .. } | ActionType::TapLocation { .. } => "Tap",
             ActionType::Swipe { .. } | ActionType::SwipeCoords { .. } => "Swipe",
             ActionType::Lock => "Lock",
+            ActionType::Key { .. } => "Key",
             ActionType::LongPress { .. } => "LongPress",
             ActionType::LogComment { .. } => "Comment",
             ActionType::GetScreenshot => "Screenshot",
@@ -540,6 +548,7 @@ impl ActionType {
             }
             ActionType::TapLocation { x, y } => format!("({},{})", x, y),
             ActionType::Swipe { direction } => direction.clone(),
+            ActionType::Key { name } => name.as_str().to_string(),
             ActionType::SwipeCoords {
                 from_x,
                 from_y,
