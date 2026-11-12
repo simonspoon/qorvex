@@ -229,6 +229,7 @@ again the next time it asks.
 | `tap <selector> --label` | Tap by label |
 | `tap <selector> --label --type Button` | Tap by label with type filter |
 | `tap <selector> --no-wait` | Tap without waiting for element |
+| `tap <selector> --if-present` | Tap only if the element is in the tree right now; otherwise print `'<selector>' not present, skipped` to stderr and exit 0. One lookup, then a single tap attempt like `--no-wait` (same errors and exit codes). The lookup and the tap are two requests, so the element can vanish in between. Accepted together with `--no-wait` |
 | `tap <selector> --timeout 10000` | Tap with custom timeout |
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
@@ -304,6 +305,9 @@ Returns success as soon as the element is absent or not hittable. Fails with tim
 | `get-value <selector>` | Get element value by ID |
 | `get-value <selector> --label` | Get by label |
 | `get-value <selector> --no-wait` | Without waiting |
+| `exists <selector> [-l] [-T <type>]` | Is the element in the accessibility tree right now? One lookup, no waiting or retry |
+
+`qorvex exists` prints `true`/`false` (with `-f json`: `{"exists":true,"hittable":<bool|null>}` or `{"exists":false}`). Exit code 0 = present, **4 = absent**; a lookup that could not be answered (target app not running, connection, protocol, driver error) keeps its usual exit code (1/2/3) and is never reported as absent. "Present" means in the agent's tree, not visible: hidden, offscreen and non-hittable elements count (`hittable` is the agent's value, `null` when the agent does not report it). Needs a server from the same release (an older server fails `exists` and `tap --if-present` only).
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 

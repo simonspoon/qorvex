@@ -2292,6 +2292,36 @@ impl ServerState {
                     }
                 }
 
+                // `exists` answering "absent" is only trustworthy while the
+                // target app is up: with no app the agent finds nothing, which
+                // must not read as "absent". Ask once, only on an absent answer.
+                if result.success && matches!(action, ActionType::Exists { .. }) {
+                    let absent = result
+                        .data
+                        .as_deref()
+                        .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                        .is_some_and(|v| v["exists"] == false);
+                    if let (true, Some(bundle)) = (absent, self.target_bundle_id.clone()) {
+                        let lost = match executor.driver().get_target_info().await {
+                            Ok(info) => target_lost_message(
+                                &bundle,
+                                &info.state,
+                                "cannot tell whether the element exists",
+                            ),
+                            // Cannot verify the target: do not claim "absent".
+                            Err(e) => Some(format!(
+                                "Cannot tell whether the element exists: target check failed: {}",
+                                e
+                            )),
+                        };
+                        if let Some(msg) = lost {
+                            result.success = false;
+                            result.message = msg;
+                            result.data = None;
+                        }
+                    }
+                }
+
                 // Log to session
                 let action_result = if result.success {
                     ActionResult::Success

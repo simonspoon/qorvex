@@ -146,6 +146,21 @@ pub enum ActionType {
         timeout_ms: Option<u64>,
     },
 
+    /// Report whether an element is in the accessibility tree right now.
+    ///
+    /// One lookup, no waiting, no retry. Returns `{"exists":bool,"hittable":bool|null}`
+    /// in the result data; an absent element is a success with `exists:false`,
+    /// while a driver error is a failure. "Present" means found in the tree
+    /// (hidden, offscreen and non-hittable elements count).
+    Exists {
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
+    },
+
     /// Send keyboard input.
     SendKeys {
         /// The text to type.
@@ -342,6 +357,7 @@ impl ActionType {
             ActionType::GetScreenInfo => "get_screen_info",
             ActionType::GetScreenTree => "get_screen_tree",
             ActionType::GetValue { .. } => "get_value",
+            ActionType::Exists { .. } => "exists",
             ActionType::SendKeys { .. } => "send_keys",
             ActionType::WaitFor { .. } => "wait_for",
             ActionType::WaitForNot { .. } => "wait_for_not",
@@ -381,6 +397,7 @@ impl ActionType {
             ActionType::GetScreenshot => "Screenshot",
             ActionType::GetScreenInfo | ActionType::GetScreenTree => "ScreenInfo",
             ActionType::GetValue { .. } => "GetValue",
+            ActionType::Exists { .. } => "Exists",
             ActionType::SendKeys { .. } => "Type",
             ActionType::WaitFor { .. } => "Find",
             ActionType::WaitForNot { .. } => "Gone",
@@ -422,6 +439,9 @@ impl ActionType {
                 selector, by_label, ..
             }
             | ActionType::GetValue {
+                selector, by_label, ..
+            }
+            | ActionType::Exists {
                 selector, by_label, ..
             } => {
                 if *by_label {

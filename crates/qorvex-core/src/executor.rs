@@ -402,6 +402,26 @@ impl ActionExecutor {
                 Err(e) => ExecutionResult::failure(e.to_string()),
             },
 
+            ActionType::Exists {
+                ref selector,
+                by_label,
+                ref element_type,
+            } => match self
+                .driver
+                .find_element_with_read_timeout(selector, by_label, element_type.as_deref(), None)
+                .await
+            {
+                // One lookup: `Ok(None)` is "absent"; a driver error is not.
+                Ok(Some(element)) => ExecutionResult::success(format!("'{}' exists", selector))
+                    .with_data(
+                        serde_json::json!({"exists": true, "hittable": element.hittable})
+                            .to_string(),
+                    ),
+                Ok(None) => ExecutionResult::success(format!("'{}' does not exist", selector))
+                    .with_data(serde_json::json!({"exists": false}).to_string()),
+                Err(e) => ExecutionResult::failure(e.to_string()),
+            },
+
             ActionType::GetValue {
                 ref selector,
                 by_label,

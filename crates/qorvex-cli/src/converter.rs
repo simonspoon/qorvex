@@ -95,6 +95,20 @@ impl LogConverter {
                 }
                 Some(cmd)
             }
+            ActionType::Exists {
+                selector,
+                by_label,
+                element_type,
+            } => {
+                let mut cmd = format!("qorvex exists {}", shell_escape(selector));
+                if *by_label {
+                    cmd.push_str(" --label");
+                }
+                if let Some(t) = element_type {
+                    cmd.push_str(&format!(" -T {}", shell_escape(t)));
+                }
+                Some(cmd)
+            }
             ActionType::WaitFor {
                 selector,
                 by_label,
@@ -383,6 +397,19 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&ActionType::GetScreenInfo, None),
             Some("qorvex screen-info".to_string())
+        );
+    }
+
+    #[test]
+    fn test_exists_to_command() {
+        let action = ActionType::Exists {
+            selector: "Tap Me".to_string(),
+            by_label: true,
+            element_type: Some("Button".to_string()),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex exists 'Tap Me' --label -T Button".to_string())
         );
     }
 

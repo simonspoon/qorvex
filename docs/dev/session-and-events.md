@@ -89,6 +89,7 @@ enum ActionType {
     GetScreenshot,
     GetScreenInfo,
     GetScreenTree,
+    Exists { selector: String, by_label: bool, element_type: Option<String> },  // one lookup; data {"exists":bool,"hittable":bool|null}
     GetValue { selector: String, by_label: bool, element_type: Option<String> },
     WaitFor { selector: String, by_label: bool, element_type: Option<String> },
     WaitForNot { selector: String, by_label: bool, element_type: Option<String> },

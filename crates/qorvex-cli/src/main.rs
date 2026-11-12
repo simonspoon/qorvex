@@ -316,6 +316,10 @@ enum Command {
         /// Skip retry, attempt tap once without waiting
         #[arg(long)]
         no_wait: bool,
+        /// Tap only if the element is in the tree right now; otherwise skip
+        /// (exit 0). One lookup, then a single tap attempt like --no-wait.
+        #[arg(long)]
+        if_present: bool,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -392,6 +396,24 @@ enum Command {
         /// Skip retry, attempt get-value once without waiting
         #[arg(long)]
         no_wait: bool,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Check whether an element is in the accessibility tree right now
+    ///
+    /// One lookup, no waiting. Exit 0 = present, 4 = absent; errors keep
+    /// their usual exit codes. "Present" means in the tree, not visible.
+    Exists {
+        /// The selector (accessibility ID or label)
+        selector: String,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -797,7 +819,11 @@ async fn main() -> ExitCode {
     };
     // `--no-wait` forwards no element timeout, so it does not stretch the deadline.
     let forwarded = match cli.command {
-        Command::Tap { no_wait: true, .. } | Command::GetValue { no_wait: true, .. } => None,
+        Command::Tap { no_wait: true, .. }
+        | Command::Tap {
+            if_present: true, ..
+        }
+        | Command::GetValue { no_wait: true, .. } => None,
         _ => element,
     };
     if let Some(deadline) = command_deadline(is_wait, forwarded, cli.timeout, env_deadline) {
@@ -810,7 +836,9 @@ async fn main() -> ExitCode {
             if screen_info_json {
                 println!("{}", screen_info_error_json(&e));
             }
-            eprintln!("Error: {}", e);
+            if !matches!(e, CliError::Absent) {
+                eprintln!("Error: {}", e);
+            }
             e.exit_code()
         }
     }
@@ -948,6 +976,8 @@ enum CliError {
     Connection(String),
     ActionFailed(String),
     Protocol(String),
+    /// `exists` answered "not in the tree" (exit 4); not an error to report.
+    Absent,
 }
 
 impl CliError {
@@ -956,6 +986,7 @@ impl CliError {
             CliError::Connection(_) => ExitCode::from(2),
             CliError::ActionFailed(_) => ExitCode::from(1),
             CliError::Protocol(_) => ExitCode::from(3),
+            CliError::Absent => ExitCode::from(4),
         }
     }
 }
@@ -966,6 +997,7 @@ impl std::fmt::Display for CliError {
             CliError::Connection(msg) => write!(f, "Connection error: {}", msg),
             CliError::ActionFailed(msg) => write!(f, "Action failed: {}", msg),
             CliError::Protocol(msg) => write!(f, "Protocol error: {}", msg),
+            CliError::Absent => write!(f, "element not present"),
         }
     }
 }
@@ -1322,9 +1354,25 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             label,
             ref element_type,
             no_wait,
+            if_present,
             ref tag,
         } => {
-            let timeout_ms = if no_wait {
+            if if_present {
+                let probe = ActionType::Exists {
+                    selector: selector.clone(),
+                    by_label: label,
+                    element_type: element_type.clone(),
+                };
+                // The lookup and the tap are two requests; the element may
+                // change in between (accepted race).
+                if !query_exists(&mut client, probe, tag.clone()).await?.exists {
+                    if !cli.quiet {
+                        eprintln!("'{}' not present, skipped", selector);
+                    }
+                    return Ok(());
+                }
+            }
+            let timeout_ms = if no_wait || if_present {
                 None
             } else {
                 Some(element_timeout(&cli))
@@ -1407,6 +1455,28 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 &cli,
             )
             .await
+        }
+        Command::Exists {
+            ref selector,
+            label,
+            ref element_type,
+            ref tag,
+        } => {
+            let probe = ActionType::Exists {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+            };
+            let found = query_exists(&mut client, probe, tag.clone()).await?;
+            println!(
+                "{}",
+                exists_output(&found, cli.format == OutputFormat::Json)
+            );
+            if found.exists {
+                Ok(())
+            } else {
+                Err(CliError::Absent)
+            }
         }
         Command::Swipe {
             ref direction,
@@ -1663,6 +1733,62 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         | Command::QuietDevice { .. }
         | Command::Start { .. }
         | Command::Completions { .. } => unreachable!(),
+    }
+}
+
+/// Answer of an `Exists` action.
+#[derive(Debug, PartialEq)]
+struct ExistsAnswer {
+    exists: bool,
+    hittable: Option<bool>,
+}
+
+/// Parses the `Exists` result data (`{"exists":bool,"hittable":bool|null}`).
+fn parse_exists(data: &str) -> Result<ExistsAnswer, CliError> {
+    let v: serde_json::Value = serde_json::from_str(data)
+        .map_err(|e| CliError::Protocol(format!("Invalid exists response: {}", e)))?;
+    let exists = v
+        .get("exists")
+        .and_then(|e| e.as_bool())
+        .ok_or_else(|| CliError::Protocol("Invalid exists response: no `exists`".to_string()))?;
+    Ok(ExistsAnswer {
+        exists,
+        hittable: v.get("hittable").and_then(|h| h.as_bool()),
+    })
+}
+
+/// Stdout text for `exists`: `true`/`false`, or the JSON object under `-f json`.
+fn exists_output(answer: &ExistsAnswer, json: bool) -> String {
+    if !json {
+        answer.exists.to_string()
+    } else if answer.exists {
+        serde_json::json!({"exists": true, "hittable": answer.hittable}).to_string()
+    } else {
+        serde_json::json!({"exists": false}).to_string()
+    }
+}
+
+/// Sends one `Exists` action and returns its answer. A failed lookup (dead
+/// target, driver error) is an error, never "absent".
+async fn query_exists(
+    client: &mut IpcClient,
+    action: ActionType,
+    tag: Option<String>,
+) -> Result<ExistsAnswer, CliError> {
+    let response = client
+        .send(&IpcRequest::Execute { action, tag })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+    match response {
+        IpcResponse::ActionResult {
+            success: true,
+            data,
+            ..
+        } => parse_exists(data.as_deref().unwrap_or("")),
+        IpcResponse::ActionResult { message, .. } | IpcResponse::Error { message } => {
+            Err(CliError::ActionFailed(message))
+        }
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
 }
 
@@ -2887,6 +3013,90 @@ mod tests {
             Ok(_) => panic!("--all --full must be a usage error"),
         }
         assert!(Cli::try_parse_from(["qorvex", "screen-info", "--all", "--pretty"]).is_ok());
+    }
+
+    #[test]
+    fn exists_parses_selector_label_type_tag() {
+        let cli = Cli::try_parse_from([
+            "qorvex", "exists", "Tap Me", "-l", "-T", "Button", "--tag", "t",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Exists {
+                selector,
+                label,
+                element_type,
+                tag,
+            } => {
+                assert_eq!(selector, "Tap Me");
+                assert!(label);
+                assert_eq!(element_type.as_deref(), Some("Button"));
+                assert_eq!(tag.as_deref(), Some("t"));
+            }
+            _ => panic!("expected Exists"),
+        }
+    }
+
+    #[test]
+    fn tap_if_present_parses_alone_and_with_no_wait() {
+        for args in [
+            &["qorvex", "tap", "x", "--if-present"][..],
+            &["qorvex", "tap", "x", "--if-present", "--no-wait"][..],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            match cli.command {
+                Command::Tap { if_present, .. } => assert!(if_present),
+                _ => panic!("expected Tap"),
+            }
+        }
+        match Cli::try_parse_from(["qorvex", "tap", "x"]).unwrap().command {
+            Command::Tap { if_present, .. } => assert!(!if_present),
+            _ => panic!("expected Tap"),
+        }
+    }
+
+    #[test]
+    fn exists_exit_codes_absent_is_4_errors_unchanged() {
+        assert_eq!(CliError::Absent.exit_code(), ExitCode::from(4));
+        assert_eq!(
+            CliError::ActionFailed("x".into()).exit_code(),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            CliError::Connection("x".into()).exit_code(),
+            ExitCode::from(2)
+        );
+        assert_eq!(
+            CliError::Protocol("x".into()).exit_code(),
+            ExitCode::from(3)
+        );
+    }
+
+    #[test]
+    fn exists_answer_parse_and_output_shapes() {
+        let present = parse_exists(r#"{"exists":true,"hittable":false}"#).unwrap();
+        assert_eq!(
+            present,
+            ExistsAnswer {
+                exists: true,
+                hittable: Some(false)
+            }
+        );
+        assert_eq!(exists_output(&present, false), "true");
+        assert_eq!(
+            exists_output(&present, true),
+            r#"{"exists":true,"hittable":false}"#
+        );
+        let no_hittable = parse_exists(r#"{"exists":true,"hittable":null}"#).unwrap();
+        assert_eq!(
+            exists_output(&no_hittable, true),
+            r#"{"exists":true,"hittable":null}"#
+        );
+        let absent = parse_exists(r#"{"exists":false}"#).unwrap();
+        assert_eq!(exists_output(&absent, false), "false");
+        assert_eq!(exists_output(&absent, true), r#"{"exists":false}"#);
+        assert!(parse_exists("garbage").is_err());
+        assert!(parse_exists("{}").is_err());
     }
 
     fn swipe_parse(args: &[&str]) -> Result<Cli, clap::Error> {

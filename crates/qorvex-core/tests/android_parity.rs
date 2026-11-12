@@ -545,6 +545,7 @@ fn matrix_covers_every_action_type() {
         "get_screen_info",
         "get_screen_tree",
         "get_value",
+        "exists",
         "get_screenshot",
         "wait_for",
         "wait_for_not",
@@ -595,6 +596,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::GetScreenInfo
             | ActionType::GetScreenTree
             | ActionType::GetValue { .. }
+            | ActionType::Exists { .. }
             | ActionType::GetScreenshot
             | ActionType::WaitFor { .. }
             | ActionType::WaitForNot { .. }
@@ -643,7 +645,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        36,
+        37,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

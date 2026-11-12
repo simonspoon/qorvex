@@ -437,3 +437,62 @@ async fn test_executor_get_value_none_via_agent_driver() {
     let data = result.data.expect("should have data");
     assert_eq!(data, "null");
 }
+
+// ---------------------------------------------------------------------------
+// Exists: found / absent / driver error
+// ---------------------------------------------------------------------------
+
+fn exists_action() -> ActionType {
+    ActionType::Exists {
+        selector: "banner".to_string(),
+        by_label: false,
+        element_type: None,
+    }
+}
+
+#[tokio::test]
+async fn test_executor_exists_found_reports_hittable() {
+    let executor = connected_executor(vec![
+        Response::Ok, // heartbeat
+        Response::Element {
+            json: r#"{"identifier":"banner","hittable":false,"children":[]}"#.to_string(),
+        },
+    ])
+    .await;
+
+    let result = executor.execute(exists_action()).await;
+    assert!(result.success, "{}", result.message);
+    let v: serde_json::Value = serde_json::from_str(&result.data.unwrap()).unwrap();
+    assert_eq!(v, serde_json::json!({"exists": true, "hittable": false}));
+}
+
+#[tokio::test]
+async fn test_executor_exists_absent_is_success_false() {
+    let executor = connected_executor(vec![
+        Response::Ok, // heartbeat
+        Response::Element {
+            json: "null".to_string(),
+        },
+    ])
+    .await;
+
+    let result = executor.execute(exists_action()).await;
+    assert!(result.success, "{}", result.message);
+    let v: serde_json::Value = serde_json::from_str(&result.data.unwrap()).unwrap();
+    assert_eq!(v, serde_json::json!({"exists": false}));
+}
+
+#[tokio::test]
+async fn test_executor_exists_driver_error_is_failure_not_absent() {
+    let executor = connected_executor(vec![
+        Response::Ok, // heartbeat
+        Response::Error {
+            message: "target app is not running".to_string(),
+        },
+    ])
+    .await;
+
+    let result = executor.execute(exists_action()).await;
+    assert!(!result.success, "a driver error must not read as absent");
+    assert!(result.data.is_none());
+}
