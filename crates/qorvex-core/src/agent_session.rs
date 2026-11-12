@@ -385,10 +385,11 @@ impl<T: AgentTransport> AutomationDriver for AgentSession<T> {
     }
 
     #[instrument(skip(self), level = "debug")]
-    async fn type_text(&self, text: &str) -> Result<(), DriverError> {
+    async fn type_text(&self, text: &str, replace: bool) -> Result<(), DriverError> {
         let response = self
             .send(&Request::TypeText {
                 text: text.to_string(),
+                replace,
             })
             .await?;
         expect_ok(response)

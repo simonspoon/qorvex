@@ -606,7 +606,7 @@ mod tests {
         let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
         driver.connect().await.unwrap();
 
-        driver.type_text("hello@example.com").await.unwrap();
+        driver.type_text("hello@example.com", false).await.unwrap();
     }
 
     // -----------------------------------------------------------------------

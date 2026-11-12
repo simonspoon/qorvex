@@ -555,6 +555,7 @@ mod tests {
         // Build a frame larger than the buffer so write_all blocks.
         let big_request = Request::TypeText {
             text: "x".repeat(1024),
+            replace: false,
         };
         let frame = encode_request(&big_request);
 

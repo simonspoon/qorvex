@@ -70,8 +70,8 @@ final class CommandHandler {
         case .tapWithType(let selector, let byLabel, let elementType, let timeoutMs):
             return handleTapWithType(selector: selector, byLabel: byLabel, elementType: elementType, timeoutMs: timeoutMs)
 
-        case .typeText(let text):
-            return handleTypeText(text: text)
+        case .typeText(let text, let replace):
+            return handleTypeText(text: text, replace: replace)
 
         case .swipe(let startX, let startY, let endX, let endY, let duration):
             return handleSwipe(
@@ -296,12 +296,14 @@ final class CommandHandler {
 
     // MARK: - Type text
 
-    private func handleTypeText(text: String) -> AgentResponse {
+    private func handleTypeText(text: String, replace: Bool) -> AgentResponse {
         // Type text into the element that currently has keyboard focus.
         // On iOS, the first responder receives typeText events through the app.
         // We try to find the focused element first; if we can't, we check for
         // a visible keyboard and use the app directly. If neither is available,
         // return an error instead of crashing from an unhandled ObjC exception.
+        // `replace` clears the focused element first (delete key once per
+        // character of its current value), so it holds exactly `text`.
         let focusedElement = app.descendants(matching: .any).matching(
             NSPredicate(format: "hasKeyboardFocus == YES")
         ).firstMatch
@@ -310,8 +312,28 @@ final class CommandHandler {
         var objcError: NSError?
         let caught = QVXTryCatch({
             if focusedElement.exists {
-                focusedElement.typeText(text)
+                if replace {
+                    guard let current = self.currentFieldText(focusedElement) else {
+                        errorMsg = "cannot read current value to replace"
+                        return
+                    }
+                    if !current.isEmpty {
+                        focusedElement.typeText(
+                            String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))  // deletes before the caret
+                        if let after = self.currentFieldText(focusedElement), !after.isEmpty {
+                            errorMsg = "TypeText failed: could not clear the focused field"
+                            return
+                        }
+                    }
+                }
+                if !text.isEmpty {
+                    focusedElement.typeText(text)
+                }
             } else if self.app.keyboards.firstMatch.exists {
+                if replace {
+                    errorMsg = "cannot read current value to replace"
+                    return
+                }
                 self.app.typeText(text)
             } else {
                 errorMsg = "No keyboard visible; tap a text field first"
@@ -325,6 +347,16 @@ final class CommandHandler {
             return .error(message: errorMsg)
         }
         return .ok
+    }
+
+    /// The text currently in a field, with placeholder text treated as empty.
+    /// Returns nil when the value is not readable as a string.
+    private func currentFieldText(_ element: XCUIElement) -> String? {
+        guard let value = element.value as? String else { return nil }
+        if let placeholder = element.placeholderValue, !placeholder.isEmpty, value == placeholder {
+            return ""
+        }
+        return value
     }
 
     // MARK: - Swipe

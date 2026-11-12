@@ -525,7 +525,18 @@ pub static COMMANDS: &[CommandDef] = &[
             name: "text",
             completion: ArgCompletion::None,
         }],
-        options: &[],
+        options: &[
+            OptionSpec {
+                flag: "--append",
+                takes_value: false,
+                description: "Type after the existing content (default)",
+            },
+            OptionSpec {
+                flag: "--replace",
+                takes_value: false,
+                description: "Field holds exactly the text afterwards",
+            },
+        ],
     },
     CommandDef {
         name: "log-comment",

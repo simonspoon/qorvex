@@ -52,7 +52,7 @@ enum AgentRequest {
     case tapElement(selector: String, timeoutMs: UInt64?)
     case tapByLabel(label: String, timeoutMs: UInt64?)
     case tapWithType(selector: String, byLabel: Bool, elementType: String, timeoutMs: UInt64?)
-    case typeText(text: String)
+    case typeText(text: String, replace: Bool)
     case swipe(startX: Int32, startY: Int32, endX: Int32, endY: Int32, duration: Double?)
     case getValue(selector: String, byLabel: Bool, elementType: String?, timeoutMs: UInt64?)
     case longPress(x: Int32, y: Int32, duration: Double)
@@ -225,7 +225,9 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
 
     case .typeText:
         let text = try cursor.readString()
-        return .typeText(text: text)
+        // Optional trailing mode byte: absent or 0 = append, 1 = replace.
+        let replace = cursor.remaining > 0 ? try cursor.readBool() : false
+        return .typeText(text: text, replace: replace)
 
     case .swipe:
         let startX = try cursor.readInt32()

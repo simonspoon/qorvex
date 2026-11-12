@@ -97,6 +97,7 @@ async fn test_executor_type_text_via_agent_driver() {
     let result = executor
         .execute(ActionType::SendKeys {
             text: "hello".to_string(),
+            replace: false,
         })
         .await;
 
@@ -109,6 +110,71 @@ async fn test_executor_type_text_via_agent_driver() {
         result.message.contains("hello"),
         "message should mention the text"
     );
+}
+
+// 3b. send-keys modes: empty text without --replace is a no-op (no request);
+//     --replace (also with empty text) reaches the wire as replace=true.
+// ---------------------------------------------------------------------------
+
+async fn send_keys_recorded(
+    text: &str,
+    replace: bool,
+    responses: Vec<Response>,
+) -> (bool, Vec<qorvex_core::protocol::Request>) {
+    let (addr, seen) = common::recording_mock_agent(responses).await;
+    let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+    driver.connect().await.unwrap();
+    let executor = ActionExecutor::new(Arc::new(driver));
+    let result = executor
+        .execute(ActionType::SendKeys {
+            text: text.to_string(),
+            replace,
+        })
+        .await;
+    let requests = seen.lock().unwrap().clone();
+    (result.success, requests)
+}
+
+#[tokio::test]
+async fn test_send_keys_empty_without_replace_sends_nothing() {
+    use qorvex_core::protocol::Request;
+    let (ok, requests) = send_keys_recorded("", false, vec![Response::Ok]).await;
+    assert!(ok, "empty send-keys must succeed as a no-op");
+    assert_eq!(requests, vec![Request::Heartbeat]);
+}
+
+#[tokio::test]
+async fn test_send_keys_empty_with_replace_clears() {
+    use qorvex_core::protocol::Request;
+    let (ok, requests) = send_keys_recorded("", true, vec![Response::Ok, Response::Ok]).await;
+    assert!(ok);
+    assert_eq!(
+        requests,
+        vec![
+            Request::Heartbeat,
+            Request::TypeText {
+                text: String::new(),
+                replace: true
+            }
+        ]
+    );
+}
+
+#[tokio::test]
+async fn test_send_keys_mode_reaches_driver() {
+    use qorvex_core::protocol::Request;
+    for replace in [false, true] {
+        let (ok, requests) =
+            send_keys_recorded("abc", replace, vec![Response::Ok, Response::Ok]).await;
+        assert!(ok);
+        assert_eq!(
+            requests[1],
+            Request::TypeText {
+                text: "abc".to_string(),
+                replace
+            }
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -88,7 +88,8 @@ done
 | `qorvex tap-location <x> <y>` | Tap at coordinates |
 | `qorvex long-press <x> <y> [--duration <s>]` | Long press at coordinates (default 1.0s) |
 | `qorvex swipe <direction>` | Swipe up/down/left/right |
-| `qorvex send-keys 'text'` | Type text |
+| `qorvex send-keys 'text'` | Type text (appends to the focused field) |
+| `qorvex send-keys --replace 'text'` | Set the focused field to exactly `text` (`--replace ''` clears it) |
 | `qorvex screenshot` | Capture screenshot (base64) |
 | `qorvex screen-info` | Get UI elements |
 | `qorvex get-value <selector>` | Get element value |

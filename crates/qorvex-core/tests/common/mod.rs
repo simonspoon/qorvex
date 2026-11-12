@@ -15,7 +15,9 @@ use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::driver::AutomationDriver;
 use qorvex_core::executor::ActionExecutor;
 use qorvex_core::ipc::{IpcClient, IpcServer};
-use qorvex_core::protocol::{encode_response, read_frame_length, Response};
+use qorvex_core::protocol::{
+    decode_request, encode_response, read_frame_length, Request, Response,
+};
 use qorvex_core::session::Session;
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,35 @@ pub async fn mock_agent(responses: Vec<Response>) -> SocketAddr {
     });
 
     addr
+}
+
+/// Like [`mock_agent`], but also decodes every request it answers into the
+/// returned list, so a test can assert what (and whether) the driver sent.
+pub async fn recording_mock_agent(
+    responses: Vec<Response>,
+) -> (SocketAddr, Arc<std::sync::Mutex<Vec<Request>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        for response in responses {
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).await.unwrap();
+            let len = read_frame_length(&header) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            log.lock().unwrap().push(decode_request(&payload).unwrap());
+            stream.write_all(&encode_response(&response)).await.unwrap();
+            stream.flush().await.unwrap();
+        }
+        // See `mock_agent`: never initiate the close.
+        drain_until_client_closes(&mut stream).await;
+    });
+
+    (addr, seen)
 }
 
 /// Read and discard bytes until the peer closes the connection (EOF) or errors.

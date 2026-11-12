@@ -86,7 +86,7 @@ enum ActionType {
     TapLocation { x: i32, y: i32 },
     Swipe { direction: String },
     LongPress { x: i32, y: i32, duration: f64 },
-    SendKeys { text: String },
+    SendKeys { text: String, replace: bool },
     GetScreenshot,
     GetScreenInfo,
     GetScreenTree,

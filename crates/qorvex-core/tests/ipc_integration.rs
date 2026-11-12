@@ -321,6 +321,7 @@ fn test_all_action_types_serialization() {
         },
         ActionType::SendKeys {
             text: "hello".to_string(),
+            replace: false,
         },
         ActionType::WaitFor {
             label_match: None,
@@ -415,6 +416,7 @@ async fn test_session_broadcasts_to_multiple_subscribers() {
         .log_action(
             ActionType::SendKeys {
                 text: "test".to_string(),
+                replace: false,
             },
             ActionResult::Success,
             None,
@@ -507,6 +509,7 @@ async fn test_session_logs_actions() {
         .log_action(
             ActionType::SendKeys {
                 text: "test".to_string(),
+                replace: false,
             },
             ActionResult::Failure("Error".to_string()),
             None,
@@ -842,6 +845,7 @@ async fn test_session_creates_persistent_log_file() {
         .log_action(
             ActionType::SendKeys {
                 text: "hello world".to_string(),
+                replace: false,
             },
             ActionResult::Failure("Keyboard not available".to_string()),
             None,

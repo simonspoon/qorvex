@@ -173,7 +173,10 @@ pub enum Request {
         timeout_ms: Option<u64>,
     },
     /// Send keyboard input text.
-    TypeText { text: String },
+    ///
+    /// `replace` is encoded as one optional trailing byte (0 = append,
+    /// 1 = replace); a payload without it decodes as append.
+    TypeText { text: String, replace: bool },
     /// Perform a swipe gesture between two points.
     Swipe {
         start_x: i32,
@@ -524,9 +527,10 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
             write_string(&mut payload, element_type);
             write_optional_u64(&mut payload, *timeout_ms);
         }
-        Request::TypeText { text } => {
+        Request::TypeText { text, replace } => {
             payload.push(OpCode::TypeText as u8);
             write_string(&mut payload, text);
+            write_bool(&mut payload, *replace);
         }
         Request::Swipe {
             start_x,
@@ -654,7 +658,8 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
 
         OpCode::TypeText => {
             let text = cur.read_string()?;
-            Ok(Request::TypeText { text })
+            let replace = cur.remaining() > 0 && cur.read_bool()?;
+            Ok(Request::TypeText { text, replace })
         }
 
         OpCode::Swipe => {
@@ -926,13 +931,37 @@ mod tests {
     fn request_type_text() {
         round_trip_request(&Request::TypeText {
             text: "hello world".into(),
+            replace: false,
         });
+    }
+
+    #[test]
+    fn request_type_text_replace() {
+        round_trip_request(&Request::TypeText {
+            text: "abc".into(),
+            replace: true,
+        });
+    }
+
+    #[test]
+    fn request_type_text_without_mode_byte_decodes_as_append() {
+        // Payload from an older client: opcode + string, no trailing mode byte.
+        let mut payload = vec![OpCode::TypeText as u8];
+        write_string(&mut payload, "abc");
+        assert_eq!(
+            decode_request(&payload).unwrap(),
+            Request::TypeText {
+                text: "abc".into(),
+                replace: false,
+            }
+        );
     }
 
     #[test]
     fn request_type_text_unicode() {
         round_trip_request(&Request::TypeText {
             text: "cafe\u{0301} \u{1F600}".into(),
+            replace: false,
         });
     }
 

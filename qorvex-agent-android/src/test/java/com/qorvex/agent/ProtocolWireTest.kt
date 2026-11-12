@@ -210,6 +210,15 @@ class ProtocolWireTest {
         val payload = byteArrayOf(0x06) + le32(text.toByteArray().size) + text.toByteArray()
         val req = decodeRequest(payload) as AgentRequest.TypeText
         assertEquals(text, req.text)
+        assertEquals("no mode byte decodes as append", false, req.replace)
+    }
+
+    @Test
+    fun decodeTypeTextModeByte() {
+        val text = "abc"
+        val base = byteArrayOf(0x06) + le32(text.toByteArray().size) + text.toByteArray()
+        assertEquals(false, (decodeRequest(base + byteArrayOf(0)) as AgentRequest.TypeText).replace)
+        assertEquals(true, (decodeRequest(base + byteArrayOf(1)) as AgentRequest.TypeText).replace)
     }
 
     @Test

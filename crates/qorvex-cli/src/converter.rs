@@ -78,9 +78,11 @@ impl LogConverter {
                 from_x, from_y, to_x, to_y
             )),
             ActionType::Lock => Some("qorvex lock".to_string()),
-            ActionType::SendKeys { text } => {
-                Some(format!("qorvex send-keys {}", shell_escape(text)))
-            }
+            ActionType::SendKeys { text, replace } => Some(format!(
+                "qorvex send-keys {}{}",
+                if *replace { "--replace " } else { "" },
+                shell_escape(text)
+            )),
             ActionType::GetScreenshot => Some("qorvex screenshot".to_string()),
             ActionType::GetScreenInfo => Some("qorvex screen-info".to_string()),
             ActionType::GetScreenTree => Some("qorvex screen-info --all".to_string()),
@@ -412,6 +414,7 @@ mod tests {
     fn test_send_keys_to_command() {
         let action = ActionType::SendKeys {
             text: "hello".to_string(),
+            replace: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
@@ -423,6 +426,7 @@ mod tests {
     fn test_send_keys_with_spaces() {
         let action = ActionType::SendKeys {
             text: "hello world".to_string(),
+            replace: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
@@ -434,10 +438,23 @@ mod tests {
     fn test_send_keys_with_single_quotes() {
         let action = ActionType::SendKeys {
             text: "it's".to_string(),
+            replace: false,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex send-keys 'it'\\''s'".to_string())
+        );
+    }
+
+    #[test]
+    fn test_send_keys_replace() {
+        let action = ActionType::SendKeys {
+            text: "hello world".to_string(),
+            replace: true,
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex send-keys --replace 'hello world'".to_string())
         );
     }
 

@@ -360,10 +360,16 @@ enum Command {
         tag: Option<String>,
     },
 
-    /// Send keyboard input
+    /// Send keyboard input to the focused field (appends by default; empty text is a no-op)
     SendKeys {
         /// Text to type
         text: String,
+        /// Type after the existing content (default)
+        #[arg(long, conflicts_with = "replace")]
+        append: bool,
+        /// Make the field hold exactly <TEXT> afterwards (`--replace ""` clears it)
+        #[arg(long)]
+        replace: bool,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1505,10 +1511,18 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             )
             .await
         }
-        Command::SendKeys { ref text, ref tag } => {
+        Command::SendKeys {
+            ref text,
+            append: _,
+            replace,
+            ref tag,
+        } => {
             execute_action(
                 &mut client,
-                ActionType::SendKeys { text: text.clone() },
+                ActionType::SendKeys {
+                    text: text.clone(),
+                    replace,
+                },
                 tag.clone(),
                 &cli,
             )
@@ -3144,6 +3158,22 @@ mod tests {
             Ok(_) => panic!("--all --full must be a usage error"),
         }
         assert!(Cli::try_parse_from(["qorvex", "screen-info", "--all", "--pretty"]).is_ok());
+    }
+
+    #[test]
+    fn send_keys_append_replace_flags() {
+        let replace_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Command::SendKeys { replace, .. } => replace,
+            _ => panic!("expected SendKeys"),
+        };
+        assert!(!replace_of(&["qorvex", "send-keys", "abc"]));
+        assert!(!replace_of(&["qorvex", "send-keys", "--append", "abc"]));
+        assert!(replace_of(&["qorvex", "send-keys", "--replace", "abc"]));
+        assert!(replace_of(&["qorvex", "send-keys", "--replace", ""]));
+        match Cli::try_parse_from(["qorvex", "send-keys", "--append", "--replace", "abc"]) {
+            Err(e) => assert_eq!(e.kind(), clap::error::ErrorKind::ArgumentConflict),
+            Ok(_) => panic!("--append --replace must be a usage error"),
+        }
     }
 
     #[test]

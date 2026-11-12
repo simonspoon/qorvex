@@ -70,7 +70,7 @@ sealed class AgentRequest {
         val elementType: String,
         val timeoutMs: Long?,
     ) : AgentRequest()
-    data class TypeText(val text: String) : AgentRequest()
+    data class TypeText(val text: String, val replace: Boolean = false) : AgentRequest()
     data class Swipe(
         val startX: Int,
         val startY: Int,
@@ -232,7 +232,12 @@ fun decodeRequest(data: ByteArray): AgentRequest {
             AgentRequest.TapWithType(selector, byLabel, elementType, timeoutMs)
         }
 
-        OpCode.TYPE_TEXT -> AgentRequest.TypeText(cursor.readString())
+        OpCode.TYPE_TEXT -> {
+            val text = cursor.readString()
+            // Optional trailing mode byte: absent or 0 = append, 1 = replace.
+            val replace = cursor.remaining > 0 && cursor.readBool()
+            AgentRequest.TypeText(text, replace)
+        }
 
         OpCode.SWIPE -> {
             val startX = cursor.readInt32()

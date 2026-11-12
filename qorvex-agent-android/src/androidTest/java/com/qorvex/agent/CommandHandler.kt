@@ -62,7 +62,7 @@ class CommandHandler {
                 handleTap(request.label, byLabel = true, elementType = null, timeoutMs = request.timeoutMs)
             is AgentRequest.TapWithType ->
                 handleTap(request.selector, request.byLabel, request.elementType, request.timeoutMs)
-            is AgentRequest.TypeText -> handleTypeText(request.text)
+            is AgentRequest.TypeText -> handleTypeText(request.text, request.replace)
             is AgentRequest.Swipe ->
                 handleSwipe(request.startX, request.startY, request.endX, request.endY, request.duration)
             is AgentRequest.LongPress -> handleLongPress(request.x, request.y, request.duration)
@@ -362,14 +362,20 @@ class CommandHandler {
 
     // -- Type text ----------------------------------------------------------
 
-    private fun handleTypeText(text: String): AgentResponse {
+    private fun handleTypeText(text: String, replace: Boolean): AgentResponse {
         val focused = uiAutomation.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: rootNode()?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         if (focused == null) {
             return AgentResponse.Error("No focused input; tap a text field first")
         }
+        val newText = typeTextResult(
+            current = focused.text?.toString(),
+            showingHint = android.os.Build.VERSION.SDK_INT >= 26 && focused.isShowingHintText,
+            typed = text,
+            replace = replace,
+        )
         val args = android.os.Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
         }
         val ok = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         return if (ok) AgentResponse.Ok

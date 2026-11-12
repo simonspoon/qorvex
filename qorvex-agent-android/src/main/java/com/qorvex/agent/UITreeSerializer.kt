@@ -175,3 +175,20 @@ fun getValueResult(editable: Boolean, value: String?, label: String?): String? {
     }
     return if (label.isNullOrEmpty()) null else label
 }
+
+/**
+ * The text `send-keys` sets on the focused field (ACTION_SET_TEXT).
+ *
+ * Replace sets exactly [typed]. Append adds [typed] after the field's current
+ * text; a field only showing its hint/placeholder counts as empty. Android
+ * always appends at the end (the cursor position is not honoured).
+ *
+ * @param current        the node's current text (null when none)
+ * @param showingHint    whether [current] is the hint text (isShowingHintText)
+ * @param typed          the text sent by the client
+ * @param replace        replace mode instead of append
+ */
+fun typeTextResult(current: String?, showingHint: Boolean, typed: String, replace: Boolean): String {
+    if (replace || showingHint) return typed
+    return (current ?: "") + typed
+}

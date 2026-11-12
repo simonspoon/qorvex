@@ -536,10 +536,16 @@ impl ActionExecutor {
                 }
             }
 
-            ActionType::SendKeys { ref text } => match self.driver.type_text(text).await {
-                Ok(_) => ExecutionResult::success(format!("Sent keys: '{}'", text)),
-                Err(e) => ExecutionResult::failure(e.to_string()),
-            },
+            ActionType::SendKeys { ref text, replace } => {
+                // Empty text is a no-op unless replacing (which clears the field).
+                if text.is_empty() && !replace {
+                    return ExecutionResult::success(format!("Sent keys: '{}'", text));
+                }
+                match self.driver.type_text(text, replace).await {
+                    Ok(_) => ExecutionResult::success(format!("Sent keys: '{}'", text)),
+                    Err(e) => ExecutionResult::failure(e.to_string()),
+                }
+            }
 
             ActionType::GetScreenshot => match self.driver.screenshot().await {
                 Ok(bytes) => {

@@ -599,7 +599,9 @@ pub trait AutomationDriver: Send + Sync {
     /// # Arguments
     ///
     /// * `text` - The text to type
-    async fn type_text(&self, text: &str) -> Result<(), DriverError>;
+    /// * `replace` - If true, the field holds exactly `text` afterwards;
+    ///   if false, `text` is appended to the existing content
+    async fn type_text(&self, text: &str, replace: bool) -> Result<(), DriverError>;
 
     /// Get the full UI element hierarchy.
     ///

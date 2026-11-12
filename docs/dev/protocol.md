@@ -45,7 +45,7 @@ Both sides use a sequential reader pattern (`ProtocolCursor` in Rust, equivalent
 | TapElement | `0x03` | `String selector`, `Optional u64 timeout_ms` | Tap element by accessibility ID; agent retries locally when timeout_ms is set |
 | TapByLabel | `0x04` | `String label`, `Optional u64 timeout_ms` | Tap element by accessibility label; agent retries locally when timeout_ms is set |
 | TapWithType | `0x05` | `String selector`, `Bool by_label`, `String element_type`, `Optional u64 timeout_ms` | Tap element with type constraint; agent retries locally when timeout_ms is set |
-| TypeText | `0x06` | `String text` | Type text into focused element |
+| TypeText | `0x06` | `String text`, `[u8 mode]` | Type text into focused element. Optional trailing mode byte: absent or `0` = append, `1` = replace (field holds exactly `text`). Rust always writes the byte; decoders accept payloads without it |
 | Swipe | `0x07` | `i32 start_x`, `i32 start_y`, `i32 end_x`, `i32 end_y`, `Bool has_duration`, `[f64 duration if true]` | Swipe gesture; velocity computed from distance/duration on agent side |
 | GetValue | `0x08` | `String selector`, `Bool by_label`, `Optional String element_type`, `Optional u64 timeout_ms` | Get element value; agent retries locally when timeout_ms is set |
 | LongPress | `0x09` | `i32 x`, `i32 y`, `f64 duration` | Long press at coordinates |

@@ -269,6 +269,7 @@ async fn parity_send_keys() {
         "send-keys",
         ActionType::SendKeys {
             text: "hello@example.com".to_string(),
+            replace: false,
         },
         vec![Response::Ok, Response::Ok],
     )

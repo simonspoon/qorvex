@@ -315,6 +315,7 @@ async fn test_multiple_sequential_actions_via_ipc() {
         .send(&IpcRequest::Execute {
             action: ActionType::SendKeys {
                 text: "admin".to_string(),
+                replace: false,
             },
             tag: None,
         })

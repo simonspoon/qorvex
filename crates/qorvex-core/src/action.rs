@@ -216,6 +216,10 @@ pub enum ActionType {
     SendKeys {
         /// The text to type.
         text: String,
+        /// If true, the field holds exactly `text` afterwards (`--replace`);
+        /// if false, `text` is appended (`--append`, the default).
+        #[serde(default)]
+        replace: bool,
     },
 
     /// Wait for an element to appear on screen by ID or label.
@@ -543,7 +547,7 @@ impl ActionType {
                 to_y,
             } => format!("({},{})->({},{})", from_x, from_y, to_x, to_y),
             ActionType::LongPress { x, y, duration } => format!("({},{}) {:.1}s", x, y, duration),
-            ActionType::SendKeys { text } => {
+            ActionType::SendKeys { text, .. } => {
                 if text.len() > 20 {
                     format!("'{}..'", &text[..18])
                 } else {

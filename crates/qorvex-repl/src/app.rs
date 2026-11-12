@@ -952,22 +952,18 @@ impl App {
                     tag: args.tag.clone(),
                 }
             }
-            "send-keys" => {
-                let text = args.positional.join(" ");
-                if text.is_empty() {
-                    self.add_output(format_result(
-                        false,
-                        "send-keys requires text: send-keys <text>",
-                    ));
+            "send-keys" => match send_keys_action(&args) {
+                Ok(action) => IpcRequest::Execute {
+                    action,
+                    tag: args.tag.clone(),
+                },
+                Err(msg) => {
+                    self.add_output(format_result(false, &msg));
                     self.input = Input::default();
                     self.completion.hide();
                     return;
                 }
-                IpcRequest::Execute {
-                    action: ActionType::SendKeys { text },
-                    tag: args.tag.clone(),
-                }
-            }
+            },
             "get-value" => {
                 let selector = args
                     .positional
@@ -1482,20 +1478,16 @@ impl App {
                     tag: args.tag.clone(),
                 }
             }
-            "send-keys" => {
-                let text = args.positional.join(" ");
-                if text.is_empty() {
-                    self.add_output(format_result(
-                        false,
-                        "send-keys requires text: send-keys <text>",
-                    ));
+            "send-keys" => match send_keys_action(&args) {
+                Ok(action) => IpcRequest::Execute {
+                    action,
+                    tag: args.tag.clone(),
+                },
+                Err(msg) => {
+                    self.add_output(format_result(false, &msg));
                     return;
                 }
-                IpcRequest::Execute {
-                    action: ActionType::SendKeys { text },
-                    tag: args.tag.clone(),
-                }
-            }
+            },
             "get-value" => {
                 let selector = args
                     .positional
@@ -1822,7 +1814,7 @@ impl App {
             "  wait-stable [--for ms] [--timeout ms]  Wait until the UI tree stops changing",
             "",
             "Input:",
-            "  send-keys <text>         Send keyboard input",
+            "  send-keys [--append|--replace] <text>  Send keyboard input (appends by default)",
             "  log-comment <message>    Log a comment to the session",
             "",
             "General:",
@@ -1862,6 +1854,26 @@ pub(crate) struct ParsedArgs {
     pub to: Option<String>,
     /// `--for <ms>` on `wait-stable`: the quiet period.
     pub stable_ms: Option<u64>,
+    /// `--append` on `send-keys` (the default mode).
+    pub append: bool,
+    /// `--replace` on `send-keys`: the field holds exactly the text afterwards.
+    pub replace: bool,
+}
+
+/// Build the `send-keys` action from parsed REPL args. Empty text is only
+/// accepted with `--replace` (which clears the field).
+fn send_keys_action(args: &ParsedArgs) -> Result<ActionType, String> {
+    if args.append && args.replace {
+        return Err("send-keys: --append and --replace cannot be used together".to_string());
+    }
+    let text = args.positional.join(" ");
+    if text.is_empty() && !args.replace {
+        return Err("send-keys requires text: send-keys [--append|--replace] <text>".to_string());
+    }
+    Ok(ActionType::SendKeys {
+        text,
+        replace: args.replace,
+    })
 }
 
 /// Build the `swipe` action from parsed REPL args: a direction (default `up`)
@@ -2043,6 +2055,8 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         from: None,
         to: None,
         stable_ms: None,
+        append: false,
+        replace: false,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -2077,6 +2091,8 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             "--to" if cmd == "swipe" => {
                 args.to = iter.next();
             }
+            "--append" if cmd == "send-keys" => args.append = true,
+            "--replace" if cmd == "send-keys" => args.replace = true,
             "--for" if cmd == "wait-stable" => {
                 if let Some(val) = iter.next() {
                     args.stable_ms = val.parse().ok();
@@ -2110,6 +2126,37 @@ mod tests {
         let (_, a) = parse_command("swipe --from 1,2 --to 3,4");
         assert_eq!(a.from.as_deref(), Some("1,2"));
         assert_eq!(a.to.as_deref(), Some("3,4"));
+    }
+
+    #[test]
+    fn test_send_keys_action() {
+        let (_, a) = parse_command("send-keys hello world");
+        assert!(matches!(
+            send_keys_action(&a),
+            Ok(ActionType::SendKeys { text, replace: false }) if text == "hello world"
+        ));
+        let (_, a) = parse_command("send-keys --append abc");
+        assert!(matches!(
+            send_keys_action(&a),
+            Ok(ActionType::SendKeys { text, replace: false }) if text == "abc"
+        ));
+        let (_, a) = parse_command("send-keys --replace abc");
+        assert!(matches!(
+            send_keys_action(&a),
+            Ok(ActionType::SendKeys { text, replace: true }) if text == "abc"
+        ));
+        let (_, a) = parse_command("send-keys --replace");
+        assert!(matches!(
+            send_keys_action(&a),
+            Ok(ActionType::SendKeys { text, replace: true }) if text.is_empty()
+        ));
+        let (_, a) = parse_command("send-keys");
+        assert!(send_keys_action(&a).is_err());
+        let (_, a) = parse_command("send-keys --append --replace abc");
+        assert!(send_keys_action(&a).is_err());
+        // The flags are only recognised on send-keys.
+        let (_, a) = parse_command("log-comment --replace");
+        assert_eq!(a.positional, vec!["--replace".to_string()]);
     }
 
     #[test]

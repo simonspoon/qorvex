@@ -264,7 +264,13 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 
 | Syntax | Description |
 |--------|-------------|
-| `send-keys <text>` | Type text into focused field (REPL and CLI) |
+| `send-keys <text>` | Type text into the focused field, after its existing content (REPL and CLI) |
+| `send-keys --append <text>` | Same as the default: append to the existing content |
+| `send-keys --replace <text>` | The field holds exactly `<text>` afterwards; `--replace ""` clears it |
+
+`--append` and `--replace` cannot be combined (exit 2). Both mean the same on iOS and Android. `send-keys ""` without `--replace` is a no-op (exit 0, nothing is sent to the device). No focused field fails with exit 1 ("No keyboard visible; tap a text field first" on iOS, "No focused input; tap a text field first" on Android).
+
+Platform notes: on Android, append always adds the text at the end of the field (the cursor position is not honoured), and a field showing only its hint/placeholder counts as empty (Android 8.0 / API 26 and later; older versions cannot tell hint text from content). On iOS, `--replace` clears the field with one delete key per character of its current value; it fails with "cannot read current value to replace" when the value cannot be read.
 
 ### Wait For Element
 

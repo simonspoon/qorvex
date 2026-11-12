@@ -407,7 +407,7 @@ mod tests {
     #[tokio::test]
     async fn type_text_sends_request() {
         let driver = driver_with_mock(Response::Ok).await;
-        driver.type_text("hello@example.com").await.unwrap();
+        driver.type_text("hello@example.com", false).await.unwrap();
     }
 
     // --- dump tree (uses the read-timeout path) ---
