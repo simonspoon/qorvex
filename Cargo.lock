@@ -1998,6 +1998,7 @@ dependencies = [
  "predicates",
  "qorvex-core",
  "serde_json",
+ "shlex",
  "tokio",
  "tracing",
  "tracing-subscriber",

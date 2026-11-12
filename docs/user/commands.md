@@ -548,6 +548,37 @@ Events: /tmp/run.mp4.events.json (4 events)
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
+## Batch
+
+| Command | Description |
+|---------|-------------|
+| CLI: `qorvex batch <file>` | Run the command lines in `<file>` in one `qorvex` process |
+| CLI: `qorvex batch` or `qorvex batch -` | Read the command lines from stdin |
+
+`qorvex batch` saves the process spawn per action: each line runs through the same code as the standalone command, in this one process (each line still opens its own connection to the session). It is not a script language: no variables, loops, conditionals or `sleep`.
+
+- **Line format:** one qorvex command per line, without the leading `qorvex`, e.g. `comment "step one"` or `tap-location 200 400`. Lines are split shell-style (single and double quotes, backslash escapes). Blank lines and lines whose first non-space character is `#` are skipped.
+- **Global flags:** `-s`, `-f`, `-q` and `-o` given before `batch` apply to every line unless the line passes the same flag itself (`-s other comment x`, `tap Login -o 3000`).
+- **Output:** each line prints exactly what the standalone command prints (stdout and stderr, text or `-f json`; `duration_ms` is timed per line).
+- **Stop on first failure:** lines run in order. The first line that fails stops the batch: it prints `batch: line <N>: <error>` on stderr (in place of the usual `Error: ...` line; also for exit 4 `element not present` and exit 5 `assertion failed`, which print no `Error:` line standalone) and `qorvex batch` exits with that line's own exit code (2 for a usage/parse error, otherwise the command's code, e.g. 1 action failed, 4 `exists` not present). Later lines are not run. All lines succeeding exits 0; an empty file prints nothing and exits 0.
+- **Not allowed / not applied:** `batch` inside a batch is refused (exit 2). There is **no per-line hard deadline**: `batch` arms no watchdog and `-o`/`QORVEX_COMMAND_TIMEOUT` do not end a line (`QORVEX_COMMAND_TIMEOUT` is not even validated); element timeouts on `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable` still apply. `doctor` exits the process directly when a check fails, so a failing `doctor` line ends the whole batch (exit 1) without the `batch: line` message.
+- **Read errors:** a missing or unreadable file exits 1 with `batch: cannot read <file>: <cause>` before any line runs. The whole input (file or stdin) is read before the first line runs.
+- Server-owned state outlives the batch process: e.g. a `record start` line keeps recording after `batch` exits, until `qorvex record stop`.
+
+Example:
+
+```zsh
+cat > steps.txt <<'EOF'
+# log in
+comment "batch one"
+tap-location 200 400
+swipe up
+comment "batch two"
+EOF
+qorvex -s demo batch steps.txt
+printf 'comment x\n' | qorvex -s demo batch -
+```
+
 ## Log Conversion
 
 | Command | Description |

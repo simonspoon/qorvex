@@ -523,3 +523,149 @@ fn test_record_stop_sidecar_warning() {
     assert!(v.get("event_count").is_none());
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Like `canned_server`, but records every request line it receives and
+/// answers `Execute` requests with success unless their text contains "FAIL".
+fn recording_server(name: &str) -> (PathBuf, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    let home = PathBuf::from(format!("/tmp/qvx_{}_{}", name, std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let sock = home.join(format!("qorvex_{}.sock", name));
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(sock).unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut writer = stream.try_clone().unwrap();
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                let ok = !line.contains("FAIL");
+                log.lock().unwrap().push(line);
+                let _ = writeln!(
+                    writer,
+                    r#"{{"type":"ActionResult","success":{},"message":"{}","screenshot":null,"data":null}}"#,
+                    ok,
+                    if ok { "ok" } else { "boom" }
+                );
+            }
+        }
+    });
+    (home, seen)
+}
+
+fn batch_file(home: &std::path::Path, body: &str) -> String {
+    let path = home.join("steps.txt");
+    std::fs::write(&path, body).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+fn comments(seen: &std::sync::Mutex<Vec<String>>) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            v["action"]["message"].as_str().unwrap_or("").to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn test_batch_runs_lines_in_order() {
+    let (home, seen) = recording_server("bord");
+    let file = batch_file(
+        &home,
+        "# setup\n\ncomment \"step one\"\n  comment two  \ncomment 'step three'\n",
+    );
+    let (out, _) = run_hung(&home, &[], &["-s", "bord", "batch", &file]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    assert_eq!(comments(&seen), ["step one", "two", "step three"]);
+    // Same output as three standalone runs (the action trace goes to stderr).
+    let (one, _) = run_hung(&home, &[], &["-s", "bord", "comment", "x"]);
+    assert_eq!(out.stdout, one.stdout);
+    let single = String::from_utf8_lossy(&one.stderr).into_owned();
+    assert!(!single.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).lines().count(),
+        3 * single.lines().count()
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn test_batch_stops_at_first_failure() {
+    let (home, seen) = recording_server("bfail");
+    // Parse error on line 2 (exit 2).
+    let file = batch_file(&home, "comment a\ntap-location notanumber 1\ncomment c\n");
+    let (out, _) = run_hung(&home, &[], &["-s", "bfail", "batch", &file]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("batch: line 2: error: invalid value"));
+    assert_eq!(comments(&seen), ["a"]);
+    // Runtime failure on line 2 keeps its own exit code (ActionFailed = 1).
+    seen.lock().unwrap().clear();
+    let file = batch_file(&home, "comment a\ncomment FAIL\ncomment c\n");
+    let (out, _) = run_hung(&home, &[], &["-s", "bfail", "batch", &file]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("batch: line 2: Action failed: boom"),
+        "{:?}",
+        out
+    );
+    assert_eq!(comments(&seen), ["a", "FAIL"]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn test_batch_nested_refused_and_missing_file() {
+    let (home, seen) = recording_server("bnest");
+    let file = batch_file(&home, "batch other.txt\ncomment after\n");
+    let (out, _) = run_hung(&home, &[], &["-s", "bnest", "batch", &file]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("batch: line 1: `batch` cannot be used inside a batch"));
+    assert!(comments(&seen).is_empty());
+    let missing = home.join("nope.txt");
+    let (out, _) = run_hung(&home, &[], &["batch", missing.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains(&format!("batch: cannot read {}: ", missing.display())));
+    let empty = batch_file(&home, "");
+    let (out, _) = run_hung(&home, &[], &["batch", &empty]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn test_batch_reads_stdin() {
+    use std::io::Write;
+    let (home, seen) = recording_server("bstdin");
+    for args in [
+        &["-s", "bstdin", "-f", "json", "batch"][..],
+        &["-s", "bstdin", "-f", "json", "batch", "-"][..],
+    ] {
+        seen.lock().unwrap().clear();
+        let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("qorvex"))
+            .env("QORVEX_HOME", &home)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"comment x\n")
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["success"], true);
+        assert!(v["duration_ms"].is_u64());
+        assert_eq!(comments(&seen), ["x"]);
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}

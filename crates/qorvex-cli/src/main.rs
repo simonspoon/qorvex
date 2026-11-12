@@ -1001,6 +1001,18 @@ enum Command {
     /// Stop the server for this session
     Stop,
 
+    /// Run qorvex command lines from a file (or stdin) in this one process
+    #[command(
+        after_help = "Each non-blank line not starting with # is one qorvex command \
+without the leading `qorvex`, split shell-style. Lines run in order; the first failing \
+line stops the batch (exit code = that line's). No per-line deadline.\n\n\
+Examples:\n  qorvex -s demo batch steps.txt\n  printf 'comment \"step one\"\\ntap-location 200 400\\n' | qorvex -s demo batch -"
+    )]
+    Batch {
+        /// File of command lines; omit or `-` to read stdin
+        file: Option<String>,
+    },
+
     /// Generate shell completion scripts
     Completions {
         /// Shell to generate completions for (zsh, bash, fish, elvish, powershell)
@@ -1027,14 +1039,23 @@ fn reset_sigpipe() {
 #[cfg(not(unix))]
 fn reset_sigpipe() {}
 
-/// When this command started; `-f json` objects report the time since then.
-static COMMAND_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// When this command started (reset for each `batch` line); `-f json`
+/// objects report the time since then.
+static COMMAND_STARTED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn mark_command_started() {
+    if let Ok(mut started) = COMMAND_STARTED.lock() {
+        *started = Some(std::time::Instant::now());
+    }
+}
 
 /// Adds `"duration_ms"` (wall-clock milliseconds since this command started)
 /// as the last key of a `-f json` object. Anything else comes back unchanged.
 fn with_duration_ms(json: &str) -> String {
     let ms = COMMAND_STARTED
-        .get()
+        .lock()
+        .ok()
+        .and_then(|started| *started)
         .map_or(0, |started| started.elapsed().as_millis() as u64);
     insert_duration_ms(json, ms)
 }
@@ -1060,7 +1081,7 @@ fn insert_duration_ms(json: &str, ms: u64) -> String {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let _ = COMMAND_STARTED.set(std::time::Instant::now());
+    mark_command_started();
     reset_sigpipe();
 
     tracing_subscriber::fmt()
@@ -1074,6 +1095,11 @@ async fn main() -> ExitCode {
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let screen_info_json =
         matches!(cli.command, Command::ScreenInfo { .. }) && cli.format == OutputFormat::Json;
+
+    // `batch` arms no watchdog: each line is validated and run by `batch`.
+    if let Command::Batch { ref file } = cli.command {
+        return batch(&cli, file.as_deref()).await;
+    }
 
     // Validate both env vars before anything runs (usage error, exit 2).
     let is_wait = is_wait_command(&cli.command);
@@ -1130,6 +1156,113 @@ async fn main() -> ExitCode {
             e.exit_code()
         }
     }
+}
+
+/// `qorvex batch`: runs each command line of `file` (stdin when absent or `-`)
+/// through [`run`] in this process, in order, stopping at the first failure
+/// with that line's exit code.
+async fn batch(cli: &Cli, file: Option<&str>) -> ExitCode {
+    use std::io::{Read, Write};
+    let text = match file {
+        None | Some("-") => {
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text).map(|_| text)
+        }
+        Some(path) => std::fs::read_to_string(path),
+    };
+    let text = match text {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("batch: cannot read {}: {}", file.unwrap_or("-"), e);
+            return ExitCode::from(1);
+        }
+    };
+    for (index, line) in text.lines().enumerate() {
+        let result = match batch_line_tokens(line) {
+            Ok(None) => continue,
+            Ok(Some(tokens)) => batch_line(cli, tokens).await,
+            Err(msg) => Err((ExitCode::from(2), msg)),
+        };
+        let _ = std::io::stdout().flush();
+        if let Err((code, msg)) = result {
+            eprintln!("batch: line {}: {}", index + 1, msg);
+            return code;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Tokens of one batch line split shell-style, `None` for a blank or `#` line.
+fn batch_line_tokens(line: &str) -> Result<Option<Vec<String>>, String> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return Ok(None);
+    }
+    shlex::split(line)
+        .map(Some)
+        .ok_or_else(|| "unbalanced quotes or trailing backslash".to_string())
+}
+
+/// Parses one batch line with the real CLI definition. The batch's own
+/// `-s`, `-f`, `-q`, `-o` apply unless the line passes the same flag (they are
+/// filled in after parsing: clap refuses a flag given twice).
+fn batch_parse(batch: &Cli, tokens: Vec<String>) -> Result<Cli, clap::Error> {
+    let matches =
+        Cli::command().try_get_matches_from(std::iter::once("qorvex".to_string()).chain(tokens))?;
+    let mut cli = Cli::from_arg_matches(&matches)?;
+    let from_line =
+        |id: &str| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine);
+    if !from_line("session") {
+        cli.session = batch.session.clone();
+    }
+    if !from_line("format") {
+        cli.format = batch.format;
+    }
+    cli.quiet |= batch.quiet;
+    cli.timeout = cli.timeout.or(batch.timeout);
+    Ok(cli)
+}
+
+/// Parses one batch line, applies `main`'s usage checks (no deadline) and
+/// runs it; `Err` carries its exit code and message.
+async fn batch_line(batch: &Cli, tokens: Vec<String>) -> Result<(), (ExitCode, String)> {
+    let cli = match batch_parse(batch, tokens) {
+        Ok(cli) => cli,
+        // `--help` / `--version` on a line: print it and carry on.
+        Err(e) if e.exit_code() == 0 => {
+            let _ = e.print();
+            return Ok(());
+        }
+        Err(e) => {
+            let code = ExitCode::from(e.exit_code() as u8);
+            return Err((code, e.render().to_string().trim_end().to_string()));
+        }
+    };
+    if matches!(cli.command, Command::Batch { .. }) {
+        return Err((
+            ExitCode::from(2),
+            "`batch` cannot be used inside a batch".to_string(),
+        ));
+    }
+    if is_wait_command(&cli.command) {
+        let timeout = element_timeout_checked(cli.timeout, std::env::var("QORVEX_TIMEOUT").ok())
+            .map_err(|msg| (ExitCode::from(2), msg))?;
+        if let Command::WaitStable { stable_ms, .. } = cli.command {
+            check_wait_stable(stable_ms, timeout).map_err(|msg| (ExitCode::from(2), msg))?;
+        }
+    }
+    let screen_info_json =
+        matches!(cli.command, Command::ScreenInfo { .. }) && cli.format == OutputFormat::Json;
+    mark_command_started();
+    run(cli).await.map_err(|e| {
+        if screen_info_json {
+            println!(
+                "{}",
+                with_duration_ms(&screen_info_error_json(&e).to_string())
+            );
+        }
+        (e.exit_code(), e.to_string())
+    })
 }
 
 /// Default hard deadline for a command, in milliseconds.
@@ -2450,6 +2583,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         | Command::Convert { .. }
         | Command::QuietDevice { .. }
         | Command::Start { .. }
+        | Command::Batch { .. }
         | Command::Completions { .. } => unreachable!(),
     }
 }
@@ -3836,6 +3970,69 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn toks(line: &str) -> Option<Vec<String>> {
+        batch_line_tokens(line).unwrap()
+    }
+
+    #[test]
+    fn test_batch_line_tokens() {
+        assert_eq!(toks(""), None);
+        assert_eq!(toks("   \t "), None);
+        assert_eq!(toks("# note"), None);
+        assert_eq!(toks("   # indented note"), None);
+        assert_eq!(
+            toks(r#"comment "step one"   "#),
+            Some(vec!["comment".to_string(), "step one".to_string()])
+        );
+        assert_eq!(
+            toks(r"comment it\'s 'a b'"),
+            Some(vec!["comment".into(), "it's".into(), "a b".into()])
+        );
+        assert_eq!(
+            toks("tap-location 200 400"),
+            Some(vec!["tap-location".into(), "200".into(), "400".into()])
+        );
+        assert!(batch_line_tokens(r#"comment "open"#).is_err());
+    }
+
+    fn line(batch: &Cli, line: &str) -> Cli {
+        batch_parse(batch, toks(line).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn test_batch_parse_merges_globals() {
+        let batch = Cli::try_parse_from([
+            "qorvex", "-s", "b", "-f", "json", "-q", "-o", "900", "batch",
+        ])
+        .unwrap();
+        let cli = line(&batch, "comment x");
+        assert_eq!(cli.session, "b");
+        assert!(cli.format == OutputFormat::Json);
+        assert!(cli.quiet);
+        assert_eq!(cli.timeout, Some(900));
+        // The line's own flags win.
+        let cli = line(&batch, "-s own -f text -q tap X -o 3000");
+        assert_eq!(cli.session, "own");
+        assert!(cli.format == OutputFormat::Text);
+        assert!(cli.quiet);
+        assert_eq!(cli.timeout, Some(3000));
+        // No batch flags: the line's defaults.
+        let plain = Cli::try_parse_from(["qorvex", "-s", "p", "batch", "f"]).unwrap();
+        let cli = line(&plain, "comment x");
+        assert_eq!(cli.session, "p");
+        assert!(cli.format == OutputFormat::Text);
+        assert!(!cli.quiet);
+        assert_eq!(cli.timeout, None);
+        assert!(matches!(
+            line(&plain, "batch").command,
+            Command::Batch { file: None }
+        ));
+        let err = batch_parse(&plain, toks("tap-location notanumber 1").unwrap())
+            .err()
+            .unwrap();
+        assert_eq!(err.exit_code(), 2);
+    }
 
     #[test]
     fn test_record_parse() {
