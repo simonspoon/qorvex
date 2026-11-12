@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::{debug, info, info_span, Instrument};
 
+mod recorder;
 mod server;
 use server::ServerState;
 
@@ -103,7 +104,9 @@ async fn cleanup(
 ) {
     info!("Cleaning up");
     {
-        let _s = state.lock().await;
+        let mut s = state.lock().await;
+        // Stop an active recorder now (Recording::drop), not at runtime teardown.
+        s.recording = None;
         // AgentLifecycle::Drop will kill the agent child process
     }
     // drop state so ServerState destructors run

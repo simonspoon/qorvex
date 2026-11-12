@@ -446,6 +446,49 @@ Each dump uses the agent's normal 30 s read timeout, so a stalled agent can hold
 
 `qorvex screen-info` outputs actionable elements as concise JSON by default (no null fields, rounded frame values). Use `--full` to get the complete raw JSON, or `--pretty` for REPL-style formatted output. Default and `--full` write nothing to stderr, so `2>&1 | jq` works (use `| jq length` for the count); only `--pretty` prints `<N> elements` on stderr. With `-f json`, a failing `screen-info` prints `{"success": false, "message": "..."}` on stdout (stderr and exit code unchanged). `qorvex screen-info --all` lists every element in the agent's tree, flattened depth-first (parent before children), including elements with no id or label (they simply have no `id`/`label` keys). Each element also carries three flags: `offscreen` (its frame does not intersect the root frame, which is the first top-level element of the dump, the application/window; when the root has no frame or a zero-size one, nothing is marked offscreen), `zero_size` (width or height <= 0) and `hittable` (the agent's value, or `null` when the agent does not report it, which is every iOS element today). Elements without a frame get `offscreen: false` and `zero_size: false`. `--all --pretty` appends `[offscreen]`, `[zero-size]` and `[not-hittable]` markers and counts all elements on stderr; `--all` cannot be combined with `--full`. `--all` is subject to the agent's tree caps (iOS depth limit and 5000 elements), and needs a server from the same release: an older server closes the connection and the CLI exits 3 with a protocol error (default `screen-info` works across versions). `qorvex get-value` prints the element value to stdout. Status messages go to stderr in pipe-delimited format: `|timestamp|Action|target|elapsed_ms|` for all actions.
 
+### Screen Recording
+
+| Syntax | Description |
+|--------|-------------|
+| `qorvex record start <file>` | Start recording the session device's screen to `<file>` (mp4, overwritten if it exists; relative paths are resolved client-side) |
+| `qorvex record stop` | Stop the recording, finish the file and print its path and size |
+
+The recorder runs as a child of the session's server, so the CLI can exit
+between `start` and `stop`. On an iOS simulator it is `xcrun simctl io <udid>
+recordVideo --codec h264 --force <file>`, stopped with SIGINT (which finalises
+the mp4). On an Android device it is `adb shell screenrecord --time-limit 0
+/sdcard/qorvex-record-<server pid>.mp4`, stopped with `adb shell pkill -INT
+screenrecord`; the file is then pulled to `<file>` and deleted from the device.
+`start` prints `Recording started: <file>`; `stop` prints `Recording saved:
+<file> (<bytes> bytes)`. `-f json` prints `{"record":"started","file":...}` and
+`{"record":"stopped","file":...,"bytes":N}` (plus `duration_ms`).
+
+Exit 1, with a message, for: `start` while a recording is already active on the
+session; `stop` with none active; a `<file>` whose parent directory does not
+exist (checked before anything is spawned); a physical iPhone (`record is not
+supported on a physical iOS device yet`); a recorder that cannot be spawned or
+exits within its first second (its stderr is shown). An Android display that is asleep (e.g. a Quest
+headset nobody is wearing) makes `screenrecord` fail with `ERROR:
+INVALID_LAYER_STACK, please check your display state.`; wake it first (`adb
+shell input keyevent KEYCODE_WAKEUP`). Stopping the server
+(`qorvex stop`, SIGINT/SIGTERM) while recording interrupts the recorder, so none
+is left running; that recording's file is not reported (on Android it is not
+pulled).
+
+**Limits** (this is a basic wrapper around the platform tools): no constant
+frame rate (both tools emit frames only when the screen changes, so a static
+screen yields few frames); resolution and any encoder size limit are the
+tool's own (`screenrecord` can refuse very large displays); timestamps are not
+aligned to the action log; one recording per session; no audio; not in the
+REPL; Android emulators and physical iPhones are untested/unsupported.
+
+```bash
+$ qorvex record start /tmp/run.mp4
+Recording started: /tmp/run.mp4
+$ qorvex record stop
+Recording saved: /tmp/run.mp4 (1843200 bytes)
+```
+
 ## Values
 
 | Syntax | Description |

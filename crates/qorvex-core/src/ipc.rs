@@ -330,6 +330,13 @@ pub enum IpcRequest {
     ResetApp { bundle_id: String },
     /// Dismiss the software keyboard if it is showing. iOS simulator only.
     HideKeyboard,
+    /// Start recording the session device's screen to `path` (an mp4).
+    ///
+    /// The path must already be absolute: the client resolves it against the
+    /// shell the user typed it in. iOS simulator and Android only.
+    RecordStart { path: String },
+    /// Stop the active recording and finish its file.
+    RecordStop,
     /// List the apps installed on the session's selected simulator.
     ListApps,
 
@@ -484,6 +491,20 @@ pub enum IpcResponse {
         /// `true` if a keyboard was showing and is now gone, `false` if none
         /// was showing (nothing was done).
         was_visible: bool,
+    },
+
+    /// A recording was started by `record start`.
+    RecordStarted {
+        /// Absolute host path the recording will be written to.
+        file: String,
+    },
+
+    /// A recording was stopped by `record stop` and its file written.
+    RecordStopped {
+        /// Absolute host path of the recording.
+        file: String,
+        /// Size of the file in bytes.
+        bytes: u64,
     },
 
     /// UDID of a simulator just created by `create-device`.
@@ -1064,6 +1085,50 @@ mod platform_tests {
                 platform: Platform::Android,
                 ..
             }
+        ));
+    }
+
+    /// `record start|stop` requests and responses: exact JSON wire form and
+    /// round trip.
+    #[test]
+    fn record_requests_and_responses_wire_format() {
+        let start = IpcRequest::RecordStart {
+            path: "/tmp/x.mp4".into(),
+        };
+        let json = serde_json::to_string(&start).unwrap();
+        assert_eq!(json, r#"{"type":"RecordStart","path":"/tmp/x.mp4"}"#);
+        match serde_json::from_str::<IpcRequest>(&json).unwrap() {
+            IpcRequest::RecordStart { path } => assert_eq!(path, "/tmp/x.mp4"),
+            other => panic!("expected RecordStart, got {other:?}"),
+        }
+        let json = serde_json::to_string(&IpcRequest::RecordStop).unwrap();
+        assert_eq!(json, r#"{"type":"RecordStop"}"#);
+        assert!(matches!(
+            serde_json::from_str::<IpcRequest>(&json).unwrap(),
+            IpcRequest::RecordStop
+        ));
+
+        let started = IpcResponse::RecordStarted {
+            file: "/tmp/x.mp4".into(),
+        };
+        let json = serde_json::to_string(&started).unwrap();
+        assert_eq!(json, r#"{"type":"RecordStarted","file":"/tmp/x.mp4"}"#);
+        assert!(matches!(
+            serde_json::from_str::<IpcResponse>(&json).unwrap(),
+            IpcResponse::RecordStarted { file } if file == "/tmp/x.mp4"
+        ));
+        let stopped = IpcResponse::RecordStopped {
+            file: "/tmp/x.mp4".into(),
+            bytes: 42,
+        };
+        let json = serde_json::to_string(&stopped).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"RecordStopped","file":"/tmp/x.mp4","bytes":42}"#
+        );
+        assert!(matches!(
+            serde_json::from_str::<IpcResponse>(&json).unwrap(),
+            IpcResponse::RecordStopped { file, bytes: 42 } if file == "/tmp/x.mp4"
         ));
     }
 }

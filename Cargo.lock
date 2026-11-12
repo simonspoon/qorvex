@@ -2048,6 +2048,7 @@ name = "qorvex-server"
 version = "0.7.0"
 dependencies = [
  "clap",
+ "libc",
  "qorvex-core",
  "serde_json",
  "tokio",

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
+use crate::recorder::{self, RecordTarget, Recording};
 use qorvex_core::action::{ActionResult, ActionType};
 use qorvex_core::adb_device::Adb;
 use qorvex_core::adb_forward::AdbForward;
@@ -87,6 +88,9 @@ pub struct ServerState {
     /// When the request being handled arrived. `log_action` falls back to
     /// the time since then for entries with no measured duration of their own.
     pub request_started: Option<std::time::Instant>,
+    /// The active `record start` recorder, if any. Dropping it stops the
+    /// recorder, so it never outlives the server.
+    pub recording: Option<Recording>,
 }
 
 impl ServerState {
@@ -136,6 +140,7 @@ impl ServerState {
             android_lifecycle: None,
             android_forward: None,
             request_started: None,
+            recording: None,
         }
     }
 
@@ -236,6 +241,8 @@ impl ServerState {
             }
             IpcRequest::ResetApp { bundle_id } => self.handle_reset_app(&bundle_id).await,
             IpcRequest::HideKeyboard => self.handle_hide_keyboard().await,
+            IpcRequest::RecordStart { path } => self.handle_record_start(&path).await,
+            IpcRequest::RecordStop => self.handle_record_stop().await,
             IpcRequest::ListApps => self.handle_list_apps().await,
 
             // ── Configuration ───────────────────────────────────────────
@@ -1873,6 +1880,61 @@ impl ServerState {
         response
     }
 
+    async fn handle_record_start(&mut self, path: &str) -> IpcResponse {
+        let fail = |message: String| IpcResponse::CommandResult {
+            success: false,
+            message,
+        };
+        if self.is_physical_device {
+            return fail("record is not supported on a physical iOS device yet".to_string());
+        }
+        if let Some(active) = &self.recording {
+            return fail(format!(
+                "A recording is already active: {}",
+                active.file().display()
+            ));
+        }
+        let file = PathBuf::from(path);
+        if let Err(message) = recorder::check_parent(&file) {
+            return fail(message);
+        }
+        let target = match &self.android_serial {
+            Some(serial) => RecordTarget::Android {
+                serial: serial.clone(),
+                device_path: recorder::android_device_path(),
+            },
+            None => match self.selected_simulator() {
+                Ok(udid) => RecordTarget::Simulator { udid },
+                Err(message) => return fail(message),
+            },
+        };
+        match Recording::start(target, file).await {
+            Ok(rec) => {
+                let file = rec.file().display().to_string();
+                self.recording = Some(rec);
+                IpcResponse::RecordStarted { file }
+            }
+            Err(message) => fail(message),
+        }
+    }
+
+    async fn handle_record_stop(&mut self) -> IpcResponse {
+        let Some(rec) = self.recording.take() else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No recording is active".to_string(),
+            };
+        };
+        let file = rec.file().display().to_string();
+        match rec.stop().await {
+            Ok(bytes) => IpcResponse::RecordStopped { file, bytes },
+            Err(message) => IpcResponse::CommandResult {
+                success: false,
+                message,
+            },
+        }
+    }
+
     async fn handle_list_apps(&self) -> IpcResponse {
         let udid = match self.selected_simulator() {
             Ok(udid) => udid,
@@ -3238,6 +3300,90 @@ mod tests {
             IpcResponse::CommandResult { success, .. } => assert!(!success),
             other => panic!("expected CommandResult, got {other:?}"),
         }
+    }
+
+    fn failure_message(response: IpcResponse) -> String {
+        match response {
+            IpcResponse::CommandResult {
+                success: false,
+                message,
+            } => message,
+            other => panic!("expected a failed CommandResult, got {other:?}"),
+        }
+    }
+
+    /// `record stop` with no recording active fails without touching a device.
+    #[tokio::test]
+    async fn record_stop_without_recording_fails() {
+        let mut state = ServerState::new("test".into());
+        let msg = failure_message(state.handle_request(IpcRequest::RecordStop).await);
+        assert_eq!(msg, "No recording is active");
+    }
+
+    /// A second `record start` while one is active fails and leaves the
+    /// first recording in place.
+    #[tokio::test]
+    async fn record_start_twice_fails() {
+        let mut state = ServerState::new("test".into());
+        state.simulator_udid = Some("not-a-real-udid".into());
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        state.recording = Some(Recording::from_child(
+            child,
+            PathBuf::from("/tmp/first.mp4"),
+            RecordTarget::Simulator {
+                udid: "not-a-real-udid".into(),
+            },
+        ));
+        let msg = failure_message(
+            state
+                .handle_request(IpcRequest::RecordStart {
+                    path: "/tmp/second.mp4".into(),
+                })
+                .await,
+        );
+        assert_eq!(msg, "A recording is already active: /tmp/first.mp4");
+        assert_eq!(
+            state.recording.as_ref().unwrap().file(),
+            Path::new("/tmp/first.mp4")
+        );
+    }
+
+    /// A file whose parent directory does not exist is refused before any
+    /// recorder is spawned.
+    #[tokio::test]
+    async fn record_start_refuses_missing_parent_dir() {
+        let mut state = ServerState::new("test".into());
+        state.simulator_udid = Some("not-a-real-udid".into());
+        let msg = failure_message(
+            state
+                .handle_request(IpcRequest::RecordStart {
+                    path: "/nonexistent-qorvex-dir/x.mp4".into(),
+                })
+                .await,
+        );
+        assert_eq!(
+            msg,
+            "record: parent directory does not exist: /nonexistent-qorvex-dir"
+        );
+        assert!(state.recording.is_none());
+    }
+
+    /// Physical iOS devices are refused.
+    #[tokio::test]
+    async fn record_start_refuses_physical_ios() {
+        let mut state = ServerState::new("test".into());
+        state.is_physical_device = true;
+        let msg = failure_message(
+            state
+                .handle_request(IpcRequest::RecordStart {
+                    path: "/tmp/x.mp4".into(),
+                })
+                .await,
+        );
+        assert_eq!(msg, "record is not supported on a physical iOS device yet");
     }
 
     /// `hide-keyboard` refuses Android and physical-iOS sessions before any

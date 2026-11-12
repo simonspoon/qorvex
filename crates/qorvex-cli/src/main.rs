@@ -355,6 +355,17 @@ enum AssertAction {
 }
 
 #[derive(Subcommand)]
+enum RecordAction {
+    /// Start recording the screen to FILE (mp4; overwritten if it exists)
+    Start {
+        /// Output file (relative paths are resolved client-side)
+        file: String,
+    },
+    /// Stop the recording and write its file
+    Stop,
+}
+
+#[derive(Subcommand)]
 enum SimsAction {
     /// Find (and with --yes delete) simulators that only waste disk
     ///
@@ -780,6 +791,13 @@ enum Command {
     /// List apps installed on the session's selected simulator
     #[command(name = "list-apps")]
     ListApps,
+
+    /// Record the session device's screen to an mp4 (iOS simulator or
+    /// Android device); the recorder runs in the server until `record stop`
+    Record {
+        #[command(subcommand)]
+        action: RecordAction,
+    },
 
     /// Create a simulator and select it for this session
     ///
@@ -2244,6 +2262,48 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
         }
         Command::ListApps => list_apps(&mut client, &cli).await,
+        Command::Record { ref action } => {
+            let request = match action {
+                // The server has its own working directory: resolve the path
+                // in the shell the user typed it in (the file need not exist).
+                RecordAction::Start { file } => {
+                    let resolved = std::path::absolute(file)
+                        .map_err(|e| CliError::ActionFailed(format!("{}: {}", file, e)))?;
+                    IpcRequest::RecordStart {
+                        path: resolved.to_string_lossy().to_string(),
+                    }
+                }
+                RecordAction::Stop => IpcRequest::RecordStop,
+            };
+            let response = client
+                .send(&request)
+                .await
+                .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+            match response {
+                IpcResponse::RecordStarted { file } => {
+                    if cli.format == OutputFormat::Json {
+                        let out = serde_json::json!({ "record": "started", "file": file });
+                        println!("{}", with_duration_ms(&out.to_string()));
+                    } else if !cli.quiet {
+                        println!("Recording started: {}", file);
+                    }
+                    Ok(())
+                }
+                IpcResponse::RecordStopped { file, bytes } => {
+                    if cli.format == OutputFormat::Json {
+                        let out = serde_json::json!({ "record": "stopped", "file": file, "bytes": bytes });
+                        println!("{}", with_duration_ms(&out.to_string()));
+                    } else if !cli.quiet {
+                        println!("Recording saved: {} ({} bytes)", file, bytes);
+                    }
+                    Ok(())
+                }
+                IpcResponse::CommandResult { message, .. } | IpcResponse::Error { message } => {
+                    Err(CliError::ActionFailed(message))
+                }
+                _ => Err(CliError::Protocol("Unexpected response".to_string())),
+            }
+        }
         Command::CreateDevice {
             ref name,
             ref device_type,
@@ -3760,6 +3820,33 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_record_parse() {
+        let cli = Cli::try_parse_from(["qorvex", "record", "start", "out.mp4"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Record { action: RecordAction::Start { ref file } } if file == "out.mp4"
+        ));
+        let cli = Cli::try_parse_from(["qorvex", "record", "stop"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Record {
+                action: RecordAction::Stop
+            }
+        ));
+        for args in [
+            &["qorvex", "record"][..],
+            &["qorvex", "record", "start"],
+            &["qorvex", "record", "stop", "extra"],
+            &["qorvex", "record", "pause"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "{args:?} should not parse"
+            );
+        }
+    }
 
     #[test]
     fn test_hide_keyboard_parse() {
