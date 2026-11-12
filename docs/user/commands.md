@@ -307,6 +307,8 @@ On Android, `start-agent` scales its agent ready-wait (default 60 s) by host loa
 
 ### Tap
 
+`tap`, `screen-info`, `list-devices` and `list-sessions` show worked examples under `--help`. Put `-s`, `-f` and `-q` before the subcommand (`-o` and `--device` also work after it); each flag and value is a separate word (`qorvex -s demo tap Login`, never `qorvex "-s demo" tap Login`).
+
 | Syntax | Description |
 |--------|-------------|
 | `tap <selector>` | Tap by accessibility ID |

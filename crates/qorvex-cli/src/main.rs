@@ -392,6 +392,11 @@ enum SimsAction {
 #[derive(Subcommand)]
 enum Command {
     /// Tap an element by ID or label
+    #[command(
+        after_help = "Put -s, -f and -q before the subcommand; -o and --device work before or after it. \
+Each flag and value is a separate word (never one quoted string like \"-s demo\").\n\n\
+Examples:\n  qorvex -s demo tap login-button\n  qorvex -s demo tap -l \"Sign In\"\n  qorvex -s demo tap -T Button Login\n  qorvex -s demo tap --no-wait login-button\n  qorvex -s demo tap --if-present login-button\n  qorvex -s demo -f json tap login-button -o 10000"
+    )]
     Tap {
         /// The selector (accessibility ID or label)
         selector: String,
@@ -469,6 +474,9 @@ enum Command {
     },
 
     /// Get UI hierarchy information
+    #[command(
+        after_help = "Examples:\n  qorvex -s demo screen-info\n  qorvex -s demo screen-info --pretty\n  qorvex -s demo screen-info --full\n  qorvex -s demo screen-info --all\n  qorvex -s demo -f json screen-info"
+    )]
     ScreenInfo {
         /// Output full raw JSON (original behavior)
         #[arg(long)]
@@ -724,6 +732,10 @@ enum Command {
     },
 
     /// List available devices (simulators for iOS, adb devices for Android)
+    #[command(
+        after_help = "Prints simulator UDIDs (iOS) or adb serials (Android); pass one to `start -d` or the global `--device`.\n\n\
+Examples:\n  qorvex list-devices\n  qorvex list-devices --platform android\n  qorvex -s demo start -d <UDID>\n  qorvex -s demo --device <ID> comment hello"
+    )]
     ListDevices {
         /// Target platform
         #[arg(long, value_enum, default_value_t = PlatformArg::Ios)]
@@ -980,6 +992,8 @@ enum Command {
     },
 
     /// List all running qorvex sessions
+    #[command(after_help = "Pass a listed session name to the global `-s`.\n\n\
+Examples:\n  qorvex list-sessions\n  qorvex -s <NAME> screen-info")]
     ListSessions,
 
     /// Start server, session, and agent in one step
@@ -4005,6 +4019,42 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn long_help(sub: &str) -> String {
+        Cli::command()
+            .find_subcommand_mut(sub)
+            .unwrap()
+            .render_long_help()
+            .to_string()
+    }
+
+    #[test]
+    fn test_help_examples_tap() {
+        let h = long_help("tap");
+        assert!(h.contains("Examples:"));
+        assert!(h.contains("qorvex -s demo tap -T Button Login"));
+    }
+
+    #[test]
+    fn test_help_examples_screen_info() {
+        let h = long_help("screen-info");
+        assert!(h.contains("Examples:"));
+        assert!(h.contains("qorvex -s demo -f json screen-info"));
+    }
+
+    #[test]
+    fn test_help_examples_list_devices() {
+        let h = long_help("list-devices");
+        assert!(h.contains("Examples:"));
+        assert!(h.contains("qorvex list-devices --platform android"));
+    }
+
+    #[test]
+    fn test_help_examples_list_sessions() {
+        let h = long_help("list-sessions");
+        assert!(h.contains("Examples:"));
+        assert!(h.contains("qorvex -s <NAME> screen-info"));
+    }
 
     fn toks(line: &str) -> Option<Vec<String>> {
         batch_line_tokens(line).unwrap()
