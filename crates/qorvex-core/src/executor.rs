@@ -121,6 +121,17 @@ fn compile_label_match(
         .map_err(ExecutionResult::failure)
 }
 
+/// Swipe duration passed to the driver, in seconds: `ms / 1000.0`, or the
+/// 0.3 s default when no duration was given.
+fn swipe_secs(duration_ms: Option<u32>) -> Option<f64> {
+    Some(duration_ms.map_or(0.3, |ms| f64::from(ms) / 1000.0))
+}
+
+/// " (N ms)" when an explicit swipe duration was given, else empty.
+fn swipe_duration_suffix(duration_ms: Option<u32>) -> String {
+    duration_ms.map_or_else(String::new, |ms| format!(" ({} ms)", ms))
+}
+
 impl ActionExecutor {
     /// One element lookup: a label match against a tree dump when `matcher`
     /// is set, otherwise the driver's selector search (unchanged).
@@ -469,7 +480,10 @@ impl ActionExecutor {
                 }
             }
 
-            ActionType::Swipe { ref direction } => {
+            ActionType::Swipe {
+                ref direction,
+                duration_ms,
+            } => {
                 // Use reasonable default coordinates for a typical iOS screen.
                 // Center horizontally (195), swipe from 600→300 for "up", etc.
                 let (start_x, start_y, end_x, end_y) = match direction.as_str() {
@@ -487,10 +501,14 @@ impl ActionExecutor {
 
                 match self
                     .driver
-                    .swipe(start_x, start_y, end_x, end_y, Some(0.3))
+                    .swipe(start_x, start_y, end_x, end_y, swipe_secs(duration_ms))
                     .await
                 {
-                    Ok(_) => ExecutionResult::success(format!("Swiped {}", direction)),
+                    Ok(_) => ExecutionResult::success(format!(
+                        "Swiped {}{}",
+                        direction,
+                        swipe_duration_suffix(duration_ms)
+                    )),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }
             }
@@ -500,6 +518,7 @@ impl ActionExecutor {
                 from_y,
                 to_x,
                 to_y,
+                duration_ms,
             } => {
                 if from_x < 0 || from_y < 0 || to_x < 0 || to_y < 0 {
                     return ExecutionResult::failure(format!(
@@ -510,12 +529,16 @@ impl ActionExecutor {
 
                 match self
                     .driver
-                    .swipe(from_x, from_y, to_x, to_y, Some(0.3))
+                    .swipe(from_x, from_y, to_x, to_y, swipe_secs(duration_ms))
                     .await
                 {
                     Ok(_) => ExecutionResult::success(format!(
-                        "Swiped from ({}, {}) to ({}, {})",
-                        from_x, from_y, to_x, to_y
+                        "Swiped from ({}, {}) to ({}, {}){}",
+                        from_x,
+                        from_y,
+                        to_x,
+                        to_y,
+                        swipe_duration_suffix(duration_ms)
                     )),
                     Err(e) => ExecutionResult::failure(e.to_string()),
                 }

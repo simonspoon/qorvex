@@ -219,6 +219,7 @@ async fn parity_swipe() {
         "swipe",
         ActionType::Swipe {
             direction: "up".to_string(),
+            duration_ms: None,
         },
         vec![Response::Ok, Response::Ok],
     )
@@ -235,6 +236,7 @@ async fn parity_swipe_coords() {
             from_y: 20,
             to_x: 30,
             to_y: 40,
+            duration_ms: None,
         },
         vec![Response::Ok, Response::Ok],
     )

@@ -55,7 +55,9 @@ mod doctor;
 mod lease;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use qorvex_core::action::{parse_coordinate, ActionType, LabelMatch, LabelMatcher};
+use qorvex_core::action::{
+    parse_coordinate, parse_swipe_duration_ms, ActionType, LabelMatch, LabelMatcher,
+};
 use qorvex_core::adb_device::Adb;
 use qorvex_core::driver::CompiledLabelMatch;
 use qorvex_core::element::{ElementFrame, UIElement};
@@ -525,6 +527,9 @@ enum Command {
         /// End point as x,y (requires --from)
         #[arg(long, value_name = "X,Y", value_parser = parse_coordinate, requires = "from", allow_hyphen_values = true)]
         to: Option<(i32, i32)>,
+        /// Swipe duration in milliseconds, 1-10000 (default 300)
+        #[arg(long = "duration-ms", value_name = "MS", value_parser = parse_swipe_duration_ms)]
+        duration_ms: Option<u32>,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1620,17 +1625,20 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref direction,
             from,
             to,
+            duration_ms,
             ref tag,
         } => {
             let action = match (direction, from, to) {
                 (Some(direction), _, _) => ActionType::Swipe {
                     direction: direction.clone(),
+                    duration_ms,
                 },
                 (None, Some((from_x, from_y)), Some((to_x, to_y))) => ActionType::SwipeCoords {
                     from_x,
                     from_y,
                     to_x,
                     to_y,
+                    duration_ms,
                 },
                 // Unreachable: clap requires a direction or --from/--to.
                 _ => {
@@ -3485,6 +3493,42 @@ mod tests {
         let mut argv = vec!["qorvex", "swipe"];
         argv.extend_from_slice(args);
         Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn swipe_duration_ms_parses_on_both_forms() {
+        for args in [
+            vec!["up", "--duration-ms", "800"],
+            vec!["--from", "1,2", "--to", "3,4", "--duration-ms", "800"],
+        ] {
+            match swipe_parse(&args).unwrap().command {
+                Command::Swipe { duration_ms, .. } => assert_eq!(duration_ms, Some(800)),
+                _ => panic!("expected swipe"),
+            }
+        }
+        match swipe_parse(&["up", "--duration-ms", "10000"])
+            .unwrap()
+            .command
+        {
+            Command::Swipe { duration_ms, .. } => assert_eq!(duration_ms, Some(10000)),
+            _ => panic!("expected swipe"),
+        }
+        match swipe_parse(&["up"]).unwrap().command {
+            Command::Swipe { duration_ms, .. } => assert_eq!(duration_ms, None),
+            _ => panic!("expected swipe"),
+        }
+    }
+
+    #[test]
+    fn swipe_duration_ms_bad_values_are_usage_errors() {
+        for bad in ["0", "-5", "abc", "10001", "1.5", ""] {
+            let err = swipe_parse(&["up", "--duration-ms", bad]).err().unwrap();
+            assert_eq!(err.exit_code(), 2, "value {:?}", bad);
+        }
+        let err = swipe_parse(&["up", "--duration-ms", "10001"])
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("1 and 10000"));
     }
 
     #[test]

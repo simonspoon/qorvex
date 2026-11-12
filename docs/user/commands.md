@@ -259,6 +259,7 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 |--------|-------------|
 | `swipe` or `swipe <direction>` | Swipe (default: up in the REPL; the CLI requires a direction or `--from/--to`). Directions: up, down, left, right |
 | `swipe --from <x,y> --to <x,y>` | Swipe between two coordinates (non-negative integers); cannot be combined with a direction (REPL and CLI) |
+| `swipe <direction\|--from x,y --to x,y> --duration-ms <ms>` | Swipe duration in milliseconds, 1-10000 (default 300). Out of range or non-numeric is a usage error (exit 2). The success message includes the duration, e.g. `Swiped up (800 ms)` |
 
 ### System Keys
 

@@ -402,6 +402,11 @@ pub static COMMANDS: &[CommandDef] = &[
                 takes_value: true,
                 description: "End point as x,y (requires --from)",
             },
+            OptionSpec {
+                flag: "--duration-ms",
+                takes_value: true,
+                description: "Swipe duration in ms, 1-10000 (default 300)",
+            },
         ],
     },
     CommandDef {

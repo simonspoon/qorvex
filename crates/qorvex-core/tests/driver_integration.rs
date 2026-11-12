@@ -297,6 +297,7 @@ async fn test_executor_swipe_via_agent_driver() {
     let result = executor
         .execute(ActionType::Swipe {
             direction: "up".to_string(),
+            duration_ms: None,
         })
         .await;
 
@@ -305,6 +306,79 @@ async fn test_executor_swipe_via_agent_driver() {
         result.message.contains("up"),
         "message should mention direction"
     );
+}
+
+async fn swipe_recorded(action: ActionType) -> (String, Option<f64>) {
+    use qorvex_core::protocol::Request;
+    let (addr, seen) = common::recording_mock_agent(vec![Response::Ok, Response::Ok]).await;
+    let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+    driver.connect().await.unwrap();
+    let executor = ActionExecutor::new(Arc::new(driver));
+    let result = executor.execute(action).await;
+    assert!(result.success, "{}", result.message);
+    let requests = seen.lock().unwrap().clone();
+    match &requests[1] {
+        Request::Swipe { duration, .. } => (result.message, *duration),
+        other => panic!("expected Swipe, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_swipe_duration_reaches_driver() {
+    let dir = |ms| ActionType::Swipe {
+        direction: "up".to_string(),
+        duration_ms: ms,
+    };
+    let (msg, d) = swipe_recorded(dir(None)).await;
+    assert_eq!((msg.as_str(), d), ("Swiped up", Some(0.3)));
+    let (msg, d) = swipe_recorded(dir(Some(800))).await;
+    assert_eq!((msg.as_str(), d), ("Swiped up (800 ms)", Some(0.8)));
+    let coords = |ms| ActionType::SwipeCoords {
+        from_x: 1,
+        from_y: 2,
+        to_x: 3,
+        to_y: 4,
+        duration_ms: ms,
+    };
+    let (_, d) = swipe_recorded(coords(None)).await;
+    assert_eq!(d, Some(0.3));
+    let (msg, d) = swipe_recorded(coords(Some(1500))).await;
+    assert_eq!(d, Some(1.5));
+    assert!(msg.ends_with("(1500 ms)"), "{}", msg);
+}
+
+#[test]
+fn test_swipe_action_serde_back_compat() {
+    let old: ActionType = serde_json::from_str(r#"{"type":"Swipe","direction":"up"}"#).unwrap();
+    assert!(matches!(
+        old,
+        ActionType::Swipe {
+            duration_ms: None,
+            ..
+        }
+    ));
+    let old: ActionType =
+        serde_json::from_str(r#"{"type":"SwipeCoords","from_x":1,"from_y":2,"to_x":3,"to_y":4}"#)
+            .unwrap();
+    assert!(matches!(
+        old,
+        ActionType::SwipeCoords {
+            duration_ms: None,
+            ..
+        }
+    ));
+    let none = serde_json::to_string(&ActionType::Swipe {
+        direction: "up".to_string(),
+        duration_ms: None,
+    })
+    .unwrap();
+    assert!(!none.contains("duration_ms"), "{}", none);
+    let some = serde_json::to_string(&ActionType::Swipe {
+        direction: "up".to_string(),
+        duration_ms: Some(800),
+    })
+    .unwrap();
+    assert!(some.contains("\"duration_ms\":800"), "{}", some);
 }
 
 // ---------------------------------------------------------------------------

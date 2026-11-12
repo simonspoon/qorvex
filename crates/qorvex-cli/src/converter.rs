@@ -65,17 +65,27 @@ impl LogConverter {
                 Some(cmd)
             }
             ActionType::TapLocation { x, y } => Some(format!("qorvex tap-location {} {}", x, y)),
-            ActionType::Swipe { direction } => {
-                Some(format!("qorvex swipe {}", shell_escape(direction)))
-            }
+            ActionType::Swipe {
+                direction,
+                duration_ms,
+            } => Some(format!(
+                "qorvex swipe {}{}",
+                shell_escape(direction),
+                duration_flag(*duration_ms)
+            )),
             ActionType::SwipeCoords {
                 from_x,
                 from_y,
                 to_x,
                 to_y,
+                duration_ms,
             } => Some(format!(
-                "qorvex swipe --from {},{} --to {},{}",
-                from_x, from_y, to_x, to_y
+                "qorvex swipe --from {},{} --to {},{}{}",
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                duration_flag(*duration_ms)
             )),
             ActionType::Lock => Some("qorvex lock".to_string()),
             ActionType::Key { name } => Some(format!("qorvex key {}", name.as_str())),
@@ -274,6 +284,10 @@ fn selector_args(selector: &str, label_match: &Option<Box<LabelMatch>>) -> Strin
     out
 }
 
+fn duration_flag(duration_ms: Option<u32>) -> String {
+    duration_ms.map_or_else(String::new, |ms| format!(" --duration-ms {}", ms))
+}
+
 /// Shell-escape a string using single quotes. Internal single quotes become `'\''`.
 fn shell_escape(s: &str) -> String {
     if s.chars()
@@ -382,10 +396,34 @@ mod tests {
     fn test_swipe_to_command() {
         let action = ActionType::Swipe {
             direction: "up".to_string(),
+            duration_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex swipe up".to_string())
+        );
+    }
+
+    #[test]
+    fn test_swipe_duration_to_command() {
+        let action = ActionType::Swipe {
+            direction: "up".to_string(),
+            duration_ms: Some(800),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex swipe up --duration-ms 800".to_string())
+        );
+        let action = ActionType::SwipeCoords {
+            from_x: 10,
+            from_y: 20,
+            to_x: 30,
+            to_y: 40,
+            duration_ms: Some(1500),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex swipe --from 10,20 --to 30,40 --duration-ms 1500".to_string())
         );
     }
 
@@ -396,6 +434,7 @@ mod tests {
             from_y: 20,
             to_x: 30,
             to_y: 40,
+            duration_ms: None,
         };
         assert_eq!(
             LogConverter::action_to_command(&action, None),

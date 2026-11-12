@@ -130,6 +130,9 @@ pub enum ActionType {
     Swipe {
         /// Direction to swipe: "up", "down", "left", or "right".
         direction: String,
+        /// Swipe duration in milliseconds; `None` uses the default (300 ms).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
     },
 
     /// Swipe the screen between two explicit coordinates.
@@ -142,6 +145,9 @@ pub enum ActionType {
         to_x: i32,
         /// Ending y-coordinate in screen points.
         to_y: i32,
+        /// Swipe duration in milliseconds; `None` uses the default (300 ms).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
     },
 
     /// Lock the device (press the lock button).
@@ -418,6 +424,24 @@ pub fn parse_coordinate(s: &str) -> Result<(i32, i32), String> {
     Ok((x, y))
 }
 
+/// Parse a swipe duration in milliseconds (`swipe --duration-ms`). Accepts
+/// 1..=10000; returns a user-facing error message otherwise.
+pub fn parse_swipe_duration_ms(s: &str) -> Result<u32, String> {
+    let ms: u32 = s.trim().parse().map_err(|_| {
+        format!(
+            "invalid duration '{}': expected a whole number of milliseconds (1-10000)",
+            s
+        )
+    })?;
+    if !(1..=10000).contains(&ms) {
+        return Err(format!(
+            "invalid duration {}: must be between 1 and 10000 milliseconds",
+            ms
+        ));
+    }
+    Ok(ms)
+}
+
 impl ActionType {
     /// Returns a short, static name for this action type suitable for use in
     /// tracing span metadata. Avoids Debug-formatting large enum payloads.
@@ -547,14 +571,24 @@ impl ActionType {
                 format!("tree unchanged for {}ms", stable_ms)
             }
             ActionType::TapLocation { x, y } => format!("({},{})", x, y),
-            ActionType::Swipe { direction } => direction.clone(),
+            ActionType::Swipe {
+                direction,
+                duration_ms,
+            } => match duration_ms {
+                Some(ms) => format!("{} ({} ms)", direction, ms),
+                None => direction.clone(),
+            },
             ActionType::Key { name } => name.as_str().to_string(),
             ActionType::SwipeCoords {
                 from_x,
                 from_y,
                 to_x,
                 to_y,
-            } => format!("({},{})->({},{})", from_x, from_y, to_x, to_y),
+                duration_ms,
+            } => match duration_ms {
+                Some(ms) => format!("({},{})->({},{}) ({} ms)", from_x, from_y, to_x, to_y, ms),
+                None => format!("({},{})->({},{})", from_x, from_y, to_x, to_y),
+            },
             ActionType::LongPress { x, y, duration } => format!("({},{}) {:.1}s", x, y, duration),
             ActionType::SendKeys { text, .. } => {
                 if text.len() > 20 {

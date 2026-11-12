@@ -87,7 +87,7 @@ done
 | `qorvex tap <selector> --fallback-frame` | If the tap fails but the element has a frame, tap its centre (replaces tap, screen-info, tap-location) |
 | `qorvex tap-location <x> <y>` | Tap at coordinates |
 | `qorvex long-press <x> <y> [--duration <s>]` | Long press at coordinates (default 1.0s) |
-| `qorvex swipe <direction>` | Swipe up/down/left/right |
+| `qorvex swipe <direction> [--duration-ms <ms>]` | Swipe up/down/left/right |
 | `qorvex send-keys 'text'` | Type text (appends to the focused field) |
 | `qorvex send-keys --replace 'text'` | Set the focused field to exactly `text` (`--replace ''` clears it) |
 | `qorvex screenshot` | Capture screenshot (base64) |
