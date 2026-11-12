@@ -384,6 +384,23 @@ impl<T: AgentTransport> AutomationDriver for AgentSession<T> {
         expect_ok(response)
     }
 
+    async fn hide_keyboard(&self) -> Result<bool, DriverError> {
+        let response = self.send(&Request::HideKeyboard).await?;
+        match response {
+            Response::Value { value } => match value.as_deref() {
+                Some("hidden") => Ok(true),
+                Some("not_visible") => Ok(false),
+                other => Err(DriverError::CommandFailed(format!(
+                    "unexpected hide-keyboard result: {other:?}"
+                ))),
+            },
+            Response::Error { message } => Err(DriverError::CommandFailed(message)),
+            other => Err(DriverError::CommandFailed(format!(
+                "unexpected response: {other:?}"
+            ))),
+        }
+    }
+
     async fn long_press(&self, x: i32, y: i32, duration: f64) -> Result<(), DriverError> {
         let response = self.send(&Request::LongPress { x, y, duration }).await?;
         expect_ok(response)

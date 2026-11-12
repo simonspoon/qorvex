@@ -109,6 +109,9 @@ final class CommandHandler {
 
         case .pressKey(let key):
             return handlePressKey(key)
+
+        case .hideKeyboard:
+            return handleHideKeyboard()
         }
     }
 
@@ -163,6 +166,52 @@ final class CommandHandler {
             }
             return .ok
         }
+    }
+
+    // MARK: - Hide keyboard
+
+    /// Dismiss the software keyboard if, and only if, it is showing.
+    ///
+    /// Replies `.value("not_visible")` when no keyboard is up and
+    /// `.value("hidden")` once it has gone. Never presses Return/Done/Go (they
+    /// submit forms) and never swipes on the keyboard (iOS reads that as
+    /// swipe-typing and inserts words). It taps the keyboard's own dismiss key
+    /// (the iPad "Hide keyboard" key); a keyboard without one (iPhone) is
+    /// reported as still visible and left untouched.
+    private func handleHideKeyboard() -> AgentResponse {
+        let keyboard = app.keyboards.firstMatch
+        if !keyboard.exists {
+            return .value("not_visible")
+        }
+        let hideKey = keyboard.buttons.matching(
+            NSPredicate(format: "label ==[c] %@ OR identifier ==[c] %@", "Hide keyboard", "Hide keyboard")
+        ).firstMatch
+        // Right after a field is focused the keyboard is still sliding in and
+        // a tap on its dismiss key can be lost, so tap only while the key is
+        // hittable and re-tap until the keyboard is gone. Re-tapping is safe:
+        // the key does nothing but hide the keyboard.
+        let deadline = Date().addingTimeInterval(3.0)
+        var tapped = false
+        while app.keyboards.firstMatch.exists {
+            if Date() >= deadline {
+                return .error(message: "keyboard still visible after hide")
+            }
+            if hideKey.exists && hideKey.isHittable {
+                var objcError: NSError?
+                let caught = QVXTryCatch({
+                    hideKey.tap()
+                }, &objcError)
+                if !caught {
+                    let msg = objcError?.localizedDescription ?? "Unknown ObjC exception"
+                    return .error(message: "Hide keyboard failed: \(msg)")
+                }
+                tapped = true
+                Thread.sleep(forTimeInterval: 0.3)
+            } else {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        return .value(tapped ? "hidden" : "not_visible")
     }
 
     // MARK: - Tap coordinate

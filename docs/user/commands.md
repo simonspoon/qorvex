@@ -342,6 +342,33 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 
 Any other key name is a usage error (exit 2) listing the allowed names. Use `qorvex key back|home` instead of `adb shell input keyevent KEYCODE_BACK|KEYCODE_HOME`.
 
+### Hide Keyboard
+
+| Syntax | Description |
+|--------|-------------|
+| `qorvex hide-keyboard` | Dismiss the software keyboard if, and only if, it is showing (iOS simulator only) |
+
+Safe to call blindly. With no keyboard up it does nothing, prints `Keyboard not
+visible` and exits 0. With a keyboard up it taps the keyboard's own dismiss key
+(the iPad "Hide keyboard" key), waits for the keyboard to go, prints `Keyboard
+hidden` and exits 0. It never presses Return/Done/Go (they submit forms), never
+swipes on the keyboard (iOS reads a swipe as swipe-typing and inserts words),
+and leaves the focused field's text unchanged. A keyboard with no dismiss key
+(the iPhone keyboard), or one still showing after about 3 s, exits 1 with
+`keyboard still visible after hide`; nothing is typed or tapped. `-f json`
+prints `{"hide_keyboard":"hidden"|"not_visible","duration_ms":N}`.
+
+On an Android session or a physical iPhone it exits 1 with `hide-keyboard is
+only supported on an iOS simulator` and sends nothing. On Android use `key back`
+(but back navigates away when no keyboard is showing).
+
+```bash
+$ qorvex hide-keyboard
+Keyboard hidden
+$ qorvex hide-keyboard
+Keyboard not visible
+```
+
 ### Send Keys
 
 | Syntax | Description |

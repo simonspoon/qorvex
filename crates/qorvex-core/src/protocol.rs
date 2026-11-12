@@ -112,6 +112,9 @@ pub enum OpCode {
     Lock = 0x17,
     /// Press a system key (u8 key code: 0 = back, 1 = home; see [`KeyName`]).
     PressKey = 0x18,
+    /// Dismiss the software keyboard if it is showing (no payload). The agent
+    /// replies with a [`Response::Value`]: `"hidden"` or `"not_visible"`.
+    HideKeyboard = 0x19,
     /// Error message from the agent (length-prefixed string).
     Error = 0x99,
     /// Generic response (response-type byte + variable data).
@@ -140,6 +143,7 @@ impl OpCode {
             0x16 => Ok(OpCode::DeviceUdid),
             0x17 => Ok(OpCode::Lock),
             0x18 => Ok(OpCode::PressKey),
+            0x19 => Ok(OpCode::HideKeyboard),
             0x99 => Ok(OpCode::Error),
             0xA0 => Ok(OpCode::Response),
             other => Err(ProtocolError::InvalidOpCode(other)),
@@ -219,6 +223,8 @@ pub enum Request {
     Lock,
     /// Press a system key.
     PressKey { key: KeyName },
+    /// Dismiss the software keyboard if it is showing.
+    HideKeyboard,
 }
 
 /// A system key for [`Request::PressKey`].
@@ -294,6 +300,7 @@ impl Request {
             Request::DeviceUdid => "device_udid",
             Request::Lock => "lock",
             Request::PressKey { .. } => "press_key",
+            Request::HideKeyboard => "hide_keyboard",
         }
     }
 }
@@ -662,6 +669,9 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
             payload.push(OpCode::PressKey as u8);
             payload.push(*key as u8);
         }
+        Request::HideKeyboard => {
+            payload.push(OpCode::HideKeyboard as u8);
+        }
     }
 
     encode_frame(&payload)
@@ -794,6 +804,8 @@ pub fn decode_request(data: &[u8]) -> Result<Request, ProtocolError> {
             let key = KeyName::from_code(cur.read_u8()?)?;
             Ok(Request::PressKey { key })
         }
+
+        OpCode::HideKeyboard => Ok(Request::HideKeyboard),
 
         OpCode::Error | OpCode::Response => Err(ProtocolError::InvalidPayload(format!(
             "opcode 0x{:02X} is not a valid request opcode",
@@ -1239,6 +1251,18 @@ mod tests {
             err,
             ProtocolError::InvalidPayload("unknown key code 7".to_string())
         );
+    }
+
+    #[test]
+    fn request_hide_keyboard() {
+        round_trip_request(&Request::HideKeyboard);
+    }
+
+    #[test]
+    fn hide_keyboard_wire_format() {
+        let wire = encode_request(&Request::HideKeyboard);
+        // 4-byte header with length=1, then opcode 0x19
+        assert_eq!(wire, vec![1, 0, 0, 0, 0x19]);
     }
 
     #[test]

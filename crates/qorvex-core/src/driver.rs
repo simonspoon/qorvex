@@ -589,6 +589,10 @@ pub trait AutomationDriver: Send + Sync {
     /// support the key (iOS has no back key).
     async fn press_key(&self, key: crate::protocol::KeyName) -> Result<(), DriverError>;
 
+    /// Dismiss the software keyboard if it is showing. `Ok(true)` means it was
+    /// up and is now gone; `Ok(false)` means none was showing (nothing done).
+    async fn hide_keyboard(&self) -> Result<bool, DriverError>;
+
     /// Perform a long press at specific screen coordinates.
     ///
     /// # Arguments

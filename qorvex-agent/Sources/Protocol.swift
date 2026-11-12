@@ -27,6 +27,7 @@ enum OpCode: UInt8 {
     case deviceUdid = 0x16
     case lock       = 0x17
     case pressKey   = 0x18
+    case hideKeyboard = 0x19
     case error      = 0x99
     case response   = 0xA0
 }
@@ -65,6 +66,7 @@ enum AgentRequest {
     case deviceUdid
     case lock
     case pressKey(key: KeyName)
+    case hideKeyboard
 }
 
 /// System key for `pressKey`; raw value is the wire key code.
@@ -290,6 +292,9 @@ func decodeRequest(from data: Data) throws -> AgentRequest {
             throw ProtocolError.invalidPayload("unknown key code \(code)")
         }
         return .pressKey(key: key)
+
+    case .hideKeyboard:
+        return .hideKeyboard
 
     case .error, .response:
         throw ProtocolError.invalidPayload(

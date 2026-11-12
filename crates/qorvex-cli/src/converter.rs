@@ -111,6 +111,7 @@ impl LogConverter {
             )),
             ActionType::Lock => Some("qorvex lock".to_string()),
             ActionType::Key { name } => Some(format!("qorvex key {}", name.as_str())),
+            ActionType::HideKeyboard => Some("qorvex hide-keyboard".to_string()),
             ActionType::SendKeys { text, replace } => Some(format!(
                 "qorvex send-keys {}{}",
                 if *replace { "--replace " } else { "" },

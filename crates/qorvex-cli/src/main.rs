@@ -643,6 +643,11 @@ enum Command {
         tag: Option<String>,
     },
 
+    /// Dismiss the software keyboard if it is showing (iOS simulator only;
+    /// on Android use `key back`)
+    #[command(name = "hide-keyboard")]
+    HideKeyboard,
+
     /// Press a system key: back (Android only) or home
     Key {
         /// Key to press
@@ -2021,6 +2026,32 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Key { name, ref tag } => {
             let action = ActionType::Key { name: name.into() };
             execute_action(&mut client, action, tag.clone(), &cli).await
+        }
+        Command::HideKeyboard => {
+            let response = client
+                .send(&IpcRequest::HideKeyboard)
+                .await
+                .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+            match response {
+                IpcResponse::KeyboardHidden { was_visible } => {
+                    let (state, text) = if was_visible {
+                        ("hidden", "Keyboard hidden")
+                    } else {
+                        ("not_visible", "Keyboard not visible")
+                    };
+                    if cli.format == OutputFormat::Json {
+                        let out = serde_json::json!({ "hide_keyboard": state });
+                        println!("{}", with_duration_ms(&out.to_string()));
+                    } else if !cli.quiet {
+                        println!("{}", text);
+                    }
+                    Ok(())
+                }
+                IpcResponse::CommandResult { message, .. } | IpcResponse::Error { message } => {
+                    Err(CliError::ActionFailed(message))
+                }
+                _ => Err(CliError::Protocol("Unexpected response".to_string())),
+            }
         }
         Command::SetTarget {
             ref bundle_id,
@@ -3719,6 +3750,16 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hide_keyboard_parse() {
+        let cli = Cli::try_parse_from(["qorvex", "hide-keyboard"]).unwrap();
+        assert!(matches!(cli.command, Command::HideKeyboard));
+        match Cli::try_parse_from(["qorvex", "hide-keyboard", "extra"]) {
+            Ok(_) => panic!("hide-keyboard with an extra arg should not parse"),
+            Err(e) => assert_eq!(e.exit_code(), 2),
+        }
+    }
 
     #[test]
     fn test_reset_app_parse() {

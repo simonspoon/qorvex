@@ -220,6 +220,9 @@ pub enum ActionType {
     /// Lock the device (press the lock button).
     Lock,
 
+    /// Dismiss the software keyboard if it is showing (iOS simulator).
+    HideKeyboard,
+
     /// Press a system key (back, home).
     Key {
         /// The key to press.
@@ -583,6 +586,7 @@ impl ActionType {
             ActionType::SwipeCoords { .. } => "swipe_coords",
             ActionType::Lock => "lock",
             ActionType::Key { .. } => "key",
+            ActionType::HideKeyboard => "hide_keyboard",
             ActionType::LongPress { .. } => "long_press",
             ActionType::LogComment { .. } => "log_comment",
             ActionType::GetScreenshot => "get_screenshot",
@@ -632,6 +636,7 @@ impl ActionType {
             | ActionType::SwipeCoords { .. } => "Swipe",
             ActionType::Lock => "Lock",
             ActionType::Key { .. } => "Key",
+            ActionType::HideKeyboard => "HideKeyboard",
             ActionType::LongPress { .. } => "LongPress",
             ActionType::LogComment { .. } => "Comment",
             ActionType::GetScreenshot => "Screenshot",
@@ -787,6 +792,7 @@ impl ActionType {
             | ActionType::StopTarget
             | ActionType::ForegroundTarget
             | ActionType::Lock
+            | ActionType::HideKeyboard
             | ActionType::GetTargetInfo
             | ActionType::MemoryInfo { .. }
             | ActionType::ShutdownDevice
@@ -985,6 +991,14 @@ mod tests {
         // Logs written before the variant existed still parse.
         let old: ActionType = serde_json::from_str(r#"{"type":"StopTarget"}"#).unwrap();
         assert!(matches!(old, ActionType::StopTarget));
+    }
+
+    #[test]
+    fn hide_keyboard_serde_round_trip() {
+        let json = serde_json::to_string(&ActionType::HideKeyboard).unwrap();
+        assert_eq!(json, r#"{"type":"HideKeyboard"}"#);
+        let back: ActionType = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ActionType::HideKeyboard));
     }
 
     #[test]

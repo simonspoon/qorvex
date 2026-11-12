@@ -604,6 +604,31 @@ mod tests {
         assert!(err.to_string().contains("not supported on iOS"), "{err}");
     }
 
+    #[tokio::test]
+    async fn hide_keyboard_maps_agent_values() {
+        for (value, want) in [("hidden", true), ("not_visible", false)] {
+            let addr = mock_server_with_connect(Response::Value {
+                value: Some(value.to_string()),
+            })
+            .await;
+            let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+            driver.connect().await.unwrap();
+            assert_eq!(driver.hide_keyboard().await.unwrap(), want, "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn hide_keyboard_surfaces_agent_error() {
+        let addr = mock_server_with_connect(Response::Error {
+            message: "keyboard still visible after hide".to_string(),
+        })
+        .await;
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        driver.connect().await.unwrap();
+        let err = driver.hide_keyboard().await.unwrap_err();
+        assert!(err.to_string().contains("still visible"), "{err}");
+    }
+
     // -----------------------------------------------------------------------
     // Long press
     // -----------------------------------------------------------------------

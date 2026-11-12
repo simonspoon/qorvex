@@ -235,6 +235,7 @@ impl ServerState {
                     .await
             }
             IpcRequest::ResetApp { bundle_id } => self.handle_reset_app(&bundle_id).await,
+            IpcRequest::HideKeyboard => self.handle_hide_keyboard().await,
             IpcRequest::ListApps => self.handle_list_apps().await,
 
             // ── Configuration ───────────────────────────────────────────
@@ -1827,6 +1828,49 @@ impl ServerState {
         response
     }
 
+    async fn handle_hide_keyboard(&self) -> IpcResponse {
+        if self.is_physical_device || self.android_serial.is_some() {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "hide-keyboard is only supported on an iOS simulator".to_string(),
+            };
+        }
+        let driver = if let Some(guard) = self.shared_driver.lock().await.as_ref() {
+            guard.clone()
+        } else if let Some(executor) = &self.executor {
+            executor.driver().clone()
+        } else {
+            return IpcResponse::CommandResult {
+                success: false,
+                message: "No automation backend connected.".to_string(),
+            };
+        };
+        let (response, action_result) = match driver.hide_keyboard().await {
+            Ok(was_visible) => (
+                IpcResponse::KeyboardHidden { was_visible },
+                ActionResult::Success,
+            ),
+            Err(e) => {
+                // The agent's own message ("keyboard still visible after
+                // hide") is the whole story; drop the "Command failed:" prefix.
+                let msg = match e {
+                    DriverError::CommandFailed(m) => m,
+                    other => other.to_string(),
+                };
+                (
+                    IpcResponse::CommandResult {
+                        success: false,
+                        message: msg.clone(),
+                    },
+                    ActionResult::Failure(msg),
+                )
+            }
+        };
+        self.log_action(ActionType::HideKeyboard, action_result, None, None)
+            .await;
+        response
+    }
+
     async fn handle_list_apps(&self) -> IpcResponse {
         let udid = match self.selected_simulator() {
             Ok(udid) => udid,
@@ -3151,6 +3195,31 @@ mod tests {
         match state.handle_stop_agent() {
             IpcResponse::CommandResult { success, .. } => assert!(!success),
             other => panic!("expected CommandResult, got {other:?}"),
+        }
+    }
+
+    /// `hide-keyboard` refuses Android and physical-iOS sessions before any
+    /// driver lookup: with no driver connected the message is the refusal,
+    /// not "No automation backend connected".
+    #[tokio::test]
+    async fn hide_keyboard_refuses_android_and_physical() {
+        for physical in [false, true] {
+            let mut state = ServerState::new("test".into());
+            if physical {
+                state.is_physical_device = true;
+            } else {
+                state.android_serial = Some("emulator-5554".into());
+            }
+            match state.handle_request(IpcRequest::HideKeyboard).await {
+                IpcResponse::CommandResult { success, message } => {
+                    assert!(!success);
+                    assert_eq!(
+                        message,
+                        "hide-keyboard is only supported on an iOS simulator"
+                    );
+                }
+                other => panic!("expected CommandResult, got {other:?}"),
+            }
         }
     }
 

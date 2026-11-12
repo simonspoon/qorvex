@@ -323,6 +323,8 @@ pub enum IpcRequest {
     /// Clear an installed app's data container on the session's selected
     /// simulator, keeping the app installed. iOS simulator only.
     ResetApp { bundle_id: String },
+    /// Dismiss the software keyboard if it is showing. iOS simulator only.
+    HideKeyboard,
     /// List the apps installed on the session's selected simulator.
     ListApps,
 
@@ -470,6 +472,13 @@ pub enum IpcResponse {
     AppReset {
         /// Number of top-level entries removed from the data container.
         cleared: usize,
+    },
+
+    /// Result of `hide-keyboard`.
+    KeyboardHidden {
+        /// `true` if a keyboard was showing and is now gone, `false` if none
+        /// was showing (nothing was done).
+        was_visible: bool,
     },
 
     /// UDID of a simulator just created by `create-device`.

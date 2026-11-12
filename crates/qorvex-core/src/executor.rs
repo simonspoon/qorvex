@@ -1154,6 +1154,12 @@ impl ActionExecutor {
                 "Session management actions must be handled by the session manager",
             ),
 
+            // `hide-keyboard` is handled by the server, which refuses
+            // Android and physical devices before calling the driver.
+            ActionType::HideKeyboard => {
+                ExecutionResult::failure("hide-keyboard must be handled by the server")
+            }
+
             // Device and app management actions run host-side through simctl
             // on the server, never through the automation driver.
             ActionType::ShutdownDevice
