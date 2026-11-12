@@ -344,8 +344,11 @@ Each dump uses the agent's normal 30 s read timeout, so a stalled agent can hold
 | `get-value <selector> --label` | Get by label |
 | `get-value <selector> --no-wait` | Without waiting |
 | `exists <selector> [-l] [-T <type>]` | Is the element in the accessibility tree right now? One lookup, no waiting or retry |
+| `scroll-to <selector> [-l] [-T <type>] [--direction up\|down\|left\|right] [--max-swipes N] [--duration-ms MS]` | Swipe until the element is in the accessibility tree: check, swipe, re-check, at most N swipes (default direction `up`, N 1-50 default 10, duration as `swipe`). The selector forms and `--label-contains/--label-regex/--nth` are the same as `exists` |
 
 `qorvex exists` prints `true`/`false` (with `-f json`: `{"exists":true,"hittable":<bool|null>}` or `{"exists":false}`). Exit code 0 = present, **4 = absent**; a lookup that could not be answered (target app not running, connection, protocol, driver error) keeps its usual exit code (1/2/3) and is never reported as absent. "Present" means in the agent's tree, not visible: hidden, offscreen and non-hittable elements count (`hittable` is the agent's value, `null` when the agent does not report it). Needs a server from the same release (an older server fails `exists` and `tap --if-present` only).
+
+`qorvex scroll-to` stops at once (zero swipes) when the element is already in the tree. Exit 0 = found, prints `Found "row-12" after 3 swipes` (with `-f json`: `{"found":true,"swipes":3}`); **4 = not found** after the last swipe, prints `Not found "row-12" after N swipes`; usage errors (`--max-swipes` outside 1-50 or non-numeric, bad direction) exit 2; driver and connection errors keep exit 1/2/3. **Limit:** like `exists`, "found" means in the tree, not on screen: an offscreen row of a virtualised list or an iOS full tree can already count, so `scroll-to` may stop before the element is visible. In the REPL: `scroll-to <selector> [--label] [--type T] [--direction D] [--max-swipes N] [--duration-ms N]`.
 
 Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 

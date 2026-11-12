@@ -91,6 +91,7 @@ enum ActionType {
     GetScreenInfo,
     GetScreenTree,
     Exists { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },  // one lookup; data {"exists":bool,"hittable":bool|null}
+    ScrollTo { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>>, direction: ScrollDirection, max_swipes: u32, duration_ms: Option<u32> },  // exists check, swipe, re-check; data {"found":bool,"swipes":N}
     GetValue { selector: String, by_label: bool, element_type: Option<String> },
     WaitFor { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },
     WaitForNot { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },

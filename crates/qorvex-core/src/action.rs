@@ -9,6 +9,7 @@
 //!
 //! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::Swipe`], [`ActionType::LongPress`], [`ActionType::SendKeys`]
 //! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetValue`]
+//! - **Scrolling**: [`ActionType::ScrollTo`]
 //! - **Waiting**: [`ActionType::WaitFor`], [`ActionType::WaitStable`]
 //! - **Session Management**: [`ActionType::StartSession`], [`ActionType::EndSession`], [`ActionType::Quit`]
 //! - **Logging**: [`ActionType::LogComment`]
@@ -40,6 +41,50 @@ use uuid::Uuid;
 
 fn default_true() -> bool {
     true
+}
+
+/// Finger swipe direction of `scroll-to` (`up` scrolls content down).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScrollDirection {
+    /// Finger moves up.
+    Up,
+    /// Finger moves down.
+    Down,
+    /// Finger moves left.
+    Left,
+    /// Finger moves right.
+    Right,
+}
+
+impl ScrollDirection {
+    /// The lowercase name `Swipe` takes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScrollDirection::Up => "up",
+            ScrollDirection::Down => "down",
+            ScrollDirection::Left => "left",
+            ScrollDirection::Right => "right",
+        }
+    }
+}
+
+impl std::str::FromStr for ScrollDirection {
+    type Err = String;
+
+    /// Case-insensitive: `up`, `down`, `left` or `right`.
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "up" => Ok(ScrollDirection::Up),
+            "down" => Ok(ScrollDirection::Down),
+            "left" => Ok(ScrollDirection::Left),
+            "right" => Ok(ScrollDirection::Right),
+            _ => Err(format!(
+                "invalid direction '{}': use up, down, left or right",
+                s
+            )),
+        }
+    }
 }
 
 /// How a [`LabelMatch`] tests an element's label.
@@ -222,6 +267,33 @@ pub enum ActionType {
         /// `--label-regex`); `None` keeps the selector search.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label_match: Option<Box<LabelMatch>>,
+    },
+
+    /// Swipe until an element is in the accessibility tree, at most `max_swipes` times.
+    ///
+    /// Looks for the element first (as `Exists` does) and swipes only while it
+    /// is absent. Returns `{"found":bool,"swipes":N}` in the result data; not
+    /// finding it is a success with `found:false`, a driver error is a failure.
+    /// "Found" means in the tree, not on screen (offscreen rows of virtualised
+    /// lists can already count).
+    ScrollTo {
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
+        /// Label text match used instead of `selector` (`--label-contains` /
+        /// `--label-regex`); `None` keeps the selector search.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_match: Option<Box<LabelMatch>>,
+        /// Swipe direction (finger movement).
+        direction: ScrollDirection,
+        /// Maximum number of swipes (1-50).
+        max_swipes: u32,
+        /// Swipe duration in milliseconds; `None` uses the default (300 ms).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
     },
 
     /// Send keyboard input.
@@ -424,6 +496,24 @@ pub fn parse_coordinate(s: &str) -> Result<(i32, i32), String> {
     Ok((x, y))
 }
 
+/// Default `scroll-to` swipe budget.
+pub const DEFAULT_MAX_SWIPES: u32 = 10;
+
+/// Parses a `scroll-to --max-swipes` value: a whole number from 1 to 50.
+pub fn parse_max_swipes(s: &str) -> Result<u32, String> {
+    let n: u32 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid max swipes '{}': expected a whole number (1-50)", s))?;
+    if !(1..=50).contains(&n) {
+        return Err(format!(
+            "invalid max swipes {}: must be between 1 and 50",
+            n
+        ));
+    }
+    Ok(n)
+}
+
 /// Parse a swipe duration in milliseconds (`swipe --duration-ms`). Accepts
 /// 1..=10000; returns a user-facing error message otherwise.
 pub fn parse_swipe_duration_ms(s: &str) -> Result<u32, String> {
@@ -460,6 +550,7 @@ impl ActionType {
             ActionType::GetScreenTree => "get_screen_tree",
             ActionType::GetValue { .. } => "get_value",
             ActionType::Exists { .. } => "exists",
+            ActionType::ScrollTo { .. } => "scroll_to",
             ActionType::SendKeys { .. } => "send_keys",
             ActionType::WaitFor { .. } => "wait_for",
             ActionType::WaitForNot { .. } => "wait_for_not",
@@ -502,6 +593,7 @@ impl ActionType {
             ActionType::GetScreenInfo | ActionType::GetScreenTree => "ScreenInfo",
             ActionType::GetValue { .. } => "GetValue",
             ActionType::Exists { .. } => "Exists",
+            ActionType::ScrollTo { .. } => "ScrollTo",
             ActionType::SendKeys { .. } => "Type",
             ActionType::WaitFor { .. } => "Find",
             ActionType::WaitForNot { .. } => "Gone",
@@ -545,6 +637,10 @@ impl ActionType {
             | ActionType::Exists {
                 label_match: Some(m),
                 ..
+            }
+            | ActionType::ScrollTo {
+                label_match: Some(m),
+                ..
             } => m.to_string(),
             ActionType::Tap {
                 selector, by_label, ..
@@ -559,6 +655,9 @@ impl ActionType {
                 selector, by_label, ..
             }
             | ActionType::Exists {
+                selector, by_label, ..
+            }
+            | ActionType::ScrollTo {
                 selector, by_label, ..
             } => {
                 if *by_label {
@@ -708,6 +807,41 @@ impl ActionLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_to_serde_round_trip_and_optional_fields_skipped() {
+        let action = ActionType::ScrollTo {
+            selector: "row-12".into(),
+            by_label: false,
+            element_type: None,
+            label_match: None,
+            direction: ScrollDirection::Up,
+            max_swipes: 10,
+            duration_ms: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(!json.contains("label_match"), "{}", json);
+        assert!(!json.contains("duration_ms"), "{}", json);
+        assert_eq!(
+            serde_json::to_string(&serde_json::from_str::<ActionType>(&json).unwrap()).unwrap(),
+            json
+        );
+        // Optional fields absent on the wire still parse.
+        let minimal = r#"{"type":"ScrollTo","selector":"x","by_label":true,"element_type":null,"direction":"down","max_swipes":3}"#;
+        match serde_json::from_str::<ActionType>(minimal).unwrap() {
+            ActionType::ScrollTo {
+                label_match,
+                duration_ms,
+                max_swipes,
+                ..
+            } => {
+                assert_eq!((label_match, duration_ms, max_swipes), (None, None, 3));
+            }
+            _ => panic!("expected ScrollTo"),
+        }
+        assert_eq!(action.name(), "scroll_to");
+        assert_eq!(action.display_target(), "row-12");
+    }
 
     #[test]
     fn label_match_field_is_additive_on_the_wire() {

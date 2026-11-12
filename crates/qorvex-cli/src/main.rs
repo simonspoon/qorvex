@@ -56,7 +56,8 @@ mod lease;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use qorvex_core::action::{
-    parse_coordinate, parse_swipe_duration_ms, ActionType, LabelMatch, LabelMatcher,
+    parse_coordinate, parse_max_swipes, parse_swipe_duration_ms, ActionType, LabelMatch,
+    LabelMatcher, ScrollDirection, DEFAULT_MAX_SWIPES,
 };
 use qorvex_core::adb_device::Adb;
 use qorvex_core::driver::CompiledLabelMatch;
@@ -455,6 +456,38 @@ enum Command {
         element_type: Option<String>,
         #[command(flatten)]
         label_match: LabelMatchArgs,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Swipe until an element is in the accessibility tree
+    ///
+    /// Checks first (like `exists`), then swipes and re-checks, up to
+    /// --max-swipes times. Exit 0 = found, 4 = not found after the last
+    /// swipe; errors keep their usual exit codes. "Found" means in the tree,
+    /// not on screen: an offscreen row of a virtualised list can count.
+    ScrollTo {
+        /// The selector (accessibility ID or label)
+        #[arg(required_unless_present = "label_match")]
+        selector: Option<String>,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
+        #[command(flatten)]
+        label_match: LabelMatchArgs,
+        /// Finger swipe direction (up scrolls content down)
+        #[arg(long, value_parser = clap::value_parser!(ScrollDirection), default_value = "up")]
+        direction: ScrollDirection,
+        /// Maximum number of swipes, 1-50
+        #[arg(long, value_name = "N", value_parser = parse_max_swipes, default_value_t = DEFAULT_MAX_SWIPES)]
+        max_swipes: u32,
+        /// Swipe duration in milliseconds, 1-10000 (default 300)
+        #[arg(long = "duration-ms", value_name = "MS", value_parser = parse_swipe_duration_ms)]
+        duration_ms: Option<u32>,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -1621,6 +1654,39 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Err(CliError::Absent)
             }
         }
+        Command::ScrollTo {
+            ref selector,
+            label,
+            ref element_type,
+            ref label_match,
+            direction,
+            max_swipes,
+            duration_ms,
+            ref tag,
+        } => {
+            let action = ActionType::ScrollTo {
+                selector: selector.clone().unwrap_or_default(),
+                by_label: label,
+                element_type: element_type.clone(),
+                label_match: label_match.to_match(),
+                direction,
+                max_swipes,
+                duration_ms,
+            };
+            let (message, found) = query_scroll_to(
+                &mut client,
+                action,
+                tag.clone(),
+                cli.format == OutputFormat::Json,
+            )
+            .await?;
+            println!("{}", message);
+            if found {
+                Ok(())
+            } else {
+                Err(CliError::Absent)
+            }
+        }
         Command::Swipe {
             ref direction,
             from,
@@ -1956,6 +2022,49 @@ async fn query_exists(
         }
         _ => Err(CliError::Protocol("Unexpected response type".to_string())),
     }
+}
+
+/// Sends one `ScrollTo` action. Returns the line to print and whether the
+/// element was found; a driver error is an error, never "not found".
+async fn query_scroll_to(
+    client: &mut IpcClient,
+    action: ActionType,
+    tag: Option<String>,
+    json: bool,
+) -> Result<(String, bool), CliError> {
+    let response = client
+        .send(&IpcRequest::Execute { action, tag })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+    match response {
+        IpcResponse::ActionResult {
+            success: true,
+            message,
+            data,
+            ..
+        } => parse_scroll_to(&message, data.as_deref().unwrap_or(""), json),
+        IpcResponse::ActionResult { message, .. } | IpcResponse::Error { message } => {
+            Err(CliError::ActionFailed(message))
+        }
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Parses the `ScrollTo` result data (`{"found":bool,"swipes":N}`) into the
+/// stdout line (the message, or the JSON under `-f json`) and the found flag.
+fn parse_scroll_to(message: &str, data: &str, json: bool) -> Result<(String, bool), CliError> {
+    let v: serde_json::Value = serde_json::from_str(data)
+        .map_err(|e| CliError::Protocol(format!("Invalid scroll-to response: {}", e)))?;
+    let found = v
+        .get("found")
+        .and_then(|f| f.as_bool())
+        .ok_or_else(|| CliError::Protocol("Invalid scroll-to response: no `found`".to_string()))?;
+    let line = if json {
+        data.to_string()
+    } else {
+        message.to_string()
+    };
+    Ok((line, found))
 }
 
 async fn execute_action(
@@ -3443,6 +3552,111 @@ mod tests {
             "fallback:frame_centre(120,340)|ui_changed:true|"
         );
         assert_eq!(tap_report_suffix(&serde_json::json!({"elapsed_ms": 5})), "");
+    }
+
+    #[test]
+    fn scroll_to_parses_defaults_and_all_flags() {
+        let cli = Cli::try_parse_from(["qorvex", "scroll-to", "row-12"]).unwrap();
+        match cli.command {
+            Command::ScrollTo {
+                selector,
+                label,
+                direction,
+                max_swipes,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(selector.as_deref(), Some("row-12"));
+                assert!(!label);
+                assert_eq!(direction, ScrollDirection::Up);
+                assert_eq!(max_swipes, 10);
+                assert_eq!(duration_ms, None);
+            }
+            _ => panic!("expected ScrollTo"),
+        }
+        let cli = Cli::try_parse_from([
+            "qorvex",
+            "scroll-to",
+            "Row",
+            "-l",
+            "-T",
+            "Cell",
+            "--direction",
+            "down",
+            "--max-swipes",
+            "50",
+            "--duration-ms",
+            "800",
+            "--tag",
+            "t",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::ScrollTo {
+                label,
+                element_type,
+                direction,
+                max_swipes,
+                duration_ms,
+                tag,
+                ..
+            } => {
+                assert!(label);
+                assert_eq!(element_type.as_deref(), Some("Cell"));
+                assert_eq!(direction, ScrollDirection::Down);
+                assert_eq!(max_swipes, 50);
+                assert_eq!(duration_ms, Some(800));
+                assert_eq!(tag.as_deref(), Some("t"));
+            }
+            _ => panic!("expected ScrollTo"),
+        }
+        let cli = Cli::try_parse_from(["qorvex", "scroll-to", "--label-contains", "Row"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::ScrollTo { selector: None, .. }
+        ));
+    }
+
+    #[test]
+    fn scroll_to_bad_values_are_usage_errors() {
+        for bad in [
+            vec!["scroll-to", "x", "--max-swipes", "0"],
+            vec!["scroll-to", "x", "--max-swipes", "51"],
+            vec!["scroll-to", "x", "--max-swipes", "abc"],
+            vec!["scroll-to", "x", "--direction", "sideways"],
+            vec!["scroll-to", "x", "--duration-ms", "0"],
+            vec!["scroll-to"],
+        ] {
+            let mut argv = vec!["qorvex"];
+            argv.extend(&bad);
+            let Err(err) = Cli::try_parse_from(argv) else {
+                panic!("{:?} should be rejected", bad);
+            };
+            assert_eq!(err.exit_code(), 2, "{:?}", bad);
+        }
+    }
+
+    #[test]
+    fn scroll_to_answer_parse() {
+        let (line, found) = parse_scroll_to(
+            "Found \"r\" after 3 swipes",
+            r#"{"found":true,"swipes":3}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!((line.as_str(), found), ("Found \"r\" after 3 swipes", true));
+        let (line, found) = parse_scroll_to(
+            "Not found \"r\" after 3 swipes",
+            r#"{"found":false,"swipes":3}"#,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (line.as_str(), found),
+            (r#"{"found":false,"swipes":3}"#, false)
+        );
+        assert!(parse_scroll_to("m", "garbage", false).is_err());
+        assert!(parse_scroll_to("m", "{}", false).is_err());
     }
 
     #[test]

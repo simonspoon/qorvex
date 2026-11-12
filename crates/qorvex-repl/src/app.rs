@@ -8,7 +8,10 @@ use ratatui::text::Line;
 use tokio::sync::mpsc;
 use tui_input::Input;
 
-use qorvex_core::action::{parse_coordinate, parse_swipe_duration_ms, ActionType};
+use qorvex_core::action::{
+    parse_coordinate, parse_max_swipes, parse_swipe_duration_ms, ActionType, ScrollDirection,
+    DEFAULT_MAX_SWIPES,
+};
 use qorvex_core::adb_device::AndroidDevice;
 use qorvex_core::element::UIElement;
 use qorvex_core::ipc::{socket_path, IpcClient, IpcRequest, IpcResponse, Platform};
@@ -843,6 +846,18 @@ impl App {
                     return;
                 }
             },
+            "scroll-to" => match scroll_to_action(&args) {
+                Ok(action) => IpcRequest::Execute {
+                    action,
+                    tag: args.tag.clone(),
+                },
+                Err(msg) => {
+                    self.add_output(format_result(false, &msg));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+            },
             "lock" => IpcRequest::Execute {
                 action: ActionType::Lock,
                 tag: args.tag.clone(),
@@ -1386,6 +1401,16 @@ impl App {
                     return;
                 }
             },
+            "scroll-to" => match scroll_to_action(&args) {
+                Ok(action) => IpcRequest::Execute {
+                    action,
+                    tag: args.tag.clone(),
+                },
+                Err(msg) => {
+                    self.add_output(format_result(false, &msg));
+                    return;
+                }
+            },
             "lock" => IpcRequest::Execute {
                 action: ActionType::Lock,
                 tag: args.tag.clone(),
@@ -1821,6 +1846,8 @@ impl App {
             "  swipe [direction]        Swipe: up, down, left, right",
             "  swipe --from x,y --to x,y  Swipe between two coordinates",
             "  swipe ... --duration-ms N  Swipe duration, 1-10000 ms (default 300)",
+            "  scroll-to <sel> [--label] [--type T] [--direction D] [--max-swipes N] [--duration-ms N]",
+            "                           Swipe until the element is in the tree (default up, 10 swipes)",
             "  lock                     Lock the selected device",
             "  key <back|home>          Press a system key (back: Android only)",
             "  tap-location <x> <y>    Tap at screen coordinates",
@@ -1872,6 +1899,10 @@ pub(crate) struct ParsedArgs {
     pub stable_ms: Option<u64>,
     /// `--duration-ms <ms>` on `swipe`: raw value, validated by `swipe_action`.
     pub duration_ms: Option<String>,
+    /// `--direction <dir>` on `scroll-to`: raw value, validated by `scroll_to_action`.
+    pub direction: Option<String>,
+    /// `--max-swipes <n>` on `scroll-to`: raw value, validated by `scroll_to_action`.
+    pub max_swipes: Option<String>,
     /// `--append` on `send-keys` (the default mode).
     pub append: bool,
     /// `--replace` on `send-keys`: the field holds exactly the text afterwards.
@@ -1927,6 +1958,41 @@ fn swipe_action(args: &ParsedArgs) -> Result<ActionType, String> {
         }
         _ => Err("swipe: --from and --to must be given together".to_string()),
     }
+}
+
+/// Build the `scroll-to` action from parsed REPL args: a selector plus
+/// optional `--direction` (default `up`), `--max-swipes` (1-50, default 10)
+/// and `--duration-ms`. Returns a user-facing error message on misuse.
+fn scroll_to_action(args: &ParsedArgs) -> Result<ActionType, String> {
+    let selector = args.positional.first().cloned().unwrap_or_default();
+    if selector.is_empty() {
+        return Err("scroll-to requires a selector: scroll-to <selector>".to_string());
+    }
+    let direction = args
+        .direction
+        .as_deref()
+        .map_or(Ok(ScrollDirection::Up), str::parse)
+        .map_err(|e| format!("scroll-to: {}", e))?;
+    let max_swipes = args
+        .max_swipes
+        .as_deref()
+        .map(parse_max_swipes)
+        .transpose()?
+        .unwrap_or(DEFAULT_MAX_SWIPES);
+    let duration_ms = args
+        .duration_ms
+        .as_deref()
+        .map(parse_swipe_duration_ms)
+        .transpose()?;
+    Ok(ActionType::ScrollTo {
+        selector,
+        by_label: args.label,
+        element_type: args.element_type.clone(),
+        label_match: None,
+        direction,
+        max_swipes,
+        duration_ms,
+    })
 }
 
 /// Resolve a path argument against the REPL's working directory.
@@ -2084,6 +2150,8 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         to: None,
         stable_ms: None,
         duration_ms: None,
+        direction: None,
+        max_swipes: None,
         append: false,
         replace: false,
     };
@@ -2120,7 +2188,13 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             "--to" if cmd == "swipe" => {
                 args.to = iter.next();
             }
-            "--duration-ms" if cmd == "swipe" => {
+            "--direction" if cmd == "scroll-to" => {
+                args.direction = iter.next();
+            }
+            "--max-swipes" if cmd == "scroll-to" => {
+                args.max_swipes = iter.next();
+            }
+            "--duration-ms" if cmd == "swipe" || cmd == "scroll-to" => {
                 args.duration_ms = iter.next();
             }
             "--append" if cmd == "send-keys" => args.append = true,
@@ -2189,6 +2263,40 @@ mod tests {
         // The flags are only recognised on send-keys.
         let (_, a) = parse_command("log-comment --replace");
         assert_eq!(a.positional, vec!["--replace".to_string()]);
+    }
+
+    #[test]
+    fn test_scroll_to_action() {
+        let (_, a) = parse_command("scroll-to row-12");
+        assert!(matches!(
+            scroll_to_action(&a),
+            Ok(ActionType::ScrollTo { ref selector, direction: ScrollDirection::Up, max_swipes: 10, duration_ms: None, .. })
+                if selector == "row-12"
+        ));
+        let (_, a) = parse_command(
+            "scroll-to Row --label --direction Down --max-swipes 3 --duration-ms 800",
+        );
+        assert!(matches!(
+            scroll_to_action(&a),
+            Ok(ActionType::ScrollTo {
+                by_label: true,
+                direction: ScrollDirection::Down,
+                max_swipes: 3,
+                duration_ms: Some(800),
+                ..
+            })
+        ));
+        for bad in [
+            "scroll-to",
+            "scroll-to x --max-swipes 0",
+            "scroll-to x --max-swipes 51",
+            "scroll-to x --max-swipes abc",
+            "scroll-to x --direction sideways",
+            "scroll-to x --duration-ms 0",
+        ] {
+            let (_, a) = parse_command(bad);
+            assert!(scroll_to_action(&a).is_err(), "{}", bad);
+        }
     }
 
     #[test]

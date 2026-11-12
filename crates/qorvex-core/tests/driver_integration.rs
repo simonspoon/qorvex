@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use common::connected_executor;
 
-use qorvex_core::action::{ActionType, LabelMatch, LabelMatcher};
+use qorvex_core::action::{ActionType, LabelMatch, LabelMatcher, ScrollDirection};
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::driver::AutomationDriver;
 use qorvex_core::executor::ActionExecutor;
@@ -643,6 +643,97 @@ async fn test_executor_exists_driver_error_is_failure_not_absent() {
 
     let result = executor.execute(exists_action()).await;
     assert!(!result.success, "a driver error must not read as absent");
+    assert!(result.data.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// ScrollTo: exists check, swipe, re-check
+// ---------------------------------------------------------------------------
+
+fn scroll_to_action(max_swipes: u32) -> ActionType {
+    ActionType::ScrollTo {
+        selector: "row-12".to_string(),
+        by_label: false,
+        element_type: None,
+        label_match: None,
+        direction: ScrollDirection::Up,
+        max_swipes,
+        duration_ms: None,
+    }
+}
+
+fn absent() -> Response {
+    Response::Element {
+        json: "null".to_string(),
+    }
+}
+
+fn present() -> Response {
+    Response::Element {
+        json: r#"{"identifier":"row-12","hittable":true,"children":[]}"#.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn test_executor_scroll_to_present_makes_zero_swipes() {
+    // No swipe response scripted: a swipe would hit a closed connection.
+    let executor = connected_executor(vec![Response::Ok, present()]).await;
+    let result = executor.execute(scroll_to_action(5)).await;
+    assert!(result.success, "{}", result.message);
+    assert_eq!(result.message, "Found \"row-12\" after 0 swipes");
+    let v: serde_json::Value = serde_json::from_str(&result.data.unwrap()).unwrap();
+    assert_eq!(v, serde_json::json!({"found": true, "swipes": 0}));
+}
+
+#[tokio::test]
+async fn test_executor_scroll_to_found_on_third_check_after_three_swipes() {
+    let executor = connected_executor(vec![
+        Response::Ok, // heartbeat
+        absent(),
+        Response::Ok, // swipe 1
+        absent(),
+        Response::Ok, // swipe 2
+        absent(),
+        Response::Ok, // swipe 3
+        present(),
+    ])
+    .await;
+    let result = executor.execute(scroll_to_action(10)).await;
+    assert!(result.success, "{}", result.message);
+    assert_eq!(result.message, "Found \"row-12\" after 3 swipes");
+    let v: serde_json::Value = serde_json::from_str(&result.data.unwrap()).unwrap();
+    assert_eq!(v, serde_json::json!({"found": true, "swipes": 3}));
+}
+
+#[tokio::test]
+async fn test_executor_scroll_to_never_found_stops_at_max_swipes() {
+    let executor = connected_executor(vec![
+        Response::Ok, // heartbeat
+        absent(),
+        Response::Ok, // swipe 1
+        absent(),
+        Response::Ok, // swipe 2
+        absent(),
+    ])
+    .await;
+    let result = executor.execute(scroll_to_action(2)).await;
+    assert!(result.success, "{}", result.message);
+    assert_eq!(result.message, "Not found \"row-12\" after 2 swipes");
+    let v: serde_json::Value = serde_json::from_str(&result.data.unwrap()).unwrap();
+    assert_eq!(v, serde_json::json!({"found": false, "swipes": 2}));
+}
+
+#[tokio::test]
+async fn test_executor_scroll_to_driver_error_is_failure() {
+    let executor = connected_executor(vec![
+        Response::Ok, // heartbeat
+        Response::Error {
+            message: "target app is not running".to_string(),
+        },
+    ])
+    .await;
+    let result = executor.execute(scroll_to_action(3)).await;
+    assert!(!result.success);
     assert!(result.data.is_none());
 }
 

@@ -465,6 +465,41 @@ pub static COMMANDS: &[CommandDef] = &[
         ],
     },
     CommandDef {
+        name: "scroll-to",
+        description: "Swipe until an element is in the tree",
+        args: &[ArgSpec {
+            name: "selector",
+            completion: ArgCompletion::ElementSelector,
+        }],
+        options: &[
+            OptionSpec {
+                flag: "--label",
+                takes_value: false,
+                description: "Match by label instead of ID",
+            },
+            OptionSpec {
+                flag: "--type",
+                takes_value: true,
+                description: "Filter by element type",
+            },
+            OptionSpec {
+                flag: "--direction",
+                takes_value: true,
+                description: "Swipe direction (default up)",
+            },
+            OptionSpec {
+                flag: "--max-swipes",
+                takes_value: true,
+                description: "Maximum swipes, 1-50 (default 10)",
+            },
+            OptionSpec {
+                flag: "--duration-ms",
+                takes_value: true,
+                description: "Swipe duration in ms (default 300)",
+            },
+        ],
+    },
+    CommandDef {
         name: "wait-for",
         description: "Wait for element to appear",
         args: &[ArgSpec {

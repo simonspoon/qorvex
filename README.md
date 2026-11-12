@@ -157,6 +157,7 @@ Available commands:
 - `wait-for <selector> --label --type <type>` — Wait for element by label with type filter
 - `wait-for-not <selector>` — Wait for element to disappear (5s default timeout)
 - `wait-for-not <selector> --timeout <ms>` — Wait for disappearance with custom timeout
+- `scroll-to <selector> [--direction D] [--max-swipes N]` — Swipe until the element is in the tree (exit 4 if not found; "in the tree" is not "on screen")
 - `wait-stable [--for <ms>]` — Wait until the whole UI tree is unchanged for `--for` ms (default 500; 5s default timeout)
 - `get-screenshot` — Capture current screen
 - `get-screen-info` — Get UI hierarchy information

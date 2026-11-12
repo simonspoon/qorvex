@@ -636,6 +636,71 @@ impl ActionExecutor {
                 }
             }
 
+            ActionType::ScrollTo {
+                ref selector,
+                by_label,
+                ref element_type,
+                ref label_match,
+                direction,
+                max_swipes,
+                duration_ms,
+            } => {
+                let matcher = match compile_label_match(label_match) {
+                    Ok(m) => m,
+                    Err(fail) => return fail,
+                };
+                let shown = label_match.as_ref().map(|m| m.to_string());
+                let selector = shown.as_deref().unwrap_or(selector);
+                let mut swipes: u32 = 0;
+                loop {
+                    // Same lookup as `Exists`; a driver error is not "absent".
+                    match self
+                        .find_for(
+                            matcher.as_ref(),
+                            selector,
+                            by_label,
+                            element_type.as_deref(),
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(Some(_)) => {
+                            return ExecutionResult::success(format!(
+                                "Found \"{}\" after {} swipe{}",
+                                selector,
+                                swipes,
+                                if swipes == 1 { "" } else { "s" }
+                            ))
+                            .with_data(
+                                serde_json::json!({"found": true, "swipes": swipes}).to_string(),
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(e) => return ExecutionResult::failure(e.to_string()),
+                    }
+                    if swipes >= max_swipes {
+                        return ExecutionResult::success(format!(
+                            "Not found \"{}\" after {} swipe{}",
+                            selector,
+                            swipes,
+                            if swipes == 1 { "" } else { "s" }
+                        ))
+                        .with_data(
+                            serde_json::json!({"found": false, "swipes": swipes}).to_string(),
+                        );
+                    }
+                    let swipe = ActionType::Swipe {
+                        direction: direction.as_str().to_string(),
+                        duration_ms,
+                    };
+                    let result = Box::pin(self.execute_inner(swipe)).await;
+                    if !result.success {
+                        return result;
+                    }
+                    swipes += 1;
+                }
+            }
+
             ActionType::GetValue {
                 ref selector,
                 by_label,

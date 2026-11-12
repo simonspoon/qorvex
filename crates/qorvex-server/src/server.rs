@@ -2295,12 +2295,17 @@ impl ServerState {
                 // `exists` answering "absent" is only trustworthy while the
                 // target app is up: with no app the agent finds nothing, which
                 // must not read as "absent". Ask once, only on an absent answer.
-                if result.success && matches!(action, ActionType::Exists { .. }) {
+                if result.success
+                    && matches!(
+                        action,
+                        ActionType::Exists { .. } | ActionType::ScrollTo { .. }
+                    )
+                {
                     let absent = result
                         .data
                         .as_deref()
                         .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
-                        .is_some_and(|v| v["exists"] == false);
+                        .is_some_and(|v| v["exists"] == false || v["found"] == false);
                     if let (true, Some(bundle)) = (absent, self.target_bundle_id.clone()) {
                         let lost = match executor.driver().get_target_info().await {
                             Ok(info) => target_lost_message(

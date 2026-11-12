@@ -679,6 +679,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::GetScreenTree
             | ActionType::GetValue { .. }
             | ActionType::Exists { .. }
+            | ActionType::ScrollTo { .. }
             | ActionType::GetScreenshot
             | ActionType::WaitFor { .. }
             | ActionType::WaitForNot { .. }

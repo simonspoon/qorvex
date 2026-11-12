@@ -127,6 +127,32 @@ impl LogConverter {
                 }
                 Some(cmd)
             }
+            ActionType::ScrollTo {
+                selector,
+                by_label,
+                element_type,
+                label_match,
+                direction,
+                max_swipes,
+                duration_ms,
+            } => {
+                let mut cmd = format!("qorvex scroll-to {}", selector_args(selector, label_match));
+                if *by_label {
+                    cmd.push_str(" --label");
+                }
+                if let Some(t) = element_type {
+                    cmd.push_str(&format!(" -T {}", shell_escape(t)));
+                }
+                cmd.push_str(&format!(
+                    " --direction {} --max-swipes {}",
+                    direction.as_str(),
+                    max_swipes
+                ));
+                if let Some(ms) = duration_ms {
+                    cmd.push_str(&format!(" --duration-ms {}", ms));
+                }
+                Some(cmd)
+            }
             ActionType::WaitFor {
                 selector,
                 by_label,
@@ -525,6 +551,26 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&ActionType::GetScreenInfo, None),
             Some("qorvex screen-info".to_string())
+        );
+    }
+
+    #[test]
+    fn test_scroll_to_to_command() {
+        let action = ActionType::ScrollTo {
+            selector: "row 12".to_string(),
+            by_label: true,
+            element_type: Some("Cell".to_string()),
+            label_match: None,
+            direction: qorvex_core::action::ScrollDirection::Down,
+            max_swipes: 5,
+            duration_ms: Some(800),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some(
+                "qorvex scroll-to 'row 12' --label -T Cell --direction down --max-swipes 5 --duration-ms 800"
+                    .to_string()
+            )
         );
     }
 
