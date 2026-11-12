@@ -698,6 +698,10 @@ enum Command {
         /// Device UDID (simulator or physical) to use for this session
         #[arg(short, long)]
         device: Option<String>,
+
+        /// Exit 1 unless the session is ready (device selected, agent answering)
+        #[arg(long)]
+        wait_ready: bool,
     },
 
     /// Start an automation session (auto-starts agent if configured)
@@ -954,20 +958,66 @@ impl std::fmt::Display for CliError {
     }
 }
 
+/// Result of a connect-only liveness probe of a session socket.
+#[derive(Debug, PartialEq, Eq)]
+enum SocketProbe {
+    /// Something accepted the connection (a busy or hung server still counts).
+    Live,
+    /// The file exists but nothing is listening (connection refused).
+    Dead,
+    /// No socket file.
+    Missing,
+    /// Any other connect failure (e.g. permission denied); never acted on.
+    Other,
+}
+
+/// Connects to `path` without sending anything, so it returns at once even
+/// against a server that never answers.
+///
+/// A refused connect is retried once after a short pause: a server that has
+/// bound its socket but not yet called `listen` also refuses, and reaping its
+/// socket would orphan it.
+fn probe_socket(path: &std::path::Path) -> SocketProbe {
+    let connect = || std::os::unix::net::UnixStream::connect(path).map(|_| ());
+    let result = match connect() {
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            connect()
+        }
+        other => other,
+    };
+    match result {
+        Ok(()) => SocketProbe::Live,
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::ConnectionRefused => SocketProbe::Dead,
+            std::io::ErrorKind::NotFound => SocketProbe::Missing,
+            _ => SocketProbe::Other,
+        },
+    }
+}
+
 /// Finds running sessions, pairing each with the agent port recorded in its
 /// `.port` sidecar. The port is `None` for a session started before sessions
 /// got their own ports, or one whose sidecar is unreadable.
 fn discover_sessions() -> Vec<(String, Option<u16>)> {
-    let pattern = qorvex_dir().join("qorvex_*.sock");
+    let dir = qorvex_dir();
+    let pattern = dir.join("qorvex_*.sock");
     glob::glob(pattern.to_str().unwrap_or_default())
         .into_iter()
         .flatten()
         .filter_map(|entry| {
             entry.ok().and_then(|path| {
-                path.file_stem()
+                let name = path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .and_then(|s| s.strip_prefix("qorvex_"))
-                    .map(String::from)
+                    .map(String::from)?;
+                // Reap dead sessions; anything not provably dead stays listed.
+                if probe_socket(&path) == SocketProbe::Dead {
+                    let _ = std::fs::remove_file(&path);
+                    return None;
+                }
+                Some(name)
             })
         })
         .map(|name| {
@@ -987,6 +1037,14 @@ fn discover_sessions() -> Vec<(String, Option<u16>)> {
 /// file". Naming the path it tried turns that into a one-line diagnosis.
 async fn connect_to_session(session: &str) -> Result<IpcClient, CliError> {
     let path = socket_path(session);
+    if probe_socket(&path) == SocketProbe::Dead {
+        let _ = std::fs::remove_file(&path);
+        return Err(CliError::Connection(format!(
+            "session '{}' is dead (stale socket at {}, no server listening); run `qorvex start`",
+            session,
+            path.display()
+        )));
+    }
     IpcClient::connect(session).await.map_err(|e| {
         if !path.exists() {
             CliError::Connection(format!(
@@ -1207,8 +1265,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Err(e) => return Err(e),
             }
         }
-        Command::Start { ref device } => {
-            return start_all(&cli, device.clone()).await;
+        Command::Start {
+            ref device,
+            wait_ready,
+        } => {
+            return start_all(&cli, device.clone(), wait_ready).await;
         }
         Command::Completions { shell } => {
             use clap::CommandFactory;
@@ -1929,16 +1990,29 @@ async fn get_status(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
         IpcResponse::State {
             session_id,
             screenshot,
+            ready,
+            device,
+            agent_connected,
+            reason,
         } => {
             if cli.format == OutputFormat::Json {
                 let output = serde_json::json!({
                     "session_id": session_id,
                     "has_screenshot": screenshot.is_some(),
+                    "ready": ready,
+                    "device": device,
+                    "agent_connected": agent_connected,
+                    "reason": reason,
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             } else {
                 println!("Session ID: {}", session_id);
                 println!("Has screenshot: {}", screenshot.is_some());
+                if ready {
+                    println!("Ready: yes");
+                } else {
+                    println!("Ready: no ({})", reason.as_deref().unwrap_or("unknown"));
+                }
             }
             Ok(())
         }
@@ -2084,11 +2158,33 @@ fn is_known_simulator(udid: &str, simulators: &[qorvex_core::simctl::SimulatorDe
     simulators.iter().any(|d| d.udid == udid)
 }
 
-async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
+async fn start_all(cli: &Cli, device: Option<String>, wait_ready: bool) -> Result<(), CliError> {
     use qorvex_core::config::QorvexConfig;
     use qorvex_core::ipc::socket_path;
 
     let sock = socket_path(&cli.session);
+
+    // Idempotent: a session that is already ready (on the requested device, if
+    // one was named) is left untouched. Checked first so a ready session never
+    // pays for the signing build. Anything else falls through as before.
+    if probe_socket(&sock) == SocketProbe::Live {
+        set_start_phase(2);
+        if let Ok(mut client) = IpcClient::connect(&cli.session).await {
+            if let Ok(IpcResponse::State {
+                ready: true,
+                device: ref state_device,
+                ..
+            }) = client.send(&IpcRequest::GetState).await
+            {
+                if device.is_none() || device == *state_device {
+                    if !cli.quiet {
+                        eprintln!("Session already running (ready)");
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
 
     // For physical devices that need signing, build the agent in the foreground
     // CLI process so interactive prompts (keychain, Apple ID) work properly.
@@ -2181,6 +2277,12 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
 
     // Start server if not already running
     set_start_phase(2);
+    if probe_socket(&sock) == SocketProbe::Dead {
+        let _ = std::fs::remove_file(&sock);
+        if !cli.quiet {
+            eprintln!("Removed stale socket for dead session '{}'", cli.session);
+        }
+    }
     if !sock.exists() {
         let log_dir = qorvex_core::session::logs_dir();
         let log_file = std::fs::File::create(log_dir.join("qorvex-server-launch.log")).ok();
@@ -2246,18 +2348,35 @@ async fn start_all(cli: &Cli, device: Option<String>) -> Result<(), CliError> {
 
     match response {
         IpcResponse::CommandResult { success, message } => {
-            if success {
-                if !cli.quiet {
-                    eprintln!("{}", message);
-                }
-                Ok(())
-            } else {
-                Err(CliError::ActionFailed(message))
+            if !success {
+                return Err(CliError::ActionFailed(message));
+            }
+            if !cli.quiet {
+                eprintln!("{}", message);
             }
         }
-        IpcResponse::Error { message } => Err(CliError::ActionFailed(message)),
-        _ => Err(CliError::Protocol("Unexpected response".to_string())),
+        IpcResponse::Error { message } => return Err(CliError::ActionFailed(message)),
+        _ => return Err(CliError::Protocol("Unexpected response".to_string())),
     }
+
+    if wait_ready {
+        match client
+            .send(&IpcRequest::GetState)
+            .await
+            .map_err(|e| CliError::Protocol(format!("Failed to read state: {}", e)))?
+        {
+            IpcResponse::State { ready: true, .. } => {}
+            IpcResponse::State { reason, .. } => {
+                return Err(CliError::ActionFailed(format!(
+                    "session started but not ready: {}",
+                    reason.unwrap_or_else(|| "unknown".to_string())
+                )));
+            }
+            IpcResponse::Error { message } => return Err(CliError::ActionFailed(message)),
+            _ => return Err(CliError::Protocol("Unexpected response".to_string())),
+        }
+    }
+    Ok(())
 }
 
 async fn list_physical_devices(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> {
@@ -2436,7 +2555,7 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{self, File};
+    use std::fs;
 
     #[test]
     fn screen_info_default_is_array_without_count() {
@@ -2572,10 +2691,15 @@ mod tests {
         // Create temporary socket files with unique names to avoid test collisions
         let test_sessions = ["test_session_a", "test_session_b", "test_session_c"];
         let mut created_files = Vec::new();
+        let mut listeners = Vec::new();
 
         for session_name in &test_sessions {
             let sock_path = qorvex_dir.join(format!("qorvex_{}.sock", session_name));
-            File::create(&sock_path).expect("Failed to create test socket file");
+            let _ = fs::remove_file(&sock_path);
+            listeners.push(
+                std::os::unix::net::UnixListener::bind(&sock_path)
+                    .expect("Failed to bind test socket"),
+            );
             created_files.push(sock_path);
         }
 
@@ -2607,11 +2731,16 @@ mod tests {
 
         let with_port = "test_session_with_port";
         let without_port = "test_session_without_port";
+        let mut listeners = Vec::new();
         let sockets: Vec<_> = [with_port, without_port]
             .iter()
             .map(|name| {
                 let path = qorvex_dir.join(format!("qorvex_{}.sock", name));
-                File::create(&path).expect("Failed to create test socket file");
+                let _ = fs::remove_file(&path);
+                listeners.push(
+                    std::os::unix::net::UnixListener::bind(&path)
+                        .expect("Failed to bind test socket"),
+                );
                 path
             })
             .collect();
@@ -2639,6 +2768,35 @@ mod tests {
             let _ = fs::remove_file(path);
         }
         let _ = fs::remove_file(port_file);
+    }
+
+    /// A bound-then-dropped socket probes as dead; a listening one as live; a
+    /// missing path as missing. Only the dead file may be reaped.
+    #[test]
+    fn probe_socket_classifies_live_dead_missing() {
+        let dir = std::path::PathBuf::from(format!("/tmp/qvx_probe_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("live.sock");
+        let dead = dir.join("dead.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&live).unwrap();
+        drop(std::os::unix::net::UnixListener::bind(&dead).unwrap());
+        assert_eq!(probe_socket(&live), SocketProbe::Live);
+        assert_eq!(probe_socket(&dead), SocketProbe::Dead);
+        assert_eq!(probe_socket(&dir.join("none.sock")), SocketProbe::Missing);
+        assert!(live.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn start_parses_wait_ready() {
+        let cli = Cli::try_parse_from(["qorvex", "start", "--wait-ready"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Start {
+                wait_ready: true,
+                ..
+            }
+        ));
     }
 
     fn sim(udid: &str) -> qorvex_core::simctl::SimulatorDevice {

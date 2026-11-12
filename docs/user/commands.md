@@ -6,7 +6,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 
 | Command | REPL | CLI |
 |---------|------|-----|
-| Start server + session (one step) | — | `qorvex start [--device <udid>]` |
+| Start server + session (one step) | — | `qorvex start [--device <udid>] [--wait-ready]` |
 | Start session | `start-session` | `qorvex start-session` |
 | End session | `end-session` | — |
 | Stop server | — | `qorvex stop` |
@@ -330,7 +330,9 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 - `-f, --format <text|json>` -- Output format
 - `-q, --quiet` -- Suppress non-essential output
 - `-o, --timeout <ms>` -- Accepted on every command, after the subcommand name. On `tap`, `get-value`, `wait-for`, `wait-for-not` it is the element timeout (default 5000, `$QORVEX_TIMEOUT`; unchanged, exit 1 on expiry). On every other command it is a hard wall-clock deadline for the whole process: default 600000 ms, `$QORVEX_COMMAND_TIMEOUT` overrides the default, the flag overrides both, `0` disables it. When it passes, the process prints `Error: Timed out after <ms>ms: <command>; the session server may still be working (check \`qorvex status\`)` and exits 124 (`start` also names the phase reached). The server is not stopped and its work is not cancelled. For the four wait commands the deadline is `max(600000 or $QORVEX_COMMAND_TIMEOUT, element timeout + 20000)`. A slow interactive signing build in `start -d <physical iPhone>` can exceed 600 s: pass `--timeout 0`.
-- `start`: `-d, --device <udid>` -- Select a device (simulator or physical) before starting the session; equivalent to sending `use-device` then `start-session` in sequence
+- `start`: `-d, --device <udid>` -- Select a device (simulator or physical) before starting the session; equivalent to sending `use-device` then `start-session` in sequence. `start` recovers a dead session (removes the stale socket and spawns a new server, noting `Removed stale socket for dead session '<s>'`). It is idempotent: if the session is already ready (and `-d` is absent or names the session's device) it prints `Session already running (ready)` and exits 0 without creating a new session, so the session id and action log are kept; to clear the log, run `stop` then `start`. `--wait-ready` -- after starting, exit 1 with `session started but not ready: <reason>` unless the session is ready (single check, no polling).
+- `status`: reports `session_id` and `has_screenshot`, plus readiness: text adds `Ready: yes` or `Ready: no (<reason>)`; `-f json` adds `ready`, `device`, `agent_connected`, `reason` (null when ready; otherwise `no device selected`, `no agent connected` or `agent not reachable: <error>`). Exit code is 0 whenever a session exists, ready or not. On a dead session it exits 2 with `session '<s>' is dead`.
+- `list-sessions`: lists live sessions only; sockets of dead sessions (connection refused) are removed.
 - `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`, `--tag <text>`
 - `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000), `--tag <text>`
 - `memory-info`: `--tag <text>` — annotates the JSONL log entry; the measured report is written into the entry itself

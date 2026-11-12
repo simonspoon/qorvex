@@ -174,6 +174,10 @@ fn test_ipc_response_state_serialization() {
     let response = IpcResponse::State {
         session_id: "test-session-123".to_string(),
         screenshot: None,
+        ready: true,
+        device: Some("UDID".to_string()),
+        agent_connected: true,
+        reason: None,
     };
 
     let json = serde_json::to_string(&response).unwrap();
@@ -183,9 +187,40 @@ fn test_ipc_response_state_serialization() {
         IpcResponse::State {
             session_id,
             screenshot,
+            ready,
+            device,
+            agent_connected,
+            reason,
         } => {
             assert_eq!(session_id, "test-session-123");
             assert!(screenshot.is_none());
+            assert!(ready);
+            assert_eq!(device.as_deref(), Some("UDID"));
+            assert!(agent_connected);
+            assert!(reason.is_none());
+        }
+        _ => panic!("Expected State response"),
+    }
+}
+
+/// A `State` from an older server (no readiness fields) still deserialises.
+#[test]
+fn test_ipc_response_state_without_new_fields() {
+    let json = r#"{"type":"State","session_id":"old","screenshot":null}"#;
+    match serde_json::from_str::<IpcResponse>(json).unwrap() {
+        IpcResponse::State {
+            session_id,
+            ready,
+            device,
+            agent_connected,
+            reason,
+            ..
+        } => {
+            assert_eq!(session_id, "old");
+            assert!(!ready);
+            assert!(device.is_none());
+            assert!(!agent_connected);
+            assert!(reason.is_none());
         }
         _ => panic!("Expected State response"),
     }
@@ -591,6 +626,7 @@ async fn test_ipc_get_state_request() {
         IpcResponse::State {
             session_id: resp_id,
             screenshot,
+            ..
         } => {
             assert_eq!(resp_id, session_id);
             assert!(screenshot.is_none()); // No screenshot yet

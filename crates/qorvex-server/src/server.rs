@@ -2309,10 +2309,30 @@ impl ServerState {
 
     async fn handle_get_state(&self) -> IpcResponse {
         match &self.session {
-            Some(session) => IpcResponse::State {
-                session_id: session.id.to_string(),
-                screenshot: session.get_screenshot().await,
-            },
+            Some(session) => {
+                let device = self
+                    .android_serial
+                    .clone()
+                    .or_else(|| self.simulator_udid.clone());
+                let (agent_connected, reason) = if device.is_none() {
+                    (false, Some("no device selected".to_string()))
+                } else if let Some(executor) = &self.executor {
+                    match executor.driver().screenshot().await {
+                        Ok(_) => (true, None),
+                        Err(e) => (false, Some(format!("agent not reachable: {e}"))),
+                    }
+                } else {
+                    (false, Some("no agent connected".to_string()))
+                };
+                IpcResponse::State {
+                    session_id: session.id.to_string(),
+                    screenshot: session.get_screenshot().await,
+                    ready: reason.is_none(),
+                    device,
+                    agent_connected,
+                    reason,
+                }
+            }
             None => IpcResponse::Error {
                 message: "No active session".to_string(),
             },
@@ -2814,6 +2834,65 @@ mod tests {
         // request fails at the "no client" check with `NotConnected`.
         state.executor = Some(ActionExecutor::with_agent("127.0.0.1".to_string(), 1));
         state
+    }
+
+    async fn with_session(mut state: ServerState) -> ServerState {
+        state.session = Some(Session::new(state.simulator_udid.clone(), "test"));
+        state
+    }
+
+    fn state_fields(resp: IpcResponse) -> (bool, Option<String>, bool, Option<String>) {
+        match resp {
+            IpcResponse::State {
+                ready,
+                device,
+                agent_connected,
+                reason,
+                ..
+            } => (ready, device, agent_connected, reason),
+            other => panic!("expected State, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_state_without_device_is_not_ready() {
+        let mut state = agentless_state().await;
+        state.simulator_udid = None;
+        state.android_serial = None;
+        let state = with_session(state).await;
+        let (ready, device, connected, reason) = state_fields(state.handle_get_state().await);
+        assert!(!ready && !connected);
+        assert!(device.is_none());
+        assert_eq!(reason.as_deref(), Some("no device selected"));
+    }
+
+    #[tokio::test]
+    async fn get_state_with_device_but_no_agent() {
+        let mut state = agentless_state().await;
+        state.simulator_udid = Some("UDID-1".to_string());
+        state.android_serial = None;
+        let state = with_session(state).await;
+        let (ready, device, connected, reason) = state_fields(state.handle_get_state().await);
+        assert!(!ready && !connected);
+        assert_eq!(device.as_deref(), Some("UDID-1"));
+        assert_eq!(reason.as_deref(), Some("no agent connected"));
+    }
+
+    #[tokio::test]
+    async fn get_state_with_unreachable_agent() {
+        let mut state = unreachable_agent_state().await;
+        state.simulator_udid = Some("UDID-1".to_string());
+        state.android_serial = None;
+        let state = with_session(state).await;
+        let (ready, _, connected, reason) = state_fields(state.handle_get_state().await);
+        assert!(!ready && !connected);
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("agent not reachable"),
+            "{reason:?}"
+        );
     }
 
     /// The REPL's `set-target` records the bundle id with no agent connected,

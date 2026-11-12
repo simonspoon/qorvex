@@ -237,13 +237,9 @@ The element didn't appear within the timeout. Increase timeout with `set-timeout
 
 ## Stale Socket Files
 
-If a session crashes, the socket file may be left behind:
+If a server dies without cleaning up (kill -9, crash, reboot), its socket file is left behind. qorvex detects this itself: a socket that exists but refuses connections is a dead session. Any command that needs the session prints `Error: Connection error: session '<name>' is dead (stale socket at <path>, no server listening); run \`qorvex start\`` (exit 2) and removes the stale file. `qorvex list-sessions` lists live sessions only and removes the sockets of dead ones. `qorvex start` removes the stale socket, spawns a fresh server and continues. No manual `rm` is needed. A server that accepts connections but never answers is live, so it is never removed.
 
-```bash
-rm ~/.qorvex/qorvex_default.sock
-```
-
-The server cleans up old sockets on startup, but manual removal may be needed after a crash.
+Use `qorvex status` to check readiness: it reports `Ready: yes`, or `Ready: no (<reason>)`.
 
 ## Performance
 

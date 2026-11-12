@@ -364,6 +364,19 @@ pub enum IpcResponse {
         session_id: String,
         /// The current screenshot (base64-encoded PNG), wrapped in Arc for efficiency.
         screenshot: Option<Arc<String>>,
+        /// True when a session is active, a device is selected and the agent
+        /// answered a round trip. Absent from older servers (reads as false).
+        #[serde(default)]
+        ready: bool,
+        /// Selected device (iOS udid or Android serial), if any.
+        #[serde(default)]
+        device: Option<String>,
+        /// Whether the agent answered the readiness probe.
+        #[serde(default)]
+        agent_connected: bool,
+        /// First missing piece when not ready; `None` when ready.
+        #[serde(default)]
+        reason: Option<String>,
     },
 
     /// Action log history.
@@ -762,6 +775,10 @@ impl IpcServer {
                     let response = IpcResponse::State {
                         session_id: session.id.to_string(),
                         screenshot: session.get_screenshot().await,
+                        ready: false,
+                        device: None,
+                        agent_connected: false,
+                        reason: Some("no device selected".to_string()),
                     };
                     let json = serde_json::to_string(&response)? + "\n";
                     writer.write_all(json.as_bytes()).await?;

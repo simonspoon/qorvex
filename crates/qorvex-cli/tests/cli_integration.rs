@@ -343,3 +343,76 @@ fn test_command_timeout_env_non_numeric_is_usage_error() {
         .code(2)
         .stderr(predicate::str::contains("QORVEX_COMMAND_TIMEOUT"));
 }
+
+/// Adds a bound-then-dropped socket (file stays, nothing listens) to `home`.
+fn add_dead_socket(home: &std::path::Path, name: &str) -> PathBuf {
+    let path = home.join(format!("qorvex_{name}.sock"));
+    drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+    assert!(path.exists());
+    path
+}
+
+#[test]
+fn test_dead_session_error_and_reap() {
+    let (home, _h) = hung_server("dead1");
+    let dead = add_dead_socket(&home, "dead");
+    let (out, _) = run_hung(&home, &[], &["-s", "dead", "status"]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("session 'dead' is dead"), "{err}");
+    assert!(
+        err.contains("no server listening); run `qorvex start`"),
+        "{err}"
+    );
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(err.starts_with("Error: Connection error: session 'dead' is dead"));
+    assert!(!dead.exists());
+}
+
+#[test]
+fn test_list_sessions_reaps_dead_keeps_hung() {
+    let (home, _h) = hung_server("dead2");
+    let dead = add_dead_socket(&home, "dead");
+    let (out, ms) = run_hung(&home, &[], &["list-sessions"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(ms < 1000, "took {ms}ms");
+    let so = String::from_utf8_lossy(&out.stdout);
+    assert!(so.contains("hang"), "{so}");
+    assert!(!so.contains("dead"), "{so}");
+    assert!(!dead.exists());
+    assert!(home.join("qorvex_hang.sock").exists());
+}
+
+#[test]
+fn test_list_sessions_json_omits_dead() {
+    let (home, _h) = hung_server("dead3");
+    add_dead_socket(&home, "dead");
+    let (out, _) = run_hung(&home, &[], &["-f", "json", "list-sessions"]);
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<&str> = v["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["hang"]);
+}
+
+#[test]
+fn test_missing_socket_message_unchanged() {
+    let (home, _h) = hung_server("dead4");
+    let (out, _) = run_hung(&home, &[], &["-s", "nosuch", "status"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("socket not found"));
+}
+
+#[test]
+fn test_start_help_lists_wait_ready() {
+    Command::cargo_bin("qorvex")
+        .unwrap()
+        .args(["start", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--wait-ready"));
+}

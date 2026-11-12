@@ -357,7 +357,7 @@ Qorvex stores runtime files in `~/.qorvex/`, or in `$QORVEX_HOME` when that is s
 - **Sockets** (`~/.qorvex/qorvex_<session>.sock`) — IPC endpoints for REPL sessions. The CLI uses these to communicate.
 - **Logs** (`~/.qorvex/logs/<session>_<timestamp>.jsonl`) — Persistent action logs from REPL sessions in JSON Lines format. Use `qorvex convert` to turn these into shell scripts.
 
-Use `qorvex list-sessions` to discover running sessions by scanning for active socket files.
+Use `qorvex list-sessions` to discover running sessions; it probes each socket, lists live sessions only and removes the stale sockets of dead ones. `qorvex status` reports whether a session is ready (device selected and agent answering); `qorvex start` is idempotent on a ready session (it no longer resets the session or log; use `stop` then `start`) and accepts `--wait-ready`.
 
 ## License
 
