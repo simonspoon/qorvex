@@ -55,8 +55,9 @@ mod doctor;
 mod lease;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use qorvex_core::action::{parse_coordinate, ActionType};
+use qorvex_core::action::{parse_coordinate, ActionType, LabelMatch, LabelMatcher};
 use qorvex_core::adb_device::Adb;
+use qorvex_core::driver::CompiledLabelMatch;
 use qorvex_core::element::{ElementFrame, UIElement};
 use qorvex_core::ipc::{
     agent_port_path, qorvex_dir, socket_path, IpcClient, IpcRequest, IpcResponse, Platform,
@@ -407,13 +408,16 @@ enum Command {
     /// their usual exit codes. "Present" means in the tree, not visible.
     Exists {
         /// The selector (accessibility ID or label)
-        selector: String,
+        #[arg(required_unless_present = "label_match")]
+        selector: Option<String>,
         /// Match by accessibility label instead of ID
         #[arg(short, long)]
         label: bool,
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
+        #[command(flatten)]
+        label_match: LabelMatchArgs,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -431,13 +435,16 @@ enum Command {
     /// Wait for an element to appear by ID or label
     WaitFor {
         /// The selector (accessibility ID or label)
-        selector: String,
+        #[arg(required_unless_present = "label_match")]
+        selector: Option<String>,
         /// Match by accessibility label instead of ID
         #[arg(short, long)]
         label: bool,
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
+        #[command(flatten)]
+        label_match: LabelMatchArgs,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -446,13 +453,16 @@ enum Command {
     /// Wait for an element to disappear by ID or label
     WaitForNot {
         /// The selector (accessibility ID or label)
-        selector: String,
+        #[arg(required_unless_present = "label_match")]
+        selector: Option<String>,
         /// Match by accessibility label instead of ID
         #[arg(short, long)]
         label: bool,
         /// Filter by element type (e.g., Button, TextField)
         #[arg(short = 'T', long = "type")]
         element_type: Option<String>,
+        #[command(flatten)]
+        label_match: LabelMatchArgs,
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
@@ -971,6 +981,45 @@ fn arm_watchdog(deadline: std::time::Duration, name: String, screen_info_json: b
     });
 }
 
+/// Label text-match flags of `exists`, `wait-for` and `wait-for-not`; they
+/// replace the positional selector.
+#[derive(clap::Args, Debug, Clone, Default)]
+#[command(group(clap::ArgGroup::new("label_match").args(["label_contains", "label_regex"])))]
+struct LabelMatchArgs {
+    /// Match elements whose label contains this text (case-sensitive, literal)
+    #[arg(long, value_name = "TEXT", conflicts_with_all = ["selector", "label"])]
+    label_contains: Option<String>,
+    /// Match elements whose label matches this regex (Rust regex syntax, unanchored)
+    #[arg(long, value_name = "PATTERN", value_parser = parse_label_regex, conflicts_with_all = ["selector", "label"])]
+    label_regex: Option<String>,
+    /// Pick the Nth match, 0-based, in tree order (needs --label-contains or --label-regex)
+    #[arg(long, value_name = "N", requires = "label_match")]
+    nth: Option<usize>,
+}
+
+impl LabelMatchArgs {
+    fn to_match(&self) -> Option<Box<LabelMatch>> {
+        let matcher = match (&self.label_contains, &self.label_regex) {
+            (Some(t), _) => LabelMatcher::Contains(t.clone()),
+            (None, Some(r)) => LabelMatcher::Regex(r.clone()),
+            (None, None) => return None,
+        };
+        Some(Box::new(LabelMatch {
+            matcher,
+            nth: self.nth,
+        }))
+    }
+}
+
+/// Rejects an invalid `--label-regex` at parse time (usage error, exit 2).
+fn parse_label_regex(s: &str) -> Result<String, String> {
+    CompiledLabelMatch::new(&LabelMatch {
+        matcher: LabelMatcher::Regex(s.to_string()),
+        nth: None,
+    })
+    .map(|_| s.to_string())
+}
+
 #[derive(Debug)]
 enum CliError {
     Connection(String),
@@ -1362,6 +1411,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     selector: selector.clone(),
                     by_label: label,
                     element_type: element_type.clone(),
+                    label_match: None,
                 };
                 // The lookup and the tap are two requests; the element may
                 // change in between (accepted race).
@@ -1460,12 +1510,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref selector,
             label,
             ref element_type,
+            ref label_match,
             ref tag,
         } => {
             let probe = ActionType::Exists {
-                selector: selector.clone(),
+                selector: selector.clone().unwrap_or_default(),
                 by_label: label,
                 element_type: element_type.clone(),
+                label_match: label_match.to_match(),
             };
             let found = query_exists(&mut client, probe, tag.clone()).await?;
             println!(
@@ -1538,16 +1590,18 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref selector,
             label,
             ref element_type,
+            ref label_match,
             ref tag,
         } => {
             execute_action(
                 &mut client,
                 ActionType::WaitFor {
-                    selector: selector.clone(),
+                    selector: selector.clone().unwrap_or_default(),
                     by_label: label,
                     element_type: element_type.clone(),
                     timeout_ms: element_timeout(&cli),
                     require_stable: true,
+                    label_match: label_match.to_match(),
                 },
                 tag.clone(),
                 &cli,
@@ -1558,15 +1612,17 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref selector,
             label,
             ref element_type,
+            ref label_match,
             ref tag,
         } => {
             execute_action(
                 &mut client,
                 ActionType::WaitForNot {
-                    selector: selector.clone(),
+                    selector: selector.clone().unwrap_or_default(),
                     by_label: label,
                     element_type: element_type.clone(),
                     timeout_ms: element_timeout(&cli),
+                    label_match: label_match.to_match(),
                 },
                 tag.clone(),
                 &cli,
@@ -3026,14 +3082,118 @@ mod tests {
                 selector,
                 label,
                 element_type,
+                label_match,
                 tag,
             } => {
-                assert_eq!(selector, "Tap Me");
+                assert_eq!(selector.as_deref(), Some("Tap Me"));
+                assert_eq!(label_match.to_match(), None);
                 assert!(label);
                 assert_eq!(element_type.as_deref(), Some("Button"));
                 assert_eq!(tag.as_deref(), Some("t"));
             }
             _ => panic!("expected Exists"),
+        }
+    }
+
+    #[test]
+    fn label_match_flags_parse_on_exists_wait_for_wait_for_not() {
+        for cmd in ["exists", "wait-for", "wait-for-not"] {
+            let cli = Cli::try_parse_from([
+                "qorvex",
+                cmd,
+                "--label-regex",
+                "^Tapped: [0-9]+$",
+                "--nth",
+                "1",
+                "-T",
+                "StaticText",
+            ])
+            .unwrap();
+            let (selector, m, typ) = match cli.command {
+                Command::Exists {
+                    selector,
+                    label_match,
+                    element_type,
+                    ..
+                }
+                | Command::WaitFor {
+                    selector,
+                    label_match,
+                    element_type,
+                    ..
+                }
+                | Command::WaitForNot {
+                    selector,
+                    label_match,
+                    element_type,
+                    ..
+                } => (selector, label_match, element_type),
+                _ => panic!("expected an element command"),
+            };
+            assert_eq!(selector, None);
+            assert_eq!(typ.as_deref(), Some("StaticText"));
+            assert_eq!(
+                m.to_match().map(|m| *m),
+                Some(LabelMatch {
+                    matcher: LabelMatcher::Regex("^Tapped: [0-9]+$".into()),
+                    nth: Some(1),
+                })
+            );
+            let cli = Cli::try_parse_from(["qorvex", cmd, "--label-contains", "(x)"]).unwrap();
+            match cli.command {
+                Command::Exists { label_match, .. }
+                | Command::WaitFor { label_match, .. }
+                | Command::WaitForNot { label_match, .. } => assert_eq!(
+                    label_match.to_match().map(|m| *m),
+                    Some(LabelMatch {
+                        matcher: LabelMatcher::Contains("(x)".into()),
+                        nth: None,
+                    })
+                ),
+                _ => panic!("expected an element command"),
+            }
+        }
+    }
+
+    #[test]
+    fn label_match_flags_conflicts_are_usage_errors() {
+        use clap::error::ErrorKind;
+        for cmd in ["exists", "wait-for", "wait-for-not"] {
+            for args in [
+                &["qorvex", cmd, "sel", "--label-contains", "a"][..],
+                &["qorvex", cmd, "sel", "--label-regex", "a"][..],
+                &["qorvex", cmd, "-l", "--label-contains", "a"][..],
+                &["qorvex", cmd, "-l", "--label-regex", "a"][..],
+                &["qorvex", cmd, "--label-contains", "a", "--label-regex", "b"][..],
+                &["qorvex", cmd, "sel", "--nth", "1"][..],
+                &["qorvex", cmd, "--label-regex", "("][..],
+                &["qorvex", cmd][..],
+            ] {
+                let Err(err) = Cli::try_parse_from(args) else {
+                    panic!("{:?} should be rejected", args)
+                };
+                assert_eq!(err.exit_code(), 2, "{:?}", args);
+                assert_ne!(err.kind(), ErrorKind::DisplayHelp, "{:?}", args);
+            }
+        }
+        let Err(err) = Cli::try_parse_from(["qorvex", "exists", "--label-regex", "("]) else {
+            panic!("invalid regex should be rejected")
+        };
+        assert!(err.to_string().contains("invalid regex '('"), "{}", err);
+        // Default positional form still parses, with no label match.
+        let cli = Cli::try_parse_from(["qorvex", "wait-for", "x[1]", "-l"]).unwrap();
+        match cli.command {
+            Command::WaitFor {
+                selector,
+                label,
+                label_match,
+                ..
+            } => {
+                assert_eq!(selector.as_deref(), Some("x[1]"));
+                assert!(label);
+                assert_eq!(label_match.to_match(), None);
+            }
+            _ => panic!("expected WaitFor"),
         }
     }
 

@@ -40,6 +40,43 @@ fn default_true() -> bool {
     true
 }
 
+/// How a [`LabelMatch`] tests an element's label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelMatcher {
+    /// Case-sensitive substring of the label (taken literally).
+    Contains(String),
+    /// Unanchored Rust `regex` search on the label.
+    Regex(String),
+}
+
+/// A text-match selector on the element label, optionally picking the Nth
+/// match (0-based, depth-first tree order).
+///
+/// Used by `Exists`, `WaitFor` and `WaitForNot` in place of the selector;
+/// matched client-side against a tree dump.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelMatch {
+    /// The label test.
+    pub matcher: LabelMatcher,
+    /// 0-based index among matches; `None` means the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nth: Option<usize>,
+}
+
+impl std::fmt::Display for LabelMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.matcher {
+            LabelMatcher::Contains(t) => write!(f, "label contains \"{}\"", t)?,
+            LabelMatcher::Regex(r) => write!(f, "label matches /{}/", r)?,
+        }
+        if let Some(n) = self.nth {
+            write!(f, " [{}]", n)?;
+        }
+        Ok(())
+    }
+}
+
 /// The result of executing an action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionResult {
@@ -159,6 +196,10 @@ pub enum ActionType {
         by_label: bool,
         /// Optional element type filter (e.g., "Button", "TextField").
         element_type: Option<String>,
+        /// Label text match used instead of `selector` (`--label-contains` /
+        /// `--label-regex`); `None` keeps the selector search.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_match: Option<Box<LabelMatch>>,
     },
 
     /// Send keyboard input.
@@ -182,6 +223,10 @@ pub enum ActionType {
         /// skips frame-stability tracking).
         #[serde(default = "default_true")]
         require_stable: bool,
+        /// Label text match used instead of `selector` (`--label-contains` /
+        /// `--label-regex`); `None` keeps the selector search.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_match: Option<Box<LabelMatch>>,
     },
 
     /// Wait for an element to disappear from screen by ID or label.
@@ -194,6 +239,10 @@ pub enum ActionType {
         element_type: Option<String>,
         /// Maximum time to wait in milliseconds.
         timeout_ms: u64,
+        /// Label text match used instead of `selector` (`--label-contains` /
+        /// `--label-regex`); `None` keeps the selector search.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_match: Option<Box<LabelMatch>>,
     },
 
     /// Start a new automation session.
@@ -429,6 +478,18 @@ impl ActionType {
     /// Returns a formatted target string for CLI output.
     pub fn display_target(&self) -> String {
         match self {
+            ActionType::WaitFor {
+                label_match: Some(m),
+                ..
+            }
+            | ActionType::WaitForNot {
+                label_match: Some(m),
+                ..
+            }
+            | ActionType::Exists {
+                label_match: Some(m),
+                ..
+            } => m.to_string(),
             ActionType::Tap {
                 selector, by_label, ..
             }
@@ -577,6 +638,42 @@ impl ActionLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn label_match_field_is_additive_on_the_wire() {
+        // Default path: no `label_match` key, and old JSON still parses.
+        let action = ActionType::Exists {
+            selector: "x".into(),
+            by_label: false,
+            element_type: None,
+            label_match: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(!json.contains("label_match"), "{}", json);
+        let old = r#"{"type":"WaitForNot","selector":"x","by_label":true,"element_type":null,"timeout_ms":5}"#;
+        match serde_json::from_str::<ActionType>(old).unwrap() {
+            ActionType::WaitForNot { label_match, .. } => assert_eq!(label_match, None),
+            _ => panic!("expected WaitForNot"),
+        }
+        // Round trip with a match.
+        let m = LabelMatch {
+            matcher: LabelMatcher::Regex("^a$".into()),
+            nth: Some(2),
+        };
+        let action = ActionType::Exists {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            label_match: Some(Box::new(m.clone())),
+        };
+        let back: ActionType =
+            serde_json::from_str(&serde_json::to_string(&action).unwrap()).unwrap();
+        match back {
+            ActionType::Exists { label_match, .. } => assert_eq!(label_match, Some(Box::new(m))),
+            _ => panic!("expected Exists"),
+        }
+        assert_eq!(action.display_target(), "label matches /^a$/ [2]");
+    }
 
     #[test]
     fn parse_coordinate_accepts_and_rejects() {

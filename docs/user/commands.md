@@ -393,3 +393,25 @@ When multiple elements share the same accessibility ID or label, append `[N]` (0
 Shell quoting is required in the CLI when using brackets: `qorvex tap 'cell[2]'`. In the REPL no quoting is needed: `tap cell[2]`.
 
 Out-of-bounds indices (e.g., `row[999]` when fewer elements exist) return an "element not found" error.
+
+### Label Text Match (`--label-contains`, `--label-regex`, `--nth`)
+
+Only on `exists`, `wait-for` and `wait-for-not` (tap and get-value later). These flags replace the positional selector and match on the element **label** only:
+
+| Flag | Matches when the label... |
+|------|---------------------------|
+| `--label-contains <text>` | contains `<text>` (case-sensitive substring; regex and glob characters are literal) |
+| `--label-regex <pattern>` | matches `<pattern>` (Rust `regex` syntax, unanchored: use `^...$` for a whole-label match) |
+| `--nth <N>` | with either flag above: take the Nth match, 0-based, in depth-first tree order (default: the first) |
+
+```bash
+qorvex exists --label-contains "Tap"
+qorvex exists --label-regex '^Tapped: [0-9]+$' -T StaticText
+qorvex wait-for --label-regex 'Tapped: 1'        # output includes the matched frame
+qorvex wait-for-not --label-contains "Loading"
+qorvex exists --label-contains "Row" --nth 2
+```
+
+- An element with no label or an empty label never matches. No match (or `--nth` beyond the number of matches) is "absent": `exists` exits 4, `wait-for` keeps polling until its timeout.
+- `-T <type>` combines with both flags. `--label-contains` and `--label-regex` each conflict with the positional selector, with `-l` and with each other; `--nth` needs one of them (use `selector[N]` otherwise). An invalid regex is a usage error (exit 2) before anything is sent to the device.
+- The match runs on a full tree dump each poll (like `screen-info`), not inside the agent, so it is somewhat slower per poll than an ID lookup. Needs a server from the same release.

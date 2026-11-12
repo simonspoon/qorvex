@@ -891,6 +891,7 @@ impl App {
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitFor {
+                        label_match: None,
                         selector,
                         by_label,
                         element_type,
@@ -920,6 +921,7 @@ impl App {
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitForNot {
+                        label_match: None,
                         selector,
                         by_label,
                         element_type,
@@ -1401,6 +1403,7 @@ impl App {
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitFor {
+                        label_match: None,
                         selector,
                         by_label,
                         element_type,
@@ -1428,6 +1431,7 @@ impl App {
                 let element_type = args.element_type.clone();
                 IpcRequest::Execute {
                     action: ActionType::WaitForNot {
+                        label_match: None,
                         selector,
                         by_label,
                         element_type,

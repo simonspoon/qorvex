@@ -33,7 +33,8 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, info_span, Instrument};
 
 use crate::action::ActionType;
-use crate::driver::{AutomationDriver, DriverError};
+use crate::driver::{AutomationDriver, CompiledLabelMatch, DriverError};
+use crate::element::UIElement;
 
 /// Result of executing an action.
 ///
@@ -106,7 +107,44 @@ fn is_retryable_error(err: &DriverError) -> bool {
     }
 }
 
+/// Compiles an action's optional label match. `Err` is the failure to return
+/// before any device call (invalid regex).
+fn compile_label_match(
+    label_match: &Option<Box<crate::action::LabelMatch>>,
+) -> Result<Option<CompiledLabelMatch>, ExecutionResult> {
+    label_match
+        .as_deref()
+        .map(CompiledLabelMatch::new)
+        .transpose()
+        .map_err(ExecutionResult::failure)
+}
+
 impl ActionExecutor {
+    /// One element lookup: a label match against a tree dump when `matcher`
+    /// is set, otherwise the driver's selector search (unchanged).
+    async fn find_for(
+        &self,
+        matcher: Option<&CompiledLabelMatch>,
+        selector: &str,
+        by_label: bool,
+        element_type: Option<&str>,
+        read_timeout_ms: Option<u64>,
+    ) -> Result<Option<UIElement>, DriverError> {
+        match matcher {
+            Some(m) => Ok(m.search(&self.driver.dump_tree().await?, element_type)),
+            None => {
+                self.driver
+                    .find_element_with_read_timeout(
+                        selector,
+                        by_label,
+                        element_type,
+                        read_timeout_ms,
+                    )
+                    .await
+            }
+        }
+    }
+
     /// Creates a new executor with any [`AutomationDriver`] backend.
     ///
     /// # Arguments
@@ -406,21 +444,35 @@ impl ActionExecutor {
                 ref selector,
                 by_label,
                 ref element_type,
-            } => match self
-                .driver
-                .find_element_with_read_timeout(selector, by_label, element_type.as_deref(), None)
-                .await
-            {
-                // One lookup: `Ok(None)` is "absent"; a driver error is not.
-                Ok(Some(element)) => ExecutionResult::success(format!("'{}' exists", selector))
-                    .with_data(
-                        serde_json::json!({"exists": true, "hittable": element.hittable})
-                            .to_string(),
-                    ),
-                Ok(None) => ExecutionResult::success(format!("'{}' does not exist", selector))
-                    .with_data(serde_json::json!({"exists": false}).to_string()),
-                Err(e) => ExecutionResult::failure(e.to_string()),
-            },
+                ref label_match,
+            } => {
+                let matcher = match compile_label_match(label_match) {
+                    Ok(m) => m,
+                    Err(fail) => return fail,
+                };
+                let shown = label_match.as_ref().map(|m| m.to_string());
+                let selector = shown.as_deref().unwrap_or(selector);
+                match self
+                    .find_for(
+                        matcher.as_ref(),
+                        selector,
+                        by_label,
+                        element_type.as_deref(),
+                        None,
+                    )
+                    .await
+                {
+                    // One lookup: `Ok(None)` is "absent"; a driver error is not.
+                    Ok(Some(element)) => ExecutionResult::success(format!("'{}' exists", selector))
+                        .with_data(
+                            serde_json::json!({"exists": true, "hittable": element.hittable})
+                                .to_string(),
+                        ),
+                    Ok(None) => ExecutionResult::success(format!("'{}' does not exist", selector))
+                        .with_data(serde_json::json!({"exists": false}).to_string()),
+                    Err(e) => ExecutionResult::failure(e.to_string()),
+                }
+            }
 
             ActionType::GetValue {
                 ref selector,
@@ -488,7 +540,14 @@ impl ActionExecutor {
                 ref element_type,
                 timeout_ms,
                 require_stable,
+                ref label_match,
             } => {
+                let matcher = match compile_label_match(label_match) {
+                    Ok(m) => m,
+                    Err(fail) => return fail,
+                };
+                let shown = label_match.as_ref().map(|m| m.to_string());
+                let selector = shown.as_deref().unwrap_or(selector);
                 let mut start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
@@ -499,8 +558,8 @@ impl ActionExecutor {
 
                 loop {
                     if let Ok(found) = self
-                        .driver
-                        .find_element_with_read_timeout(
+                        .find_for(
+                            matcher.as_ref(),
                             selector,
                             by_label,
                             element_type.as_deref(),
@@ -629,7 +688,14 @@ impl ActionExecutor {
                 by_label,
                 ref element_type,
                 timeout_ms,
+                ref label_match,
             } => {
+                let matcher = match compile_label_match(label_match) {
+                    Ok(m) => m,
+                    Err(fail) => return fail,
+                };
+                let shown = label_match.as_ref().map(|m| m.to_string());
+                let selector = shown.as_deref().unwrap_or(selector);
                 let mut start = Instant::now();
                 let timeout = Duration::from_millis(timeout_ms);
                 let poll_interval = Duration::from_millis(100);
@@ -637,8 +703,8 @@ impl ActionExecutor {
 
                 loop {
                     let found = self
-                        .driver
-                        .find_element_with_read_timeout(
+                        .find_for(
+                            matcher.as_ref(),
                             selector,
                             by_label,
                             element_type.as_deref(),

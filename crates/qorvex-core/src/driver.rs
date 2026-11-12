@@ -37,6 +37,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::action::{LabelMatch, LabelMatcher};
 use crate::element::UIElement;
 
 /// Errors that can occur during automation driver operations.
@@ -335,6 +336,74 @@ fn search_with_type(
         }
     }
     None
+}
+
+/// A [`LabelMatch`] with its regex compiled once.
+#[derive(Debug)]
+pub struct CompiledLabelMatch {
+    test: LabelTest,
+    nth: usize,
+}
+
+#[derive(Debug)]
+enum LabelTest {
+    Contains(String),
+    Regex(regex::Regex),
+}
+
+impl CompiledLabelMatch {
+    /// Compiles the match; an invalid regex is an error naming the pattern.
+    pub fn new(m: &LabelMatch) -> Result<Self, String> {
+        let test = match &m.matcher {
+            LabelMatcher::Contains(t) => LabelTest::Contains(t.clone()),
+            LabelMatcher::Regex(r) => LabelTest::Regex(
+                regex::Regex::new(r).map_err(|e| format!("invalid regex '{}': {}", r, e))?,
+            ),
+        };
+        Ok(Self {
+            test,
+            nth: m.nth.unwrap_or(0),
+        })
+    }
+
+    fn label_matches(&self, label: Option<&str>) -> bool {
+        match label {
+            Some(l) if !l.is_empty() => match &self.test {
+                LabelTest::Contains(t) => l.contains(t.as_str()),
+                LabelTest::Regex(re) => re.is_match(l),
+            },
+            _ => false,
+        }
+    }
+
+    /// Returns the Nth element (depth-first order) whose label matches and,
+    /// when given, whose type equals `element_type`.
+    pub fn search(&self, elements: &[UIElement], element_type: Option<&str>) -> Option<UIElement> {
+        let mut seen = 0;
+        self.search_inner(elements, element_type, &mut seen)
+    }
+
+    fn search_inner(
+        &self,
+        elements: &[UIElement],
+        element_type: Option<&str>,
+        seen: &mut usize,
+    ) -> Option<UIElement> {
+        for element in elements {
+            let type_matches =
+                element_type.is_none_or(|typ| element.element_type.as_deref() == Some(typ));
+            if type_matches && self.label_matches(element.label.as_deref()) {
+                if *seen == self.nth {
+                    return Some(element.clone());
+                }
+                *seen += 1;
+            }
+            if let Some(found) = self.search_inner(&element.children, element_type, seen) {
+                return Some(found);
+            }
+        }
+        None
+    }
 }
 
 /// Flattens a UI element hierarchy into a list of actionable elements.
@@ -721,6 +790,132 @@ pub trait AutomationDriver: Send + Sync {
 mod tests {
     use super::*;
     use crate::element::ElementFrame;
+
+    fn el(label: Option<&str>, typ: Option<&str>, children: Vec<UIElement>) -> UIElement {
+        UIElement {
+            identifier: None,
+            label: label.map(String::from),
+            value: None,
+            element_type: typ.map(String::from),
+            frame: None,
+            children,
+            role: None,
+            hittable: None,
+        }
+    }
+
+    fn lm(matcher: LabelMatcher, nth: Option<usize>) -> CompiledLabelMatch {
+        CompiledLabelMatch::new(&LabelMatch { matcher, nth }).unwrap()
+    }
+
+    fn label_tree() -> Vec<UIElement> {
+        vec![el(
+            Some("Root"),
+            Some("Window"),
+            vec![
+                el(
+                    Some("Tap Me"),
+                    Some("Button"),
+                    vec![el(Some("Tapped: 1"), Some("StaticText"), vec![])],
+                ),
+                el(Some(""), Some("Other"), vec![]),
+                el(None, Some("Other"), vec![]),
+                el(Some("Tap (x)"), Some("StaticText"), vec![]),
+            ],
+        )]
+    }
+
+    #[test]
+    fn label_match_contains_first_in_tree_order() {
+        let m = lm(LabelMatcher::Contains("Tap".into()), None);
+        assert_eq!(
+            m.search(&label_tree(), None).unwrap().label.as_deref(),
+            Some("Tap Me")
+        );
+    }
+
+    #[test]
+    fn label_match_nth_is_depth_first_and_beyond_count_is_none() {
+        let tree = label_tree();
+        let nth = |n| lm(LabelMatcher::Contains("Tap".into()), Some(n)).search(&tree, None);
+        assert_eq!(nth(1).unwrap().label.as_deref(), Some("Tapped: 1"));
+        assert_eq!(nth(2).unwrap().label.as_deref(), Some("Tap (x)"));
+        assert!(nth(3).is_none());
+    }
+
+    #[test]
+    fn label_match_regex_unanchored_and_anchored() {
+        let tree = label_tree();
+        let m = lm(LabelMatcher::Regex("^Tapped: [0-9]+$".into()), None);
+        assert_eq!(
+            m.search(&tree, None).unwrap().label.as_deref(),
+            Some("Tapped: 1")
+        );
+        let m = lm(LabelMatcher::Regex("ped".into()), None);
+        assert_eq!(
+            m.search(&tree, None).unwrap().label.as_deref(),
+            Some("Tapped: 1")
+        );
+        assert!(lm(LabelMatcher::Regex("^zzz".into()), None)
+            .search(&tree, None)
+            .is_none());
+    }
+
+    #[test]
+    fn label_match_contains_treats_regex_chars_literally() {
+        let tree = label_tree();
+        let m = lm(LabelMatcher::Contains("(x)".into()), None);
+        assert_eq!(
+            m.search(&tree, None).unwrap().label.as_deref(),
+            Some("Tap (x)")
+        );
+        assert!(lm(LabelMatcher::Contains(".*".into()), None)
+            .search(&tree, None)
+            .is_none());
+    }
+
+    #[test]
+    fn label_match_empty_or_missing_label_never_matches() {
+        let tree = vec![el(Some(""), None, vec![el(None, None, vec![])])];
+        assert!(lm(LabelMatcher::Contains("".into()), None)
+            .search(&tree, None)
+            .is_none());
+        assert!(lm(LabelMatcher::Regex("".into()), None)
+            .search(&tree, None)
+            .is_none());
+    }
+
+    #[test]
+    fn label_match_type_filter() {
+        let tree = label_tree();
+        let m = lm(LabelMatcher::Contains("Tap".into()), None);
+        assert_eq!(
+            m.search(&tree, Some("StaticText"))
+                .unwrap()
+                .label
+                .as_deref(),
+            Some("Tapped: 1")
+        );
+        let m = lm(LabelMatcher::Contains("Tap".into()), Some(1));
+        assert_eq!(
+            m.search(&tree, Some("StaticText"))
+                .unwrap()
+                .label
+                .as_deref(),
+            Some("Tap (x)")
+        );
+        assert!(m.search(&tree, Some("Switch")).is_none());
+    }
+
+    #[test]
+    fn label_match_invalid_regex_is_error() {
+        let err = CompiledLabelMatch::new(&LabelMatch {
+            matcher: LabelMatcher::Regex("(".into()),
+            nth: None,
+        })
+        .unwrap_err();
+        assert!(err.starts_with("invalid regex '('"), "{}", err);
+    }
 
     #[test]
     fn test_driver_error_display() {

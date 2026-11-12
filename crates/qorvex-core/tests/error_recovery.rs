@@ -225,6 +225,7 @@ async fn test_wait_for_not_succeeds_on_transient_error() {
     .await;
 
     let action = ActionType::WaitForNot {
+        label_match: None,
         selector: "spinner".to_string(),
         by_label: false,
         element_type: None,

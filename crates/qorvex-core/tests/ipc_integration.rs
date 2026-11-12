@@ -317,6 +317,7 @@ fn test_all_action_types_serialization() {
             text: "hello".to_string(),
         },
         ActionType::WaitFor {
+            label_match: None,
             selector: "spinner".to_string(),
             by_label: false,
             element_type: None,

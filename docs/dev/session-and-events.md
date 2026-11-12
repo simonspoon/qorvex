@@ -89,10 +89,10 @@ enum ActionType {
     GetScreenshot,
     GetScreenInfo,
     GetScreenTree,
-    Exists { selector: String, by_label: bool, element_type: Option<String> },  // one lookup; data {"exists":bool,"hittable":bool|null}
+    Exists { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },  // one lookup; data {"exists":bool,"hittable":bool|null}
     GetValue { selector: String, by_label: bool, element_type: Option<String> },
-    WaitFor { selector: String, by_label: bool, element_type: Option<String> },
-    WaitForNot { selector: String, by_label: bool, element_type: Option<String> },
+    WaitFor { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },
+    WaitForNot { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },
     LogComment { message: String },
     SetTarget { bundle_id: String },
     StartTarget,
@@ -104,6 +104,8 @@ enum ActionType {
 ```
 
 The `Tap`, `GetValue`, and `WaitFor` variants share a common selector triple (`selector`, `by_label`, `element_type`). See [driver.md](driver.md) for details on the selector pattern.
+
+`Exists`, `WaitFor` and `WaitForNot` also carry an optional `label_match` (`LabelMatch { matcher: Contains(String) | Regex(String), nth: Option<usize> }`, set by `--label-contains` / `--label-regex` / `--nth`). When it is set the executor ignores `selector`/`by_label`, dumps the tree and matches the label in Rust (`driver::CompiledLabelMatch`); when it is `None` the agent `FindElement` path is unchanged. The field is `serde(default)` and omitted when `None`, so default-path JSON is identical to before.
 
 ## Logging Methods
 

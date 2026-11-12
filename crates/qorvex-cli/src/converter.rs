@@ -1,7 +1,7 @@
 use std::io::{self, Read};
 use std::path::Path;
 
-use qorvex_core::action::{ActionLog, ActionType};
+use qorvex_core::action::{ActionLog, ActionType, LabelMatch, LabelMatcher};
 
 /// Convert JSONL action logs to shell scripts that call `qorvex` CLI commands.
 pub struct LogConverter;
@@ -99,8 +99,9 @@ impl LogConverter {
                 selector,
                 by_label,
                 element_type,
+                label_match,
             } => {
-                let mut cmd = format!("qorvex exists {}", shell_escape(selector));
+                let mut cmd = format!("qorvex exists {}", selector_args(selector, label_match));
                 if *by_label {
                     cmd.push_str(" --label");
                 }
@@ -113,10 +114,11 @@ impl LogConverter {
                 selector,
                 by_label,
                 element_type,
+                label_match,
                 timeout_ms,
                 ..
             } => {
-                let mut cmd = format!("qorvex wait-for {}", shell_escape(selector));
+                let mut cmd = format!("qorvex wait-for {}", selector_args(selector, label_match));
                 if *by_label {
                     cmd.push_str(" --label");
                 }
@@ -130,9 +132,13 @@ impl LogConverter {
                 selector,
                 by_label,
                 element_type,
+                label_match,
                 timeout_ms,
             } => {
-                let mut cmd = format!("qorvex wait-for-not {}", shell_escape(selector));
+                let mut cmd = format!(
+                    "qorvex wait-for-not {}",
+                    selector_args(selector, label_match)
+                );
                 if *by_label {
                     cmd.push_str(" --label");
                 }
@@ -236,6 +242,22 @@ impl LogConverter {
             None => None,
         }
     }
+}
+
+/// The selector part of an element command: the escaped positional
+/// selector, or the `--label-contains`/`--label-regex` [`--nth`] flags.
+fn selector_args(selector: &str, label_match: &Option<Box<LabelMatch>>) -> String {
+    let Some(m) = label_match else {
+        return shell_escape(selector);
+    };
+    let mut out = match &m.matcher {
+        LabelMatcher::Contains(t) => format!("--label-contains {}", shell_escape(t)),
+        LabelMatcher::Regex(r) => format!("--label-regex {}", shell_escape(r)),
+    };
+    if let Some(n) = m.nth {
+        out.push_str(&format!(" --nth {}", n));
+    }
+    out
 }
 
 /// Shell-escape a string using single quotes. Internal single quotes become `'\''`.
@@ -403,6 +425,7 @@ mod tests {
     #[test]
     fn test_exists_to_command() {
         let action = ActionType::Exists {
+            label_match: None,
             selector: "Tap Me".to_string(),
             by_label: true,
             element_type: Some("Button".to_string()),
@@ -410,6 +433,52 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex exists 'Tap Me' --label -T Button".to_string())
+        );
+    }
+
+    #[test]
+    fn test_label_match_to_command() {
+        let action = ActionType::Exists {
+            selector: String::new(),
+            by_label: false,
+            element_type: Some("Button".to_string()),
+            label_match: Some(Box::new(LabelMatch {
+                matcher: LabelMatcher::Contains("Tap Me".to_string()),
+                nth: None,
+            })),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex exists --label-contains 'Tap Me' -T Button".to_string())
+        );
+        let action = ActionType::WaitFor {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: 5000,
+            require_stable: true,
+            label_match: Some(Box::new(LabelMatch {
+                matcher: LabelMatcher::Regex("^Tapped: [0-9]+$".to_string()),
+                nth: Some(1),
+            })),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex wait-for --label-regex '^Tapped: [0-9]+$' --nth 1 -o 5000".to_string())
+        );
+        let action = ActionType::WaitForNot {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: 100,
+            label_match: Some(Box::new(LabelMatch {
+                matcher: LabelMatcher::Contains("spin".to_string()),
+                nth: None,
+            })),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex wait-for-not --label-contains spin -o 100".to_string())
         );
     }
 
@@ -430,6 +499,7 @@ mod tests {
     #[test]
     fn test_wait_for_to_command() {
         let action = ActionType::WaitFor {
+            label_match: None,
             selector: "dashboard".to_string(),
             by_label: false,
             element_type: None,
@@ -445,6 +515,7 @@ mod tests {
     #[test]
     fn test_wait_for_not_to_command() {
         let action = ActionType::WaitForNot {
+            label_match: None,
             selector: "spinner".to_string(),
             by_label: true,
             element_type: Some("ActivityIndicator".to_string()),

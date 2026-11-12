@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use common::connected_executor;
 
-use qorvex_core::action::ActionType;
+use qorvex_core::action::{ActionType, LabelMatch, LabelMatcher};
 use qorvex_core::agent_driver::AgentDriver;
 use qorvex_core::driver::AutomationDriver;
 use qorvex_core::executor::ActionExecutor;
@@ -444,6 +444,7 @@ async fn test_executor_get_value_none_via_agent_driver() {
 
 fn exists_action() -> ActionType {
     ActionType::Exists {
+        label_match: None,
         selector: "banner".to_string(),
         by_label: false,
         element_type: None,
@@ -495,4 +496,151 @@ async fn test_executor_exists_driver_error_is_failure_not_absent() {
     let result = executor.execute(exists_action()).await;
     assert!(!result.success, "a driver error must not read as absent");
     assert!(result.data.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Label text match (--label-contains / --label-regex / --nth): tree dump +
+// client-side match
+// ---------------------------------------------------------------------------
+
+const LABEL_TREE: &str = r#"[{"AXLabel":"Root","type":"Window","children":[
+    {"AXLabel":"Tap Me","type":"Button","hittable":true,"frame":{"x":10,"y":20,"width":30,"height":40}},
+    {"AXLabel":"Tapped: 1","type":"StaticText","hittable":true,"frame":{"x":1,"y":2,"width":3,"height":4}}
+]}]"#;
+
+fn tree() -> Response {
+    Response::Tree {
+        json: LABEL_TREE.to_string(),
+    }
+}
+
+fn label_match(matcher: LabelMatcher, nth: Option<usize>) -> Option<Box<LabelMatch>> {
+    Some(Box::new(LabelMatch { matcher, nth }))
+}
+
+fn exists_matching(m: Option<Box<LabelMatch>>) -> ActionType {
+    ActionType::Exists {
+        selector: String::new(),
+        by_label: false,
+        element_type: None,
+        label_match: m,
+    }
+}
+
+#[tokio::test]
+async fn test_executor_exists_label_contains_found_and_nth() {
+    let executor = connected_executor(vec![Response::Ok, tree(), tree(), tree()]).await;
+
+    let r = executor
+        .execute(exists_matching(label_match(
+            LabelMatcher::Contains("Tap".into()),
+            None,
+        )))
+        .await;
+    assert!(r.success, "{}", r.message);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&r.data.unwrap()).unwrap(),
+        serde_json::json!({"exists": true, "hittable": true})
+    );
+
+    let r = executor
+        .execute(exists_matching(label_match(
+            LabelMatcher::Contains("Tap".into()),
+            Some(1),
+        )))
+        .await;
+    assert!(r.success, "{}", r.message);
+    assert!(r.data.unwrap().contains("\"exists\":true"));
+
+    let r = executor
+        .execute(exists_matching(label_match(
+            LabelMatcher::Contains("Tap".into()),
+            Some(2),
+        )))
+        .await;
+    assert!(r.success, "{}", r.message);
+    assert_eq!(r.data.as_deref(), Some(r#"{"exists":false}"#));
+}
+
+#[tokio::test]
+async fn test_executor_exists_label_regex_absent() {
+    let executor = connected_executor(vec![Response::Ok, tree()]).await;
+    let r = executor
+        .execute(exists_matching(label_match(
+            LabelMatcher::Regex("^zzz-none$".into()),
+            None,
+        )))
+        .await;
+    assert!(r.success, "{}", r.message);
+    assert_eq!(r.data.as_deref(), Some(r#"{"exists":false}"#));
+    assert!(
+        r.message.contains("label matches /^zzz-none$/"),
+        "{}",
+        r.message
+    );
+}
+
+#[tokio::test]
+async fn test_executor_label_regex_invalid_fails_before_device_call() {
+    // Only the heartbeat is scripted: a tree dump would fail differently.
+    let executor = connected_executor(vec![Response::Ok]).await;
+    for action in [
+        exists_matching(label_match(LabelMatcher::Regex("(".into()), None)),
+        ActionType::WaitFor {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: 1000,
+            require_stable: true,
+            label_match: label_match(LabelMatcher::Regex("(".into()), None),
+        },
+        ActionType::WaitForNot {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: 1000,
+            label_match: label_match(LabelMatcher::Regex("(".into()), None),
+        },
+    ] {
+        let r = executor.execute(action).await;
+        assert!(!r.success);
+        assert!(r.message.starts_with("invalid regex '('"), "{}", r.message);
+    }
+}
+
+#[tokio::test]
+async fn test_executor_wait_for_label_regex_returns_frame() {
+    // require_stable: three polls with the same frame.
+    let executor = connected_executor(vec![Response::Ok, tree(), tree(), tree()]).await;
+    let r = executor
+        .execute(ActionType::WaitFor {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            timeout_ms: 5000,
+            require_stable: true,
+            label_match: label_match(LabelMatcher::Regex("Tapped: 1".into()), None),
+        })
+        .await;
+    assert!(r.success, "{}", r.message);
+    let v: serde_json::Value = serde_json::from_str(&r.data.unwrap()).unwrap();
+    assert_eq!(
+        v["frame"],
+        serde_json::json!({"x": 1, "y": 2, "width": 3, "height": 4})
+    );
+}
+
+#[tokio::test]
+async fn test_executor_wait_for_not_label_contains_absent() {
+    let executor = connected_executor(vec![Response::Ok, tree()]).await;
+    let r = executor
+        .execute(ActionType::WaitForNot {
+            selector: String::new(),
+            by_label: false,
+            element_type: Some("Switch".into()),
+            timeout_ms: 1000,
+            label_match: label_match(LabelMatcher::Contains("Tap Me".into()), None),
+        })
+        .await;
+    assert!(r.success, "{}", r.message);
 }

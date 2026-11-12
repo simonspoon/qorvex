@@ -390,6 +390,7 @@ async fn parity_wait_for() {
     run_parity(
         "wait-for",
         ActionType::WaitFor {
+            label_match: None,
             selector: "dynamic_delayed_label".to_string(),
             by_label: false,
             element_type: None,
@@ -413,6 +414,7 @@ async fn parity_wait_for_not() {
     run_parity(
         "wait-for-not",
         ActionType::WaitForNot {
+            label_match: None,
             selector: "dynamic_brief_label".to_string(),
             by_label: false,
             element_type: None,
