@@ -500,6 +500,23 @@ pub static COMMANDS: &[CommandDef] = &[
             },
         ],
     },
+    CommandDef {
+        name: "wait-stable",
+        description: "Wait until the UI tree stops changing",
+        args: &[],
+        options: &[
+            OptionSpec {
+                flag: "--for",
+                takes_value: true,
+                description: "Quiet period in ms (default 500)",
+            },
+            OptionSpec {
+                flag: "--timeout",
+                takes_value: true,
+                description: "Wait timeout in ms",
+            },
+        ],
+    },
     // Input commands
     CommandDef {
         name: "send-keys",

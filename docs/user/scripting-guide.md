@@ -93,6 +93,7 @@ done
 | `qorvex get-value <selector>` | Get element value |
 | `qorvex wait-for <selector> -o <ms>` | Wait for element |
 | `qorvex wait-for-not <selector> -o <ms>` | Wait for element to disappear |
+| `qorvex wait-stable [--for <ms>] -o <ms>` | Wait until the UI tree is unchanged for `--for` ms (default 500) |
 | `qorvex set-target <bundle_id>` | Set target app bundle ID |
 | `qorvex start-target [--force]` | Launch the target app (`--force` restarts one that is already running) |
 | `qorvex stop-target` | Terminate the target app |
@@ -109,7 +110,7 @@ See [commands.md](commands.md) for full option details.
 - Use `export QORVEX_SESSION=<name>` at the top — both `qorvex` and `qorvex-server` respect it, so you never need `-s` on individual commands.
 - Use `trap 'qorvex stop || true' EXIT` immediately after `qorvex start` so the server is always stopped, even on error. The `|| true` prevents the trap itself from masking the script's exit code when the server is already gone.
 - Use `QORVEX_TIMEOUT` to set a default timeout (ms) for all wait/tap operations without passing `-o` on every command.
-- Every command has a hard deadline (default 600000 ms): `--timeout <ms>` or `QORVEX_COMMAND_TIMEOUT` changes it, `0` disables it. On `tap`, `get-value`, `wait-for`, `wait-for-not`, `--timeout` is the element timeout instead. Use `--timeout 0` for a slow interactive signing build with `start -d <physical iPhone>`.
+- Every command has a hard deadline (default 600000 ms): `--timeout <ms>` or `QORVEX_COMMAND_TIMEOUT` changes it, `0` disables it. On `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable`, `--timeout` is the element timeout instead. Use `--timeout 0` for a slow interactive signing build with `start -d <physical iPhone>`.
 - Use `QORVEX_LOG_DIR=/path/to/run-output` to redirect all log files to a per-run directory. Combine with `QORVEX_SESSION` for fully isolated CI runs.
 - Capture command output with `$(...)` — e.g., `value=$(qorvex get-value field-id)`.
 - Use `--tag <text>` on any action to annotate the JSONL log entry (e.g., `qorvex tap login-button --tag "login-flow"`). Tags survive `qorvex convert` — converted scripts emit `--tag` so the annotation round-trips through replay.

@@ -86,9 +86,10 @@ struct Cli {
     #[arg(short, long)]
     quiet: bool,
 
-    /// Milliseconds. On tap, get-value, wait-for and wait-for-not: how long to
-    /// wait for the element (default 5000, env QORVEX_TIMEOUT). On every other
-    /// command: hard deadline for the whole process (default 600000, env
+    /// Milliseconds. On tap, get-value, wait-for, wait-for-not and
+    /// wait-stable: how long to wait for the element or a stable tree
+    /// (default 5000, env QORVEX_TIMEOUT). On every other command: hard
+    /// deadline for the whole process (default 600000, env
     /// QORVEX_COMMAND_TIMEOUT, 0 = no deadline); exits 124 when it passes
     #[arg(short = 'o', long, global = true)]
     timeout: Option<u64>,
@@ -468,6 +469,16 @@ enum Command {
         tag: Option<String>,
     },
 
+    /// Wait until the whole UI tree is unchanged for a quiet period
+    WaitStable {
+        /// Quiet period in milliseconds: the tree must stay unchanged this long
+        #[arg(long = "for", value_name = "MS", default_value_t = 500)]
+        stable_ms: u64,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
     /// Swipe the screen in a direction, or between two coordinates
     #[command(group(clap::ArgGroup::new("swipe_mode").required(true).args(["direction", "from"])))]
     Swipe {
@@ -821,6 +832,13 @@ async fn main() -> ExitCode {
     } else {
         None
     };
+    if let (Command::WaitStable { stable_ms, .. }, Some(timeout)) = (&cli.command, element) {
+        if let Err(msg) = check_wait_stable(*stable_ms, timeout) {
+            Cli::command()
+                .error(clap::error::ErrorKind::ArgumentConflict, msg)
+                .exit();
+        }
+    }
     let env_deadline = match parse_env_ms("QORVEX_COMMAND_TIMEOUT") {
         Ok(v) => v,
         Err(msg) => Cli::command()
@@ -884,6 +902,7 @@ fn is_wait_command(command: &Command) -> bool {
             | Command::GetValue { .. }
             | Command::WaitFor { .. }
             | Command::WaitForNot { .. }
+            | Command::WaitStable { .. }
     )
 }
 
@@ -901,6 +920,17 @@ fn element_timeout_checked(flag: Option<u64>, env: Option<String>) -> Result<u64
         }),
         None => Ok(5000),
     }
+}
+
+/// `wait-stable` can never succeed when the quiet period exceeds the timeout.
+fn check_wait_stable(stable_ms: u64, timeout_ms: u64) -> Result<(), String> {
+    if stable_ms > timeout_ms {
+        return Err(format!(
+            "--for {}ms (quiet period, default 500) is longer than the timeout ({}ms, -o/--timeout or QORVEX_TIMEOUT); raise the timeout or lower --for",
+            stable_ms, timeout_ms
+        ));
+    }
+    Ok(())
 }
 
 /// Element timeout of a wait command (the env var was validated in `main`).
@@ -1623,6 +1653,18 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     element_type: element_type.clone(),
                     timeout_ms: element_timeout(&cli),
                     label_match: label_match.to_match(),
+                },
+                tag.clone(),
+                &cli,
+            )
+            .await
+        }
+        Command::WaitStable { stable_ms, ref tag } => {
+            execute_action(
+                &mut client,
+                ActionType::WaitStable {
+                    stable_ms,
+                    timeout_ms: element_timeout(&cli),
                 },
                 tag.clone(),
                 &cli,
@@ -3195,6 +3237,48 @@ mod tests {
             }
             _ => panic!("expected WaitFor"),
         }
+    }
+
+    #[test]
+    fn wait_stable_parses_and_rejects_for_over_timeout() {
+        let cli = Cli::try_parse_from(["qorvex", "wait-stable"]).unwrap();
+        assert!(is_wait_command(&cli.command));
+        match cli.command {
+            Command::WaitStable { stable_ms, tag } => {
+                assert_eq!(stable_ms, 500);
+                assert_eq!(tag, None);
+            }
+            _ => panic!("expected WaitStable"),
+        }
+        let cli = Cli::try_parse_from([
+            "qorvex",
+            "wait-stable",
+            "--for",
+            "300",
+            "-o",
+            "2000",
+            "--tag",
+            "t",
+        ])
+        .unwrap();
+        assert_eq!(cli.timeout, Some(2000));
+        match cli.command {
+            Command::WaitStable { stable_ms, tag } => {
+                assert_eq!(stable_ms, 300);
+                assert_eq!(tag.as_deref(), Some("t"));
+            }
+            _ => panic!("expected WaitStable"),
+        }
+        assert!(Cli::try_parse_from(["qorvex", "wait-stable", "sel"]).is_err());
+        assert!(check_wait_stable(500, 5000).is_ok());
+        assert!(check_wait_stable(1000, 1000).is_ok());
+        assert!(check_wait_stable(0, 0).is_ok());
+        let msg = check_wait_stable(5000, 1000).unwrap_err();
+        assert!(
+            msg.contains("--for 5000ms") && msg.contains("1000ms"),
+            "{}",
+            msg
+        );
     }
 
     #[test]

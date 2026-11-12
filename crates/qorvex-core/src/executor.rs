@@ -755,6 +755,77 @@ impl ActionExecutor {
                 }
             }
 
+            ActionType::WaitStable {
+                stable_ms,
+                timeout_ms,
+            } => {
+                let start = Instant::now();
+                let timeout = Duration::from_millis(timeout_ms);
+                let quiet = Duration::from_millis(stable_ms);
+                let poll_interval = Duration::from_millis(100);
+                // Serialized tree of the previous poll and when it last changed.
+                let mut last_tree: Option<String> = None;
+                let mut quiet_since = start;
+                let mut changes: u64 = 0;
+                let mut last_error: Option<String> = None;
+
+                loop {
+                    // The period starts when the dump that first saw the tree
+                    // started, so `--for` equal to the timeout can still pass.
+                    let poll_started = Instant::now();
+                    let dumped = self.driver.dump_tree().await.and_then(|tree| {
+                        serde_json::to_string(&tree)
+                            .map(|snapshot| (tree, snapshot))
+                            .map_err(|e| DriverError::CommandFailed(e.to_string()))
+                    });
+                    match dumped {
+                        Ok((tree, snapshot)) => {
+                            if last_tree.as_deref() != Some(snapshot.as_str()) {
+                                if last_tree.is_some() {
+                                    changes += 1;
+                                }
+                                last_tree = Some(snapshot);
+                                quiet_since = poll_started;
+                            }
+                            let quiet_for = quiet_since.elapsed();
+                            if quiet_for >= quiet {
+                                let elapsed_ms = start.elapsed().as_millis() as u64;
+                                return ExecutionResult::success(format!(
+                                    "Tree unchanged for {}ms",
+                                    stable_ms
+                                ))
+                                .with_data(format!(
+                                    r#"{{"elapsed_ms":{},"stable_ms":{},"element_count":{}}}"#,
+                                    elapsed_ms,
+                                    quiet_for.as_millis(),
+                                    crate::driver::flatten_elements(&tree).len()
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            // A failed dump says nothing about stability: restart the period.
+                            last_tree = None;
+                            last_error = Some(e.to_string());
+                        }
+                    }
+                    if start.elapsed() >= timeout {
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                        let mut msg = format!(
+                            "Timeout after {}ms waiting for the UI to be unchanged for {}ms ({} tree changes seen)",
+                            elapsed_ms, stable_ms, changes
+                        );
+                        if let Some(e) = last_error {
+                            msg.push_str(&format!("; last error: {}", e));
+                        }
+                        return ExecutionResult::failure(msg).with_data(format!(
+                            r#"{{"elapsed_ms":{},"changes":{}}}"#,
+                            elapsed_ms, changes
+                        ));
+                    }
+                    tokio::time::sleep(poll_interval).await;
+                }
+            }
+
             ActionType::SetTarget { ref bundle_id } => {
                 match self.driver.set_target(bundle_id).await {
                     Ok(_) => ExecutionResult::success(format!("Target set to '{}'", bundle_id)),

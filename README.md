@@ -156,6 +156,7 @@ Available commands:
 - `wait-for <selector> --label --type <type>` — Wait for element by label with type filter
 - `wait-for-not <selector>` — Wait for element to disappear (5s default timeout)
 - `wait-for-not <selector> --timeout <ms>` — Wait for disappearance with custom timeout
+- `wait-stable [--for <ms>]` — Wait until the whole UI tree is unchanged for `--for` ms (default 500; 5s default timeout)
 - `get-screenshot` — Capture current screen
 - `get-screen-info` — Get UI hierarchy information
 - `list-elements` — List actionable UI elements
@@ -242,14 +243,15 @@ Options:
 
 Environment:
 - `QORVEX_SESSION` — Default session name
-- `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not` (default: 5000); overridden by `-o`
-- `QORVEX_COMMAND_TIMEOUT` — Hard deadline in milliseconds for any command (default: 600000, `0` = off); exits 124 when it passes. `--timeout <ms>` overrides it, except on `tap`, `get-value`, `wait-for`, `wait-for-not`, where `-o/--timeout` stays the element timeout
+- `QORVEX_TIMEOUT` — Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable` (default: 5000); overridden by `-o`
+- `QORVEX_COMMAND_TIMEOUT` — Hard deadline in milliseconds for any command (default: 600000, `0` = off); exits 124 when it passes. `--timeout <ms>` overrides it, except on `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable`, where `-o/--timeout` stays the element timeout
 - `QORVEX_LOG_DIR` — Override log file directory (default: `~/.qorvex/logs/`)
 - `QORVEX_HOME` — Override the qorvex state directory (default: `~/.qorvex/`). Sockets, config, and logs all live here, so scripts that export their own `HOME` should set this to keep talking to the running session
 
 Command-specific options:
 - `tap`, `get-value`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `--no-wait` — Skip retry, attempt once; `-o, --timeout <ms>` — Retry timeout (default: 5000); `--tag <text>` — Annotate the log entry
 - `wait-for`, `wait-for-not`: `-l, --label` — Match by label instead of ID; `-T, --type <type>` — Filter by element type; `-o, --timeout <ms>` — Wait timeout (default: 5000); `--tag <text>` — Annotate the log entry
+- `wait-stable`: `--for <ms>` — Quiet period the whole tree must stay unchanged (default: 500); `-o, --timeout <ms>` — Wait timeout (default: 5000); `--tag <text>` — Annotate the log entry
 - `memory-info`: `--tag <text>` — Annotate the log entry; the measured report is written into the log entry itself
 - All action commands accept `--tag <text>` — free-text annotation written to the JSONL log; preserved when converting logs to scripts with `qorvex convert`
 

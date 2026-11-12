@@ -93,6 +93,7 @@ enum ActionType {
     GetValue { selector: String, by_label: bool, element_type: Option<String> },
     WaitFor { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },
     WaitForNot { selector: String, by_label: bool, element_type: Option<String>, label_match: Option<Box<LabelMatch>> },
+    WaitStable { stable_ms: u64, timeout_ms: u64 },  // whole tree unchanged for stable_ms; data {"elapsed_ms","stable_ms","element_count"}
     LogComment { message: String },
     SetTarget { bundle_id: String },
     StartTarget,

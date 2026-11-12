@@ -288,6 +288,24 @@ Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`).
 
 Returns success as soon as the element is absent or not hittable. Fails with timeout if element persists.
 
+### Wait For the Screen to Settle
+
+| Syntax | Description |
+|--------|-------------|
+| `wait-stable` | Wait until the whole UI tree is unchanged for 500 ms (timeout: `set-timeout` default / `-o`, initially 5s) |
+| `wait-stable --for 300` | Custom quiet period in ms |
+| `wait-stable --for 300 --timeout 2000` | Custom quiet period and timeout (CLI: `-o 2000`) |
+
+Same syntax for both REPL and CLI (prefix CLI commands with `qorvex`). Takes no selector. Use it instead of a fixed `sleep` after a tap or navigation.
+
+Wait behavior: dumps the full tree every 100 ms (measured from the end of the previous dump; dumps never overlap) and compares it with the previous dump: every element's id, label, value, type, role, hittable flag, frame and the tree order. Any difference restarts the quiet period, measured from the start of the dump that first saw the new tree; the first dump starts it, so `--for` equal to the timeout can succeed. Success as soon as the tree has been unchanged for `--for` ms: the CLI prints `|<time>|Stable|tree unchanged for <for>ms|<elapsed>ms|`, and `-f json` data is `{"elapsed_ms": N, "stable_ms": N, "element_count": N}` (`stable_ms` is the quiet period actually observed, `element_count` the number of elements in the final tree). `--for 0` succeeds after one successful dump. A failed dump restarts the quiet period and polling continues until the timeout.
+
+On timeout it exits 1 with `Timeout after <ms>ms waiting for the UI to be unchanged for <for>ms (<N> tree changes seen)`, plus `; last error: ...` if a dump failed (data `{"elapsed_ms": N, "changes": N}`). A `--for` longer than the timeout is a usage error (exit 2) before anything is sent. A stable tree is only reported when the target app is up: after success the server checks the recorded target once, and a stopped or backgrounded app turns it into the usual `Target app '<bundle>' is not running; ...` failure (exit 1), because some agents still dump a static leftover tree with no app.
+
+Comparison is exact, with no tolerance: frame values are compared as reported, so sub-pixel jitter counts as a change, and a screen with a blinking cursor, a running clock, a spinner or any animation never settles and always times out (by design). Use `wait-for` / `wait-for-not` to wait on one element on such screens.
+
+Each dump uses the agent's normal 30 s read timeout, so a stalled agent can hold one poll past `-o`; the command then fails with that dump's error.
+
 ## Screen and Elements
 
 | Command | REPL | CLI |
@@ -352,12 +370,13 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 - `-s, --session <name>` -- Connect to named session (default: "default", or `$QORVEX_SESSION`)
 - `-f, --format <text|json>` -- Output format
 - `-q, --quiet` -- Suppress non-essential output
-- `-o, --timeout <ms>` -- Accepted on every command, after the subcommand name. On `tap`, `get-value`, `wait-for`, `wait-for-not` it is the element timeout (default 5000, `$QORVEX_TIMEOUT`; unchanged, exit 1 on expiry). On every other command it is a hard wall-clock deadline for the whole process: default 600000 ms, `$QORVEX_COMMAND_TIMEOUT` overrides the default, the flag overrides both, `0` disables it. When it passes, the process prints `Error: Timed out after <ms>ms: <command>; the session server may still be working (check \`qorvex status\`)` and exits 124 (`start` also names the phase reached). The server is not stopped and its work is not cancelled. For the four wait commands the deadline is `max(600000 or $QORVEX_COMMAND_TIMEOUT, element timeout + 20000)`. A slow interactive signing build in `start -d <physical iPhone>` can exceed 600 s: pass `--timeout 0`.
+- `-o, --timeout <ms>` -- Accepted on every command, after the subcommand name. On `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable` it is the element timeout (default 5000, `$QORVEX_TIMEOUT`; unchanged, exit 1 on expiry). On every other command it is a hard wall-clock deadline for the whole process: default 600000 ms, `$QORVEX_COMMAND_TIMEOUT` overrides the default, the flag overrides both, `0` disables it. When it passes, the process prints `Error: Timed out after <ms>ms: <command>; the session server may still be working (check \`qorvex status\`)` and exits 124 (`start` also names the phase reached). The server is not stopped and its work is not cancelled. For these five wait commands the deadline is `max(600000 or $QORVEX_COMMAND_TIMEOUT, element timeout + 20000)`. A slow interactive signing build in `start -d <physical iPhone>` can exceed 600 s: pass `--timeout 0`.
 - `start`: `-d, --device <udid>` -- Select a device (simulator or physical) before starting the session; equivalent to sending `use-device` then `start-session` in sequence. `start` recovers a dead session (removes the stale socket and spawns a new server, noting `Removed stale socket for dead session '<s>'`). It is idempotent: if the session is already ready (and `-d` is absent or names the session's device) it prints `Session already running (ready)` and exits 0 without creating a new session, so the session id and action log are kept; to clear the log, run `stop` then `start`. `--wait-ready` -- after starting, exit 1 with `session started but not ready: <reason>` unless the session is ready (single check, no polling).
 - `status`: reports `session_id` and `has_screenshot`, plus readiness: text adds `Ready: yes` or `Ready: no (<reason>)`; `-f json` adds `ready`, `device`, `agent_connected`, `reason` (null when ready; otherwise `no device selected`, `no agent connected` or `agent not reachable: <error>`). Exit code is 0 whenever a session exists, ready or not. On a dead session it exits 2 with `session '<s>' is dead`.
 - `list-sessions`: lists live sessions only; sockets of dead sessions (connection refused) are removed.
 - `tap`, `get-value`: `-l, --label`, `-T, --type <type>`, `--no-wait`, `-o, --timeout <ms>`, `--tag <text>`
 - `wait-for`, `wait-for-not`: `-l, --label`, `-T, --type <type>`, `-o, --timeout <ms>` (default: 5000), `--tag <text>`
+- `wait-stable`: `--for <ms>` (quiet period, default: 500), `-o, --timeout <ms>` (default: 5000), `--tag <text>`
 - `memory-info`: `--tag <text>` — annotates the JSONL log entry; the measured report is written into the entry itself
 - All action commands accept `--tag <text>` — annotates the JSONL log entry; replays as `--tag` in converted scripts
 
@@ -366,8 +385,8 @@ qorvex completions zsh > ~/.zfunc/_qorvex
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QORVEX_SESSION` | `default` | Session name — respected by both `qorvex` (CLI) and `qorvex-server`. Set once at the top of a script to avoid passing `-s` on every command. |
-| `QORVEX_TIMEOUT` | `5000` | Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not`. Overridden by `-o` / `--timeout`. Does not apply to other commands. |
-| `QORVEX_COMMAND_TIMEOUT` | `600000` | Hard deadline in milliseconds for the whole `qorvex` process (exit 124 when it passes). `0` disables it. Overridden by `--timeout` on every command except the four wait commands, where `--timeout` is the element timeout. |
+| `QORVEX_TIMEOUT` | `5000` | Default timeout in milliseconds for `tap`, `get-value`, `wait-for`, `wait-for-not`, `wait-stable`. Overridden by `-o` / `--timeout`. Does not apply to other commands. |
+| `QORVEX_COMMAND_TIMEOUT` | `600000` | Hard deadline in milliseconds for the whole `qorvex` process (exit 124 when it passes). `0` disables it. Overridden by `--timeout` on every command except the five wait commands, where `--timeout` is the element timeout. |
 | `QORVEX_LOG_DIR` | `~/.qorvex/logs/` | Override the directory where log files are written. Useful for redirecting logs to a per-run output folder in automation pipelines. |
 
 ## Element Selectors

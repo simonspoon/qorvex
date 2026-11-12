@@ -407,6 +407,33 @@ async fn parity_wait_for() {
     .await;
 }
 
+// --- WaitStable (whole tree unchanged) — --for 0, one dump ---
+#[tokio::test]
+async fn parity_wait_stable() {
+    let tree = r#"[{
+        "AXUniqueId": "controls_tap_button",
+        "AXLabel": "Tap Me",
+        "type": "Button",
+        "hittable": true,
+        "frame": {"x": 0.0, "y": 100.0, "width": 200.0, "height": 48.0},
+        "children": []
+    }]"#;
+    run_parity(
+        "wait-stable",
+        ActionType::WaitStable {
+            stable_ms: 0,
+            timeout_ms: 5_000,
+        },
+        vec![
+            Response::Ok,
+            Response::Tree {
+                json: tree.to_string(),
+            },
+        ],
+    )
+    .await;
+}
+
 // --- WaitForNot (element absent) ---
 #[tokio::test]
 async fn parity_wait_for_not() {
@@ -551,6 +578,7 @@ fn matrix_covers_every_action_type() {
         "get_screenshot",
         "wait_for",
         "wait_for_not",
+        "wait_stable",
         "set_target",
         "start_target",
         "stop_target",
@@ -602,6 +630,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::GetScreenshot
             | ActionType::WaitFor { .. }
             | ActionType::WaitForNot { .. }
+            | ActionType::WaitStable { .. }
             | ActionType::SetTarget { .. }
             | ActionType::StartTarget { .. }
             | ActionType::StopTarget
@@ -647,7 +676,7 @@ fn matrix_covers_every_action_type() {
     // Total action count is the sum of the three disjoint classes.
     assert_eq!(
         covered_via_driver.len() + session_control.len() + device_management.len(),
-        37,
+        38,
         "ActionType matrix size changed — update the parity matrix and this list"
     );
 }

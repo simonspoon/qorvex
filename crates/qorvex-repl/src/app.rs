@@ -930,6 +930,26 @@ impl App {
                     tag: args.tag.clone(),
                 }
             }
+            "wait-stable" => {
+                let stable_ms = args.stable_ms.unwrap_or(500);
+                let timeout_ms = args.timeout.unwrap_or(5000);
+                if stable_ms > timeout_ms {
+                    self.add_output(format_result(
+                        false,
+                        "wait-stable: --for must not be longer than --timeout",
+                    ));
+                    self.input = Input::default();
+                    self.completion.hide();
+                    return;
+                }
+                IpcRequest::Execute {
+                    action: ActionType::WaitStable {
+                        stable_ms,
+                        timeout_ms,
+                    },
+                    tag: args.tag.clone(),
+                }
+            }
             "send-keys" => {
                 let text = args.positional.join(" ");
                 if text.is_empty() {
@@ -1440,6 +1460,24 @@ impl App {
                     tag: args.tag.clone(),
                 }
             }
+            "wait-stable" => {
+                let stable_ms = args.stable_ms.unwrap_or(500);
+                let timeout_ms = args.timeout.unwrap_or(5000);
+                if stable_ms > timeout_ms {
+                    self.add_output(format_result(
+                        false,
+                        "wait-stable: --for must not be longer than --timeout",
+                    ));
+                    return;
+                }
+                IpcRequest::Execute {
+                    action: ActionType::WaitStable {
+                        stable_ms,
+                        timeout_ms,
+                    },
+                    tag: args.tag.clone(),
+                }
+            }
             "send-keys" => {
                 let text = args.positional.join(" ");
                 if text.is_empty() {
@@ -1564,7 +1602,7 @@ impl App {
                         self.add_output(format_result(false, &message));
                     }
                 }
-                "wait-for" | "wait-for-not" => {
+                "wait-for" | "wait-for-not" | "wait-stable" => {
                     if success {
                         self.add_output(format_result(
                             true,
@@ -1777,6 +1815,7 @@ impl App {
             "  get-value <sel> [--label] [--type T] [--no-wait]",
             "  wait-for <sel> [--label] [--type T] [--timeout ms]",
             "  wait-for-not <sel> [--label] [--type T] [--timeout ms]",
+            "  wait-stable [--for ms] [--timeout ms]  Wait until the UI tree stops changing",
             "",
             "Input:",
             "  send-keys <text>         Send keyboard input",
@@ -1817,6 +1856,8 @@ pub(crate) struct ParsedArgs {
     pub from: Option<String>,
     /// `--to x,y` on `swipe`: raw end coordinate.
     pub to: Option<String>,
+    /// `--for <ms>` on `wait-stable`: the quiet period.
+    pub stable_ms: Option<u64>,
 }
 
 /// Build the `swipe` action from parsed REPL args: a direction (default `up`)
@@ -1997,6 +2038,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         tag: None,
         from: None,
         to: None,
+        stable_ms: None,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -2030,6 +2072,11 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             }
             "--to" if cmd == "swipe" => {
                 args.to = iter.next();
+            }
+            "--for" if cmd == "wait-stable" => {
+                if let Some(val) = iter.next() {
+                    args.stable_ms = val.parse().ok();
+                }
             }
             _ => args.positional.push(tok),
         }

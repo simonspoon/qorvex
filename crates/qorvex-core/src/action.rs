@@ -9,7 +9,7 @@
 //!
 //! - **UI Interaction**: [`ActionType::Tap`], [`ActionType::TapLocation`], [`ActionType::Swipe`], [`ActionType::LongPress`], [`ActionType::SendKeys`]
 //! - **Information Retrieval**: [`ActionType::GetScreenshot`], [`ActionType::GetScreenInfo`], [`ActionType::GetValue`]
-//! - **Waiting**: [`ActionType::WaitFor`]
+//! - **Waiting**: [`ActionType::WaitFor`], [`ActionType::WaitStable`]
 //! - **Session Management**: [`ActionType::StartSession`], [`ActionType::EndSession`], [`ActionType::Quit`]
 //! - **Logging**: [`ActionType::LogComment`]
 //!
@@ -245,6 +245,14 @@ pub enum ActionType {
         label_match: Option<Box<LabelMatch>>,
     },
 
+    /// Wait until the whole UI tree is unchanged for `stable_ms` milliseconds.
+    WaitStable {
+        /// Quiet period: how long the tree must stay unchanged, in milliseconds.
+        stable_ms: u64,
+        /// Maximum time to wait in milliseconds.
+        timeout_ms: u64,
+    },
+
     /// Start a new automation session.
     StartSession,
 
@@ -410,6 +418,7 @@ impl ActionType {
             ActionType::SendKeys { .. } => "send_keys",
             ActionType::WaitFor { .. } => "wait_for",
             ActionType::WaitForNot { .. } => "wait_for_not",
+            ActionType::WaitStable { .. } => "wait_stable",
             ActionType::SetTarget { .. } => "set_target",
             ActionType::StartTarget { .. } => "start_target",
             ActionType::StopTarget => "stop_target",
@@ -450,6 +459,7 @@ impl ActionType {
             ActionType::SendKeys { .. } => "Type",
             ActionType::WaitFor { .. } => "Find",
             ActionType::WaitForNot { .. } => "Gone",
+            ActionType::WaitStable { .. } => "Stable",
             ActionType::SetTarget { .. } => "Target",
             ActionType::StartTarget { .. } => "StartTarget",
             ActionType::StopTarget => "StopTarget",
@@ -510,6 +520,9 @@ impl ActionType {
                 } else {
                     selector.clone()
                 }
+            }
+            ActionType::WaitStable { stable_ms, .. } => {
+                format!("tree unchanged for {}ms", stable_ms)
             }
             ActionType::TapLocation { x, y } => format!("({},{})", x, y),
             ActionType::Swipe { direction } => direction.clone(),

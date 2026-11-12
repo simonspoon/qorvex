@@ -148,6 +148,13 @@ impl LogConverter {
                 cmd.push_str(&format!(" -o {}", timeout_ms));
                 Some(cmd)
             }
+            ActionType::WaitStable {
+                stable_ms,
+                timeout_ms,
+            } => Some(format!(
+                "qorvex wait-stable --for {} -o {}",
+                stable_ms, timeout_ms
+            )),
             ActionType::LongPress { x, y, duration } => Some(format!(
                 "qorvex long-press {} {} --duration {}",
                 x, y, duration
@@ -479,6 +486,18 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex wait-for-not --label-contains spin -o 100".to_string())
+        );
+    }
+
+    #[test]
+    fn test_wait_stable_to_command() {
+        let action = ActionType::WaitStable {
+            stable_ms: 500,
+            timeout_ms: 5000,
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex wait-stable --for 500 -o 5000".to_string())
         );
     }
 

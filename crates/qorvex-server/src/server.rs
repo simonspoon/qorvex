@@ -2322,6 +2322,23 @@ impl ServerState {
                     }
                 }
 
+                // A stable tree is no proof the target is up: with the app
+                // gone the agent can still dump a static leftover tree.
+                if result.success && matches!(action, ActionType::WaitStable { .. }) {
+                    if let Some(bundle) = self.target_bundle_id.clone() {
+                        if let Ok(info) = executor.driver().get_target_info().await {
+                            if let Some(msg) = target_lost_message(
+                                &bundle,
+                                &info.state,
+                                "the tree was stable but the target app is gone",
+                            ) {
+                                result.success = false;
+                                result.message = msg;
+                            }
+                        }
+                    }
+                }
+
                 // Log to session
                 let action_result = if result.success {
                     ActionResult::Success
