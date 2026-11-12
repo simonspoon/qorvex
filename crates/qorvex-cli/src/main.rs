@@ -311,6 +311,32 @@ enum LeaseAction {
 }
 
 #[derive(Subcommand)]
+enum AssertAction {
+    /// Compare an element's value to an expected string
+    ///
+    /// One lookup, no waiting or retry. Exit 0 = pass, 5 = assertion failed,
+    /// 4 = element not in the tree; errors keep their usual exit codes.
+    Text {
+        /// The selector (accessibility ID or label)
+        selector: String,
+        /// The expected value
+        expected: String,
+        /// Pass when the value contains EXPECTED (case-sensitive, literal)
+        #[arg(long)]
+        contains: bool,
+        /// Match by accessibility label instead of ID
+        #[arg(short, long)]
+        label: bool,
+        /// Filter by element type (e.g., Button, TextField)
+        #[arg(short = 'T', long = "type")]
+        element_type: Option<String>,
+        /// Annotate the action log entry with a free-text tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SimsAction {
     /// Find (and with --yes delete) simulators that only waste disk
     ///
@@ -460,6 +486,12 @@ enum Command {
         /// Annotate the action log entry with a free-text tag
         #[arg(long)]
         tag: Option<String>,
+    },
+
+    /// Assert on an element; exit 0 = pass, 5 = assertion failed
+    Assert {
+        #[command(subcommand)]
+        action: AssertAction,
     },
 
     /// Swipe until an element is in the accessibility tree
@@ -1026,7 +1058,7 @@ async fn main() -> ExitCode {
                     with_duration_ms(&screen_info_error_json(&e).to_string())
                 );
             }
-            if !matches!(e, CliError::Absent) {
+            if !matches!(e, CliError::Absent | CliError::AssertionFailed) {
                 eprintln!("Error: {}", e);
             }
             e.exit_code()
@@ -1221,6 +1253,8 @@ enum CliError {
     Protocol(String),
     /// `exists` answered "not in the tree" (exit 4); not an error to report.
     Absent,
+    /// `assert` compared and failed (exit 5); already reported.
+    AssertionFailed,
 }
 
 impl CliError {
@@ -1230,6 +1264,7 @@ impl CliError {
             CliError::ActionFailed(_) => ExitCode::from(1),
             CliError::Protocol(_) => ExitCode::from(3),
             CliError::Absent => ExitCode::from(4),
+            CliError::AssertionFailed => ExitCode::from(5),
         }
     }
 }
@@ -1241,6 +1276,7 @@ impl std::fmt::Display for CliError {
             CliError::ActionFailed(msg) => write!(f, "Action failed: {}", msg),
             CliError::Protocol(msg) => write!(f, "Protocol error: {}", msg),
             CliError::Absent => write!(f, "element not present"),
+            CliError::AssertionFailed => write!(f, "assertion failed"),
         }
     }
 }
@@ -1787,6 +1823,74 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 Err(CliError::Absent)
             }
         }
+        Command::Assert {
+            action:
+                AssertAction::Text {
+                    ref selector,
+                    ref expected,
+                    contains,
+                    label,
+                    ref element_type,
+                    ref tag,
+                },
+        } => {
+            let json = cli.format == OutputFormat::Json;
+            let report = |actual: Option<&str>, pass: bool| {
+                if json {
+                    let out = serde_json::json!({
+                        "pass": pass,
+                        "selector": selector,
+                        "expected": expected,
+                        "actual": actual,
+                    });
+                    println!("{}", with_duration_ms(&out.to_string()));
+                }
+            };
+            // The `exists` lookup tells "absent" (exit 4) apart from errors.
+            let probe = ActionType::Exists {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+                label_match: None,
+            };
+            if !query_exists(&mut client, probe, tag.clone()).await?.exists {
+                report(None, false);
+                eprintln!("FAIL: {}: element not found", selector);
+                return Err(CliError::Absent);
+            }
+            // Same single attempt as `get-value --no-wait`.
+            let action = ActionType::GetValue {
+                selector: selector.clone(),
+                by_label: label,
+                element_type: element_type.clone(),
+                timeout_ms: None,
+            };
+            let value = query_value(&mut client, action, tag.clone()).await?;
+            let actual = value.as_deref().unwrap_or("");
+            let verb = if contains { "contains" } else { "==" };
+            match compare_text(value.as_deref(), expected, contains) {
+                TextVerdict::Pass => {
+                    report(Some(actual), true);
+                    if !json {
+                        println!("PASS: {} {} '{}'", selector, verb, expected);
+                    }
+                    Ok(())
+                }
+                TextVerdict::Fail(actual) => {
+                    report(Some(&actual), false);
+                    let want = if contains {
+                        "expected to contain"
+                    } else {
+                        "expected"
+                    };
+                    eprintln!(
+                        "FAIL: {}: {} '{}', got '{}'",
+                        selector, want, expected, actual
+                    );
+                    Err(CliError::AssertionFailed)
+                }
+            }
+        }
         Command::ScrollTo {
             ref selector,
             label,
@@ -2189,6 +2293,53 @@ async fn query_exists(
             data,
             ..
         } => parse_exists(data.as_deref().unwrap_or("")),
+        IpcResponse::ActionResult { message, .. } | IpcResponse::Error { message } => {
+            Err(CliError::ActionFailed(message))
+        }
+        _ => Err(CliError::Protocol("Unexpected response type".to_string())),
+    }
+}
+
+/// Outcome of `assert text`; `Fail` carries the actual value.
+#[derive(Debug, PartialEq)]
+enum TextVerdict {
+    Pass,
+    Fail(String),
+}
+
+/// Compares an element value (missing = empty string) to `expected`:
+/// exact equality, or a literal case-sensitive substring with `contains`.
+fn compare_text(actual: Option<&str>, expected: &str, contains: bool) -> TextVerdict {
+    let actual = actual.unwrap_or("");
+    let pass = if contains {
+        actual.contains(expected)
+    } else {
+        actual == expected
+    };
+    if pass {
+        TextVerdict::Pass
+    } else {
+        TextVerdict::Fail(actual.to_string())
+    }
+}
+
+/// Sends one `GetValue` action and returns the value (`None` when the
+/// element has no value). A failed lookup is an error.
+async fn query_value(
+    client: &mut IpcClient,
+    action: ActionType,
+    tag: Option<String>,
+) -> Result<Option<String>, CliError> {
+    let response = client
+        .send(&IpcRequest::Execute { action, tag })
+        .await
+        .map_err(|e| CliError::Protocol(format!("Failed to send request: {}", e)))?;
+    match response {
+        IpcResponse::ActionResult {
+            success: true,
+            data,
+            ..
+        } => Ok(data.filter(|d| d != "null")),
         IpcResponse::ActionResult { message, .. } | IpcResponse::Error { message } => {
             Err(CliError::ActionFailed(message))
         }
@@ -4298,6 +4449,99 @@ mod tests {
         };
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("invalid --since 'abc'"), "{}", err);
+    }
+
+    #[test]
+    fn compare_text_equal_differ_contains_empty_missing() {
+        assert_eq!(
+            compare_text(Some("Welcome"), "Welcome", false),
+            TextVerdict::Pass
+        );
+        assert_eq!(
+            compare_text(Some("Welcome"), "welcome", false),
+            TextVerdict::Fail("Welcome".into())
+        );
+        assert_eq!(
+            compare_text(Some("Welcome back"), "come b", true),
+            TextVerdict::Pass
+        );
+        assert_eq!(
+            compare_text(Some("Welcome back"), "Back", true),
+            TextVerdict::Fail("Welcome back".into())
+        );
+        assert_eq!(compare_text(Some(""), "", false), TextVerdict::Pass);
+        assert_eq!(compare_text(Some("x"), "", true), TextVerdict::Pass);
+        assert_eq!(
+            compare_text(Some("x"), "", false),
+            TextVerdict::Fail("x".into())
+        );
+        assert_eq!(compare_text(None, "", false), TextVerdict::Pass);
+        assert_eq!(
+            compare_text(None, "a", false),
+            TextVerdict::Fail(String::new())
+        );
+        assert_eq!(
+            compare_text(None, "a", true),
+            TextVerdict::Fail(String::new())
+        );
+    }
+
+    #[test]
+    fn assert_text_parses_and_rejects_missing_operands() {
+        let cli = Cli::try_parse_from([
+            "qorvex",
+            "assert",
+            "text",
+            "login-title",
+            "Welcome",
+            "-l",
+            "-T",
+            "StaticText",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Assert {
+                action:
+                    AssertAction::Text {
+                        selector,
+                        expected,
+                        contains,
+                        label,
+                        element_type,
+                        ..
+                    },
+            } => {
+                assert_eq!(selector, "login-title");
+                assert_eq!(expected, "Welcome");
+                assert!(!contains);
+                assert!(label);
+                assert_eq!(element_type.as_deref(), Some("StaticText"));
+            }
+            _ => panic!("expected Assert"),
+        }
+        let cli =
+            Cli::try_parse_from(["qorvex", "assert", "text", "s", "x", "--contains"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Assert {
+                action: AssertAction::Text { contains: true, .. }
+            }
+        ));
+        for args in [
+            &["qorvex", "assert"][..],
+            &["qorvex", "assert", "text"][..],
+            &["qorvex", "assert", "text", "s"][..],
+        ] {
+            let Err(err) = Cli::try_parse_from(args) else {
+                panic!("{:?} should be rejected", args)
+            };
+            assert_eq!(err.exit_code(), 2, "{:?}", args);
+        }
+    }
+
+    #[test]
+    fn assertion_failed_exit_code_is_5() {
+        assert_eq!(CliError::AssertionFailed.exit_code(), ExitCode::from(5));
     }
 
     #[test]

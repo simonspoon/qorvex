@@ -128,4 +128,5 @@ See [commands.md](commands.md) for full option details.
 | 1 | Action failed (element not found, tap failed, etc.) |
 | 2 | Connection error (no running REPL session) |
 | 3 | Protocol error |
+| 5 | Assertion failed (`assert text`: the value did not match) |
 | 124 | Hard deadline passed (`--timeout` / `QORVEX_COMMAND_TIMEOUT`, default 600000 ms); the server may still be working |
