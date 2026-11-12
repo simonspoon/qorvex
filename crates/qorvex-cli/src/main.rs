@@ -748,6 +748,10 @@ enum Command {
         /// NSPredicate to filter with (e.g. 'subsystem == "com.example.App"')
         #[arg(long)]
         predicate: Option<String>,
+        /// Print at most this many bytes (the newest lines); caps the printed
+        /// output only, not what `log show` collects
+        #[arg(long, value_name = "N", value_parser = parse_max_bytes)]
+        max_bytes: Option<usize>,
     },
 
     /// Set the selected simulator's light/dark appearance
@@ -2010,7 +2014,17 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Command::DeviceLog {
             ref last,
             ref predicate,
-        } => device_log(&mut client, &cli, last.clone(), predicate.clone()).await,
+            max_bytes,
+        } => {
+            device_log(
+                &mut client,
+                &cli,
+                last.clone(),
+                predicate.clone(),
+                max_bytes,
+            )
+            .await
+        }
         Command::SetAppearance { appearance } => {
             send_command(
                 &mut client,
@@ -3264,12 +3278,44 @@ async fn create_device(
     }
 }
 
+/// `device-log --max-bytes <N>`: a positive whole number of bytes.
+fn parse_max_bytes(s: &str) -> Result<usize, String> {
+    match s.trim().parse::<usize>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(format!(
+            "invalid max bytes '{}': expected a positive whole number",
+            s
+        )),
+    }
+}
+
+/// The newest lines of `log` that fit in `max` bytes: the last `max` bytes,
+/// moved forward to the next line start (never a partial first line, never
+/// inside a UTF-8 char). A single line longer than `max` yields "".
+fn truncate_log_tail(log: &str, max: usize) -> &str {
+    if log.len() <= max {
+        return log;
+    }
+    let mut start = log.len() - max;
+    if log.as_bytes()[start - 1] == b'\n' {
+        return &log[start..];
+    }
+    match log.as_bytes()[start..].iter().position(|&b| b == b'\n') {
+        Some(i) => {
+            start += i + 1;
+            &log[start..]
+        }
+        None => "",
+    }
+}
+
 /// Print recent unified-log output from the selected simulator.
 async fn device_log(
     client: &mut IpcClient,
     cli: &Cli,
     last: String,
     predicate: Option<String>,
+    max_bytes: Option<usize>,
 ) -> Result<(), CliError> {
     let response = client
         .send(&IpcRequest::DeviceLog { last, predicate })
@@ -3278,13 +3324,28 @@ async fn device_log(
 
     match response {
         IpcResponse::DeviceLog { log } => {
-            if cli.format == OutputFormat::Json {
-                println!(
-                    "{}",
-                    with_duration_ms(&serde_json::json!({ "log": log }).to_string())
+            let total = log.len();
+            let kept = match max_bytes {
+                Some(n) => truncate_log_tail(&log, n),
+                None => log.as_str(),
+            };
+            let truncated = kept.len() < total;
+            if truncated {
+                eprintln!(
+                    "device-log: truncated to last {} of {} bytes",
+                    kept.len(),
+                    total
                 );
+            }
+            if cli.format == OutputFormat::Json {
+                let mut obj = serde_json::json!({ "log": kept });
+                if max_bytes.is_some() {
+                    obj["truncated"] = truncated.into();
+                    obj["total_bytes"] = total.into();
+                }
+                println!("{}", with_duration_ms(&obj.to_string()));
             } else {
-                print!("{}", log);
+                print!("{}", kept);
             }
             Ok(())
         }
@@ -3318,6 +3379,43 @@ async fn stop_server(client: &mut IpcClient, cli: &Cli) -> Result<(), CliError> 
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn truncate_log_tail_cases() {
+        assert_eq!(truncate_log_tail("a\nb\n", 10), "a\nb\n");
+        assert_eq!(truncate_log_tail("a\nb\n", 4), "a\nb\n");
+        // cut mid-line: drop the partial first line
+        assert_eq!(truncate_log_tail("aaa\nbb\ncc\n", 5), "cc\n");
+        // cut exactly at a line start: keep it
+        assert_eq!(truncate_log_tail("aaa\nbb\ncc\n", 6), "bb\ncc\n");
+        // cut inside a multi-byte char (é is 2 bytes)
+        assert_eq!(truncate_log_tail("é\nxy\nz\n", 7), "xy\nz\n");
+        assert_eq!(truncate_log_tail("x\né\n", 2), "");
+        // single line longer than N, no newline: empty
+        assert_eq!(truncate_log_tail("abcdefgh", 3), "");
+        assert_eq!(truncate_log_tail("abcdefgh\n", 3), "");
+    }
+
+    #[test]
+    fn parse_max_bytes_cases() {
+        assert_eq!(parse_max_bytes("2000"), Ok(2000));
+        assert!(parse_max_bytes("0").is_err());
+        assert!(parse_max_bytes("-1").is_err());
+        assert!(parse_max_bytes("abc").is_err());
+        assert!(parse_max_bytes("").is_err());
+    }
+
+    #[test]
+    fn device_log_max_bytes_bad_value_is_usage_error() {
+        for bad in ["0", "-1", "abc", ""] {
+            let err = match Cli::try_parse_from(["qorvex", "device-log", "--max-bytes", bad]) {
+                Ok(_) => panic!("{:?} must be a usage error", bad),
+                Err(e) => e,
+            };
+            assert_eq!(err.exit_code(), 2, "{:?}", bad);
+        }
+        assert!(Cli::try_parse_from(["qorvex", "device-log", "--max-bytes", "5"]).is_ok());
+    }
 
     #[test]
     fn screen_info_default_is_array_without_count() {

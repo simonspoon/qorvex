@@ -29,7 +29,7 @@ Commands are available across two interfaces: the REPL (interactive) and CLI (sc
 | Quiet `mediaanalysisd` | `quiet-device` | `qorvex quiet-device <udid>` |
 | Set appearance | `set-appearance <dark\|light>` | `qorvex set-appearance <dark\|light>` |
 | Set content size | `set-content-size <size>` | `qorvex set-content-size <size>` |
-| Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>]` |
+| Show recent device log | `device-log [--last 5m]` | `qorvex device-log [--last 5m] [--predicate <expr>] [--max-bytes <N>]` |
 | Lock the device (iOS only for now) | `lock` | `qorvex lock` |
 
 ### Android setup check (`doctor`)
@@ -121,6 +121,17 @@ $ qorvex device-log --last 2m --predicate 'subsystem == "com.example.MyApp"'
 to the last 5 minutes. The streaming `log stream` form has no command, because a
 process that never returns does not fit qorvex's request/response protocol — run
 it directly if you need a live tail.
+
+`--max-bytes <N>` (positive integer) prints only the newest lines that fit in `N`
+bytes — a line-aligned suffix, so a partial first line is dropped (a single line
+longer than `N` yields nothing). A one-line note goes to stderr when it truncates
+(`device-log: truncated to last <printed> of <total> bytes`); with `-f json` the
+object gains `truncated` and `total_bytes`. It caps what is **printed**, not what
+`log show` collects.
+
+```bash
+$ qorvex device-log --last 1h --max-bytes 20000
+```
 
 ## App Management
 
