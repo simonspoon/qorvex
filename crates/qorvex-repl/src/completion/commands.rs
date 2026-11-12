@@ -386,7 +386,7 @@ pub static COMMANDS: &[CommandDef] = &[
     },
     CommandDef {
         name: "swipe",
-        description: "Swipe the screen (direction, or --from x,y --to x,y)",
+        description: "Swipe the screen (direction, --from x,y --to x,y, or --from-element)",
         args: &[ArgSpec {
             name: "direction",
             completion: ArgCompletion::None,
@@ -401,6 +401,21 @@ pub static COMMANDS: &[CommandDef] = &[
                 flag: "--to",
                 takes_value: true,
                 description: "End point as x,y (requires --from)",
+            },
+            OptionSpec {
+                flag: "--from-element",
+                takes_value: true,
+                description: "Start at the centre of this element (ID, or label with --label)",
+            },
+            OptionSpec {
+                flag: "--label",
+                takes_value: false,
+                description: "Match the --from-element selector by label",
+            },
+            OptionSpec {
+                flag: "--type",
+                takes_value: true,
+                description: "Filter the --from-element match by element type",
             },
             OptionSpec {
                 flag: "--duration-ms",

@@ -347,6 +347,88 @@ async fn test_swipe_duration_reaches_driver() {
     assert!(msg.ends_with("(1500 ms)"), "{}", msg);
 }
 
+fn swipe_from_element_action(direction: &str) -> ActionType {
+    ActionType::SwipeFromElement {
+        selector: "box".to_string(),
+        by_label: false,
+        element_type: None,
+        label_match: None,
+        direction: direction.parse().unwrap(),
+        duration_ms: Some(500),
+    }
+}
+
+#[tokio::test]
+async fn test_swipe_from_element_starts_at_frame_centre() {
+    use qorvex_core::protocol::Request;
+    // Frame (x=100, y=400, w=60, h=40) -> centre (130, 420).
+    let frame = r#"{"identifier":"box","hittable":true,"frame":{"x":100,"y":400,"width":60,"height":40},"children":[]}"#;
+    for (dir, end) in [
+        ("up", (130, 120)),
+        ("down", (130, 720)),
+        ("left", (0, 420)),
+        ("right", (340, 420)),
+    ] {
+        let (addr, seen) = common::recording_mock_agent(vec![
+            Response::Ok,
+            Response::Element {
+                json: frame.to_string(),
+            },
+            Response::Ok,
+        ])
+        .await;
+        let mut driver = AgentDriver::new(addr.ip().to_string(), addr.port());
+        driver.connect().await.unwrap();
+        let executor = ActionExecutor::new(Arc::new(driver));
+        let result = executor.execute(swipe_from_element_action(dir)).await;
+        assert!(result.success, "{}: {}", dir, result.message);
+        let requests = seen.lock().unwrap().clone();
+        match requests.last().unwrap() {
+            Request::Swipe {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                duration,
+            } => {
+                assert_eq!((*start_x, *start_y), (130, 420), "{}", dir);
+                assert_eq!((*end_x, *end_y), end, "{}", dir);
+                assert_eq!(*duration, Some(0.5));
+            }
+            other => panic!("expected Swipe, got {:?}", other),
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_swipe_from_element_missing_element_fails() {
+    let executor = connected_executor(vec![Response::Ok, absent()]).await;
+    let result = executor.execute(swipe_from_element_action("up")).await;
+    assert!(!result.success);
+    assert!(result.message.contains("not found"), "{}", result.message);
+}
+
+#[test]
+fn test_swipe_from_element_serde() {
+    let action = swipe_from_element_action("up");
+    let json = serde_json::to_string(&action).unwrap();
+    assert!(!json.contains("label_match"), "{}", json);
+    assert_eq!(
+        serde_json::to_string(&serde_json::from_str::<ActionType>(&json).unwrap()).unwrap(),
+        json
+    );
+    let minimal = r#"{"type":"SwipeFromElement","selector":"x","by_label":true,"element_type":null,"direction":"down"}"#;
+    assert!(matches!(
+        serde_json::from_str::<ActionType>(minimal).unwrap(),
+        ActionType::SwipeFromElement {
+            label_match: None,
+            duration_ms: None,
+            ..
+        }
+    ));
+    assert_eq!(action.name(), "swipe_from_element");
+}
+
 #[test]
 fn test_swipe_action_serde_back_compat() {
     let old: ActionType = serde_json::from_str(r#"{"type":"Swipe","direction":"up"}"#).unwrap();

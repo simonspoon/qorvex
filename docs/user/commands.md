@@ -260,6 +260,7 @@ Tap retry behavior (unless `--no-wait`): polls every 50ms on the agent side. On 
 | `swipe` or `swipe <direction>` | Swipe (default: up in the REPL; the CLI requires a direction or `--from/--to`). Directions: up, down, left, right |
 | `swipe --from <x,y> --to <x,y>` | Swipe between two coordinates (non-negative integers); cannot be combined with a direction (REPL and CLI) |
 | `swipe <direction\|--from x,y --to x,y> --duration-ms <ms>` | Swipe duration in milliseconds, 1-10000 (default 300). Out of range or non-numeric is a usage error (exit 2). The success message includes the duration, e.g. `Swiped up (800 ms)` |
+| `swipe <direction> --from-element <selector> [-l] [-T <type>] [--duration-ms ms]` | Swipe starting at the centre of the element's frame instead of mid-screen, moving the same distance as a plain direction swipe (300 points vertical, 210 horizontal; the end point is clamped at 0). The CLI also takes `--label-contains/--label-regex/--nth` as `exists` does (they replace the selector). Cannot be combined with `--from/--to` (usage error, exit 2). A missing element fails with exit 1, like `tap`. **Limit:** the centre of an offscreen or clipped (virtualised) row is used as is, so the swipe can start off screen. REPL: `swipe <dir> --from-element <sel> [--label] [--type T]` |
 
 ### System Keys
 

@@ -123,6 +123,20 @@ fn compile_label_match(
 
 /// Swipe duration passed to the driver, in seconds: `ms / 1000.0`, or the
 /// 0.3 s default when no duration was given.
+/// Swipe start and end for a direction, from `(x, y)`. Distances are the ones
+/// the plain direction swipe uses (300 vertical, 210 horizontal); the end
+/// point is clamped at 0 because negative coordinates are rejected.
+fn swipe_from_point(direction: &str, x: i32, y: i32) -> Option<(i32, i32)> {
+    let (dx, dy) = match direction {
+        "up" => (0, -300),
+        "down" => (0, 300),
+        "left" => (-210, 0),
+        "right" => (210, 0),
+        _ => return None,
+    };
+    Some(((x + dx).max(0), (y + dy).max(0)))
+}
+
 fn swipe_secs(duration_ms: Option<u32>) -> Option<f64> {
     Some(duration_ms.map_or(0.3, |ms| f64::from(ms) / 1000.0))
 }
@@ -507,6 +521,66 @@ impl ActionExecutor {
                     Ok(_) => ExecutionResult::success(format!(
                         "Swiped {}{}",
                         direction,
+                        swipe_duration_suffix(duration_ms)
+                    )),
+                    Err(e) => ExecutionResult::failure(e.to_string()),
+                }
+            }
+
+            ActionType::SwipeFromElement {
+                ref selector,
+                by_label,
+                ref element_type,
+                ref label_match,
+                direction,
+                duration_ms,
+            } => {
+                let matcher = match compile_label_match(label_match) {
+                    Ok(m) => m,
+                    Err(fail) => return fail,
+                };
+                let shown = label_match.as_ref().map(|m| m.to_string());
+                let selector = shown.as_deref().unwrap_or(selector);
+                let element = match self
+                    .find_for(
+                        matcher.as_ref(),
+                        selector,
+                        by_label,
+                        element_type.as_deref(),
+                        None,
+                    )
+                    .await
+                {
+                    Ok(Some(el)) => el,
+                    Ok(None) => {
+                        return ExecutionResult::failure(format!(
+                            "Element '{}' not found",
+                            selector
+                        ))
+                    }
+                    Err(e) => return ExecutionResult::failure(e.to_string()),
+                };
+                let Some((from_x, from_y)) = element.frame.as_ref().and_then(frame_centre) else {
+                    return ExecutionResult::failure(format!(
+                        "Element '{}' has no usable frame",
+                        selector
+                    ));
+                };
+                let (to_x, to_y) = swipe_from_point(direction.as_str(), from_x, from_y)
+                    .expect("ScrollDirection is always a valid swipe direction");
+                match self
+                    .driver
+                    .swipe(from_x, from_y, to_x, to_y, swipe_secs(duration_ms))
+                    .await
+                {
+                    Ok(_) => ExecutionResult::success(format!(
+                        "Swiped {} from '{}' at ({}, {}) to ({}, {}){}",
+                        direction.as_str(),
+                        selector,
+                        from_x,
+                        from_y,
+                        to_x,
+                        to_y,
                         swipe_duration_suffix(duration_ms)
                     )),
                     Err(e) => ExecutionResult::failure(e.to_string()),

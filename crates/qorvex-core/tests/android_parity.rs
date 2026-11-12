@@ -671,6 +671,7 @@ fn matrix_covers_every_action_type() {
             | ActionType::TapLocation { .. }
             | ActionType::Swipe { .. }
             | ActionType::SwipeCoords { .. }
+            | ActionType::SwipeFromElement { .. }
             | ActionType::Lock
             | ActionType::Key { .. }
             | ActionType::LongPress { .. }

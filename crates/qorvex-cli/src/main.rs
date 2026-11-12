@@ -548,18 +548,35 @@ enum Command {
         tag: Option<String>,
     },
 
-    /// Swipe the screen in a direction, or between two coordinates
+    /// Swipe the screen in a direction, between two coordinates, or from an element
+    ///
+    /// With --from-element (or --label-contains/--label-regex) the swipe
+    /// starts at the centre of that element's frame and moves the same
+    /// distance as a plain direction swipe. A virtualised row can sit off
+    /// screen; the swipe then starts there.
     #[command(group(clap::ArgGroup::new("swipe_mode").required(true).args(["direction", "from"])))]
+    #[command(group(clap::ArgGroup::new("element_mode").multiple(true).args(["selector", "label_contains", "label_regex"])))]
     Swipe {
         /// Direction: up, down, left, right
         #[arg(conflicts_with_all = ["from", "to"])]
         direction: Option<String>,
         /// Start point as x,y (requires --to)
-        #[arg(long, value_name = "X,Y", value_parser = parse_coordinate, requires = "to", allow_hyphen_values = true)]
+        #[arg(long, value_name = "X,Y", value_parser = parse_coordinate, requires = "to", allow_hyphen_values = true, conflicts_with_all = ["selector", "label_contains", "label_regex"])]
         from: Option<(i32, i32)>,
         /// End point as x,y (requires --from)
         #[arg(long, value_name = "X,Y", value_parser = parse_coordinate, requires = "from", allow_hyphen_values = true)]
         to: Option<(i32, i32)>,
+        /// Start the swipe at the centre of this element (accessibility ID or label)
+        #[arg(long = "from-element", value_name = "SELECTOR", requires = "direction")]
+        selector: Option<String>,
+        /// Match the --from-element selector by accessibility label instead of ID
+        #[arg(short, long, requires = "selector")]
+        label: bool,
+        /// Filter the --from-element match by element type (e.g., Button)
+        #[arg(short = 'T', long = "type", requires = "element_mode")]
+        element_type: Option<String>,
+        #[command(flatten)]
+        label_match: LabelMatchArgs,
         /// Swipe duration in milliseconds, 1-10000 (default 300)
         #[arg(long = "duration-ms", value_name = "MS", value_parser = parse_swipe_duration_ms)]
         duration_ms: Option<u32>,
@@ -1691,10 +1708,31 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             ref direction,
             from,
             to,
+            ref selector,
+            label,
+            ref element_type,
+            ref label_match,
             duration_ms,
             ref tag,
         } => {
             let action = match (direction, from, to) {
+                (Some(direction), _, _)
+                    if selector.is_some() || label_match.to_match().is_some() =>
+                {
+                    ActionType::SwipeFromElement {
+                        selector: selector.clone().unwrap_or_default(),
+                        by_label: label,
+                        element_type: element_type.clone(),
+                        label_match: label_match.to_match(),
+                        direction: direction.parse().map_err(|_| {
+                            CliError::ActionFailed(format!(
+                                "Invalid swipe direction '{}'. Use: up, down, left, right",
+                                direction
+                            ))
+                        })?,
+                        duration_ms,
+                    }
+                }
                 (Some(direction), _, _) => ActionType::Swipe {
                     direction: direction.clone(),
                     duration_ms,
@@ -3743,6 +3781,39 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.to_string().contains("1 and 10000"));
+    }
+
+    #[test]
+    fn swipe_from_element_parses_and_conflicts() {
+        match swipe_parse(&["left", "--from-element", "box", "-l", "-T", "Other"])
+            .unwrap()
+            .command
+        {
+            Command::Swipe {
+                selector,
+                label,
+                element_type,
+                ..
+            } => {
+                assert_eq!(selector.as_deref(), Some("box"));
+                assert!(label);
+                assert_eq!(element_type.as_deref(), Some("Other"));
+            }
+            _ => panic!("expected swipe"),
+        }
+        assert!(swipe_parse(&["up", "--label-contains", "x", "--nth", "1"]).is_ok());
+        assert!(swipe_parse(&["up", "--from-element", "b", "--duration-ms", "9"]).is_ok());
+        for bad in [
+            vec!["up", "--from-element", "b", "--from", "1,2", "--to", "3,4"],
+            vec!["--from", "1,2", "--to", "3,4", "--label-contains", "x"],
+            vec!["--from-element", "b"],
+            vec!["up", "--from-element", "b", "--label-contains", "x"],
+            vec!["up", "-T", "Other"],
+            vec!["up", "--label"],
+        ] {
+            let err = swipe_parse(&bad).err().unwrap();
+            assert_eq!(err.exit_code(), 2, "{:?}", bad);
+        }
     }
 
     #[test]

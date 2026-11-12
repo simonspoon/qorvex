@@ -1845,6 +1845,8 @@ impl App {
             "  tap <sel> [--label] [--type T] [--no-wait] [--timeout ms]",
             "  swipe [direction]        Swipe: up, down, left, right",
             "  swipe --from x,y --to x,y  Swipe between two coordinates",
+            "  swipe <dir> --from-element <sel> [--label] [--type T]",
+            "                           Swipe starting at the centre of an element",
             "  swipe ... --duration-ms N  Swipe duration, 1-10000 ms (default 300)",
             "  scroll-to <sel> [--label] [--type T] [--direction D] [--max-swipes N] [--duration-ms N]",
             "                           Swipe until the element is in the tree (default up, 10 swipes)",
@@ -1903,6 +1905,8 @@ pub(crate) struct ParsedArgs {
     pub direction: Option<String>,
     /// `--max-swipes <n>` on `scroll-to`: raw value, validated by `scroll_to_action`.
     pub max_swipes: Option<String>,
+    /// `--from-element <sel>` on `swipe`: start the swipe at this element's centre.
+    pub from_element: Option<String>,
     /// `--append` on `send-keys` (the default mode).
     pub append: bool,
     /// `--replace` on `send-keys`: the field holds exactly the text afterwards.
@@ -1933,6 +1937,23 @@ fn swipe_action(args: &ParsedArgs) -> Result<ActionType, String> {
         .as_deref()
         .map(parse_swipe_duration_ms)
         .transpose()?;
+    if let Some(selector) = &args.from_element {
+        if args.from.is_some() || args.to.is_some() {
+            return Err("swipe: --from-element cannot be combined with --from/--to".to_string());
+        }
+        return Ok(ActionType::SwipeFromElement {
+            selector: selector.clone(),
+            by_label: args.label,
+            element_type: args.element_type.clone(),
+            label_match: None,
+            direction: args
+                .positional
+                .first()
+                .map_or(Ok(ScrollDirection::Up), |s| s.parse())
+                .map_err(|e| format!("swipe: {}", e))?,
+            duration_ms,
+        });
+    }
     match (&args.from, &args.to) {
         (None, None) => Ok(ActionType::Swipe {
             direction: args
@@ -2154,6 +2175,7 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
         max_swipes: None,
         append: false,
         replace: false,
+        from_element: None,
     };
 
     let mut iter = tokens.into_iter().skip(1);
@@ -2187,6 +2209,9 @@ pub(crate) fn parse_command(input: &str) -> (String, ParsedArgs) {
             }
             "--to" if cmd == "swipe" => {
                 args.to = iter.next();
+            }
+            "--from-element" if cmd == "swipe" => {
+                args.from_element = iter.next();
             }
             "--direction" if cmd == "scroll-to" => {
                 args.direction = iter.next();
@@ -2263,6 +2288,37 @@ mod tests {
         // The flags are only recognised on send-keys.
         let (_, a) = parse_command("log-comment --replace");
         assert_eq!(a.positional, vec!["--replace".to_string()]);
+    }
+
+    #[test]
+    fn test_swipe_from_element_action() {
+        let (_, a) =
+            parse_command("swipe left --from-element box --label --type Other --duration-ms 500");
+        match swipe_action(&a) {
+            Ok(ActionType::SwipeFromElement {
+                selector,
+                by_label: true,
+                element_type,
+                direction,
+                duration_ms: Some(500),
+                ..
+            }) => {
+                assert_eq!(selector, "box");
+                assert_eq!(element_type.as_deref(), Some("Other"));
+                assert_eq!(direction, ScrollDirection::Left);
+            }
+            other => panic!("unexpected {:?}", other),
+        }
+        let (_, a) = parse_command("swipe --from-element box");
+        assert!(matches!(
+            swipe_action(&a),
+            Ok(ActionType::SwipeFromElement {
+                direction: ScrollDirection::Up,
+                ..
+            })
+        ));
+        let (_, a) = parse_command("swipe up --from-element box --from 1,2 --to 3,4");
+        assert!(swipe_action(&a).is_err());
     }
 
     #[test]

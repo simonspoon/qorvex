@@ -180,6 +180,28 @@ pub enum ActionType {
         duration_ms: Option<u32>,
     },
 
+    /// Swipe in a direction starting at the centre of an element.
+    ///
+    /// Same distance as [`ActionType::Swipe`]; the start point is the centre
+    /// of the element's frame. Fails when the element is not found.
+    SwipeFromElement {
+        /// The selector value (accessibility ID or label).
+        selector: String,
+        /// If true, selector is an accessibility label; if false, it's an ID.
+        by_label: bool,
+        /// Optional element type filter (e.g., "Button", "TextField").
+        element_type: Option<String>,
+        /// Label text match used instead of `selector` (`--label-contains` /
+        /// `--label-regex`); `None` keeps the selector search.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_match: Option<Box<LabelMatch>>,
+        /// Swipe direction (finger movement).
+        direction: ScrollDirection,
+        /// Swipe duration in milliseconds; `None` uses the default (300 ms).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u32>,
+    },
+
     /// Swipe the screen between two explicit coordinates.
     SwipeCoords {
         /// Starting x-coordinate in screen points.
@@ -540,6 +562,7 @@ impl ActionType {
             ActionType::Tap { .. } => "tap",
             ActionType::TapLocation { .. } => "tap_location",
             ActionType::Swipe { .. } => "swipe",
+            ActionType::SwipeFromElement { .. } => "swipe_from_element",
             ActionType::SwipeCoords { .. } => "swipe_coords",
             ActionType::Lock => "lock",
             ActionType::Key { .. } => "key",
@@ -584,7 +607,9 @@ impl ActionType {
     pub fn display_name(&self) -> &'static str {
         match self {
             ActionType::Tap { .. } | ActionType::TapLocation { .. } => "Tap",
-            ActionType::Swipe { .. } | ActionType::SwipeCoords { .. } => "Swipe",
+            ActionType::Swipe { .. }
+            | ActionType::SwipeFromElement { .. }
+            | ActionType::SwipeCoords { .. } => "Swipe",
             ActionType::Lock => "Lock",
             ActionType::Key { .. } => "Key",
             ActionType::LongPress { .. } => "LongPress",
@@ -677,6 +702,24 @@ impl ActionType {
                 Some(ms) => format!("{} ({} ms)", direction, ms),
                 None => direction.clone(),
             },
+            ActionType::SwipeFromElement {
+                selector,
+                by_label,
+                label_match,
+                direction,
+                duration_ms,
+                ..
+            } => {
+                let from = match label_match {
+                    Some(m) => m.to_string(),
+                    None if *by_label => format!("label:'{}'", selector),
+                    None => selector.clone(),
+                };
+                match duration_ms {
+                    Some(ms) => format!("{} from {} ({} ms)", direction.as_str(), from, ms),
+                    None => format!("{} from {}", direction.as_str(), from),
+                }
+            }
             ActionType::Key { name } => name.as_str().to_string(),
             ActionType::SwipeCoords {
                 from_x,

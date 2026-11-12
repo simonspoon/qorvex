@@ -73,6 +73,28 @@ impl LogConverter {
                 shell_escape(direction),
                 duration_flag(*duration_ms)
             )),
+            ActionType::SwipeFromElement {
+                selector,
+                by_label,
+                element_type,
+                label_match,
+                direction,
+                duration_ms,
+            } => {
+                let mut cmd = format!("qorvex swipe {} ", direction.as_str());
+                match label_match {
+                    Some(_) => cmd.push_str(&selector_args(selector, label_match)),
+                    None => cmd.push_str(&format!("--from-element {}", shell_escape(selector))),
+                }
+                if *by_label {
+                    cmd.push_str(" --label");
+                }
+                if let Some(t) = element_type {
+                    cmd.push_str(&format!(" -T {}", shell_escape(t)));
+                }
+                cmd.push_str(&duration_flag(*duration_ms));
+                Some(cmd)
+            }
             ActionType::SwipeCoords {
                 from_x,
                 from_y,
@@ -450,6 +472,41 @@ mod tests {
         assert_eq!(
             LogConverter::action_to_command(&action, None),
             Some("qorvex swipe --from 10,20 --to 30,40 --duration-ms 1500".to_string())
+        );
+    }
+
+    #[test]
+    fn test_swipe_from_element_to_command() {
+        use qorvex_core::action::ScrollDirection;
+        let action = ActionType::SwipeFromElement {
+            selector: "gesture-swipe-area".to_string(),
+            by_label: false,
+            element_type: Some("Other".to_string()),
+            label_match: None,
+            direction: ScrollDirection::Left,
+            duration_ms: Some(800),
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some(
+                "qorvex swipe left --from-element gesture-swipe-area -T Other --duration-ms 800"
+                    .to_string()
+            )
+        );
+        let action = ActionType::SwipeFromElement {
+            selector: String::new(),
+            by_label: false,
+            element_type: None,
+            label_match: Some(Box::new(LabelMatch {
+                matcher: LabelMatcher::Contains("Privacy".to_string()),
+                nth: Some(1),
+            })),
+            direction: ScrollDirection::Up,
+            duration_ms: None,
+        };
+        assert_eq!(
+            LogConverter::action_to_command(&action, None),
+            Some("qorvex swipe up --label-contains Privacy --nth 1".to_string())
         );
     }
 
